@@ -1,0 +1,11 @@
+name: Design sync
+description: Track design or integration alignment.
+title: "[design] "
+labels: ["design"]
+body:
+  - type: textarea
+    id: topic
+    attributes:
+      label: Topic
+    validations:
+      required: true

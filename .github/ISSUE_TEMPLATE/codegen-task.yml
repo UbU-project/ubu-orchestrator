@@ -1,0 +1,11 @@
+name: Codegen task
+description: Track generated contract or artifact work.
+title: "[codegen] "
+labels: ["codegen"]
+body:
+  - type: textarea
+    id: task
+    attributes:
+      label: Task
+    validations:
+      required: true

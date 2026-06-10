@@ -1,0 +1,11 @@
+name: Contract change
+description: Propose an orchestrator API or cross-crate contract change.
+title: "[contract] "
+labels: ["contract"]
+body:
+  - type: textarea
+    id: change
+    attributes:
+      label: Change
+    validations:
+      required: true
