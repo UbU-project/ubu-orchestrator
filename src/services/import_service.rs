@@ -11,7 +11,7 @@ use crate::errors::{AppError, Result};
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 struct FixtureFile {
     candidates: Vec<ImportedCandidate>,
 }
@@ -38,6 +38,8 @@ pub async fn import_fixture(
 }
 
 pub async fn import_live(state: AppState, request: ImportLiveRequest) -> Result<ImportResponse> {
+    // Desktop session tokens are accepted from the UI and kept in process memory
+    // only. Developer mode continues to use GITHUB_TOKEN from ServerConfig.
     if let Some(token) = SecretToken::new(request.session_token.unwrap_or_default()) {
         let mut session = state.inner().desktop_session_token.lock().await;
         *session = Some(token);

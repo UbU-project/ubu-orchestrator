@@ -4,6 +4,7 @@ use crate::adapters::planner_adapter::{CpuPlannerAdapter, PlannerAdapter};
 use crate::api::calendar::CalendarResponse;
 use crate::api::next_action::NextActionResponse;
 use crate::api::planning::{GeneratePlanningRequest, PlanningResponseBody, ScheduledTaskBody};
+use crate::api::user_action::TaskLifecycleStatus;
 use crate::errors::{AppError, Result};
 use crate::state::AppState;
 
@@ -31,6 +32,8 @@ pub async fn generate(
         .map(|task| NextActionResponse {
             task_id: task.task_id.clone(),
             title: task.task_id.clone(),
+            status: TaskLifecycleStatus::Active,
+            readiness: true,
             start: task.start,
             end: task.end,
         });

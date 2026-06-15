@@ -8,7 +8,7 @@ use crate::services::import_service;
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct ImportFixtureRequest {
     #[serde(default = "default_fixture_path")]
     pub fixture_path: String,
@@ -19,16 +19,18 @@ fn default_fixture_path() -> String {
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct ImportLiveRequest {
     pub owner: String,
     pub repo: String,
+    /// Desktop session mode accepts a pasted token for this process only.
+    /// Developer mode uses `GITHUB_TOKEN` from the environment instead.
     #[serde(default)]
     pub session_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct ImportedCandidate {
     pub task_id: String,
     pub title: String,
@@ -36,7 +38,7 @@ pub struct ImportedCandidate {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct ImportResponse {
     pub imported: usize,
     pub admitted_to_store: usize,

@@ -17,19 +17,41 @@ pub enum TaskActionKind {
     Decompose,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskLifecycleStatus {
+    Active,
+    Completed,
+    Failed,
+    Moot,
+}
+
+impl TaskLifecycleStatus {
+    pub fn for_action(action: TaskActionKind) -> Self {
+        match action {
+            TaskActionKind::Start | TaskActionKind::Snooze | TaskActionKind::Decompose => {
+                Self::Active
+            }
+            TaskActionKind::Done => Self::Completed,
+            TaskActionKind::Reject => Self::Moot,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct UserActionRequest {
     #[serde(default)]
     pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct LogEntryResponse {
     pub log_id: String,
     pub task_id: String,
     pub action: TaskActionKind,
+    pub status: TaskLifecycleStatus,
     pub authority_source: String,
     pub note: Option<String>,
 }

@@ -21,7 +21,7 @@ async fn fixture_loop_reaches_projection_result() {
         .clone()
         .oneshot(json_request(
             "/github/import/fixture",
-            r#"{"fixturePath":"fixtures/fixture-loop/github-small.json"}"#,
+            r#"{"fixture_path":"fixtures/fixture-loop/github-small.json"}"#,
         ))
         .await
         .expect("fixture import response");
@@ -56,11 +56,11 @@ async fn fixture_loop_reaches_projection_result() {
         .to_bytes();
     let preview: Value = serde_json::from_slice(&preview_body).expect("preview json");
     let preview_id = preview
-        .get("previewId")
+        .get("preview_id")
         .and_then(Value::as_str)
         .expect("preview id");
 
-    let approve_body = format!(r#"{{"previewId":"{preview_id}","authoritySource":"user"}}"#);
+    let approve_body = format!(r#"{{"preview_id":"{preview_id}","authority_source":"user"}}"#);
     let approve_response = app
         .oneshot(json_request("/projection/approve", &approve_body))
         .await

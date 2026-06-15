@@ -43,13 +43,15 @@ use utoipa::OpenApi;
         crate::api::user_action::UserActionRequest,
         crate::api::user_action::LogEntryResponse,
         crate::api::user_action::TaskActionKind,
+        crate::api::user_action::TaskLifecycleStatus,
         crate::api::projection::ProjectionPreviewRequest,
         crate::api::projection::ProjectionPreviewResponse,
         crate::api::projection::ProjectionApproveRequest,
         crate::api::projection::ProjectionResultResponse,
         crate::api::projection::AuthoritySourceBody,
         crate::api::reports::RiskReportResponse,
-        crate::api::reports::HumanCompleteReportResponse
+        crate::api::reports::HumanCompleteReportResponse,
+        crate::api::reports::TaskStatusCount
     )),
     tags(
         (name = "ubu-orchestrator", description = "Local UbU Phase 1 orchestration API")

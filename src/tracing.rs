@@ -20,3 +20,21 @@ pub fn redact_sensitive(value: &str) -> &'static str {
         "<not-sensitive>"
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::redact_sensitive;
+
+    #[test]
+    fn redacts_token_and_auth_inputs() {
+        for value in [
+            "Authorization: Bearer secret",
+            "GITHUB_TOKEN=secret",
+            "session_token=secret",
+            "pasted token",
+            "octocrab auth config",
+        ] {
+            assert_eq!(redact_sensitive(value), "<redacted>");
+        }
+    }
+}

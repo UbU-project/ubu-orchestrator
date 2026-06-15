@@ -8,20 +8,20 @@ use crate::services::bootstrap_service;
 use crate::state::AppState;
 
 #[derive(Debug, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct BootstrapStartResponse {
     pub started: bool,
     pub next_prompt: String,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct BootstrapAnswerRequest {
     pub answer: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct BootstrapAnswerResponse {
     pub accepted: bool,
     pub answer_count: usize,

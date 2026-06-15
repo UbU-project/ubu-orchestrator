@@ -1,12 +1,12 @@
 {
   "candidates": [
     {
-      "taskId": "issue-1",
+      "task_id": "issue-1",
       "title": "Triage first fixture issue",
       "source": "github_fixture"
     },
     {
-      "taskId": "issue-2",
+      "task_id": "issue-2",
       "title": "Review fixture pull request",
       "source": "github_fixture"
     }

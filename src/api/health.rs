@@ -3,7 +3,7 @@ use serde::Serialize;
 use utoipa::ToSchema;
 
 #[derive(Debug, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct HealthResponse {
     pub status: &'static str,
     pub version: &'static str,

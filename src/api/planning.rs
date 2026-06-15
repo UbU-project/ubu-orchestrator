@@ -9,14 +9,14 @@ use crate::services::planning_service;
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct GeneratePlanningRequest {
     #[serde(default)]
     pub request: Option<PlanningRequestBody>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct PlanningRequestBody {
     #[serde(default)]
     pub schema_version: Option<String>,
@@ -26,7 +26,7 @@ pub struct PlanningRequestBody {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct TaskSpecBody {
     pub id: String,
     pub duration: u64,
@@ -39,15 +39,16 @@ pub struct TaskSpecBody {
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct PlanningResponseBody {
+    pub schema_version: String,
     pub request_id: String,
     pub plan: Option<PlanBody>,
     pub diagnostics: Vec<DiagnosticBody>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct PlanBody {
     pub plan_id: String,
     pub status: String,
@@ -55,7 +56,7 @@ pub struct PlanBody {
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct ScheduledTaskBody {
     pub task_id: String,
     pub start: u64,
@@ -65,7 +66,7 @@ pub struct ScheduledTaskBody {
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct DiagnosticBody {
     pub code: String,
     pub message: String,
@@ -100,6 +101,7 @@ impl From<PlanningRequestBody> for PlanningRequest {
 impl From<PlanningResponse> for PlanningResponseBody {
     fn from(value: PlanningResponse) -> Self {
         Self {
+            schema_version: value.schema_version,
             request_id: value.request_id,
             plan: value.plan.map(|plan| PlanBody {
                 plan_id: plan.plan_id,

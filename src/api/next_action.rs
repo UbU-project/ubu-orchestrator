@@ -3,15 +3,19 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use crate::api::user_action::TaskLifecycleStatus;
 use crate::errors::Result;
 use crate::services::next_action_service;
 use crate::state::AppState;
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct NextActionResponse {
     pub task_id: String,
     pub title: String,
+    pub status: TaskLifecycleStatus,
+    /// Computed response field; not a persisted task lifecycle status.
+    pub readiness: bool,
     pub start: u64,
     pub end: u64,
 }

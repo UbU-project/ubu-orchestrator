@@ -1,7 +1,9 @@
 use ubu_core::id_registry::ObjectType;
 use ubu_core::{AuthoritySource, UbuId};
 
-use crate::api::user_action::{LogEntryResponse, TaskActionKind, UserActionRequest};
+use crate::api::user_action::{
+    LogEntryResponse, TaskActionKind, TaskLifecycleStatus, UserActionRequest,
+};
 use crate::errors::Result;
 use crate::services::recalculation_service;
 use crate::state::AppState;
@@ -16,6 +18,7 @@ pub async fn append_action(
         log_id: UbuId::new(ObjectType::LogEntry).to_string(),
         task_id,
         action,
+        status: TaskLifecycleStatus::for_action(action),
         authority_source: format!("{:?}", AuthoritySource::User).to_ascii_lowercase(),
         note: request.note,
     };

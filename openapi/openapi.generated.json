@@ -539,13 +539,13 @@
         "type": "object",
         "required": [
           "accepted",
-          "answerCount"
+          "answer_count"
         ],
         "properties": {
           "accepted": {
             "type": "boolean"
           },
-          "answerCount": {
+          "answer_count": {
             "type": "integer",
             "minimum": 0
           }
@@ -555,10 +555,10 @@
         "type": "object",
         "required": [
           "started",
-          "nextPrompt"
+          "next_prompt"
         ],
         "properties": {
-          "nextPrompt": {
+          "next_prompt": {
             "type": "string"
           },
           "started": {
@@ -572,7 +572,7 @@
           "tasks"
         ],
         "properties": {
-          "planId": {
+          "plan_id": {
             "type": [
               "string",
               "null"
@@ -621,10 +621,10 @@
         "required": [
           "status",
           "version",
-          "bindPolicy"
+          "bind_policy"
         ],
         "properties": {
-          "bindPolicy": {
+          "bind_policy": {
             "type": "string"
           },
           "status": {
@@ -638,11 +638,12 @@
       "HumanCompleteReportResponse": {
         "type": "object",
         "required": [
-          "completedTasks",
+          "completed_tasks",
+          "task_statuses",
           "notes"
         ],
         "properties": {
-          "completedTasks": {
+          "completed_tasks": {
             "type": "integer",
             "minimum": 0
           },
@@ -651,13 +652,19 @@
             "items": {
               "type": "string"
             }
+          },
+          "task_statuses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskStatusCount"
+            }
           }
         }
       },
       "ImportFixtureRequest": {
         "type": "object",
         "properties": {
-          "fixturePath": {
+          "fixture_path": {
             "type": "string"
           }
         }
@@ -675,11 +682,12 @@
           "repo": {
             "type": "string"
           },
-          "sessionToken": {
+          "session_token": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "Desktop session mode accepts a pasted token for this process only.\nDeveloper mode uses `GITHUB_TOKEN` from the environment instead."
           }
         }
       },
@@ -687,11 +695,11 @@
         "type": "object",
         "required": [
           "imported",
-          "admittedToStore",
+          "admitted_to_store",
           "candidates"
         ],
         "properties": {
-          "admittedToStore": {
+          "admitted_to_store": {
             "type": "integer",
             "minimum": 0
           },
@@ -710,7 +718,7 @@
       "ImportedCandidate": {
         "type": "object",
         "required": [
-          "taskId",
+          "task_id",
           "title",
           "source"
         ],
@@ -718,7 +726,7 @@
           "source": {
             "type": "string"
           },
-          "taskId": {
+          "task_id": {
             "type": "string"
           },
           "title": {
@@ -729,19 +737,20 @@
       "LogEntryResponse": {
         "type": "object",
         "required": [
-          "logId",
-          "taskId",
+          "log_id",
+          "task_id",
           "action",
-          "authoritySource"
+          "status",
+          "authority_source"
         ],
         "properties": {
           "action": {
             "$ref": "#/components/schemas/TaskActionKind"
           },
-          "authoritySource": {
+          "authority_source": {
             "type": "string"
           },
-          "logId": {
+          "log_id": {
             "type": "string"
           },
           "note": {
@@ -750,7 +759,10 @@
               "null"
             ]
           },
-          "taskId": {
+          "status": {
+            "$ref": "#/components/schemas/TaskLifecycleStatus"
+          },
+          "task_id": {
             "type": "string"
           }
         }
@@ -758,8 +770,10 @@
       "NextActionResponse": {
         "type": "object",
         "required": [
-          "taskId",
+          "task_id",
           "title",
+          "status",
+          "readiness",
           "start",
           "end"
         ],
@@ -769,12 +783,19 @@
             "format": "int64",
             "minimum": 0
           },
+          "readiness": {
+            "type": "boolean",
+            "description": "Computed response field; not a persisted task lifecycle status."
+          },
           "start": {
             "type": "integer",
             "format": "int64",
             "minimum": 0
           },
-          "taskId": {
+          "status": {
+            "$ref": "#/components/schemas/TaskLifecycleStatus"
+          },
+          "task_id": {
             "type": "string"
           },
           "title": {
@@ -785,12 +806,12 @@
       "PlanBody": {
         "type": "object",
         "required": [
-          "planId",
+          "plan_id",
           "status",
           "tasks"
         ],
         "properties": {
-          "planId": {
+          "plan_id": {
             "type": "string"
           },
           "status": {
@@ -807,11 +828,17 @@
       "PlanningRequestBody": {
         "type": "object",
         "required": [
-          "requestId"
+          "request_id"
         ],
         "properties": {
-          "requestId": {
+          "request_id": {
             "type": "string"
+          },
+          "schema_version": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "tasks": {
             "type": "array",
@@ -824,7 +851,8 @@
       "PlanningResponseBody": {
         "type": "object",
         "required": [
-          "requestId",
+          "schema_version",
+          "request_id",
           "diagnostics"
         ],
         "properties": {
@@ -844,7 +872,10 @@
               }
             ]
           },
-          "requestId": {
+          "request_id": {
+            "type": "string"
+          },
+          "schema_version": {
             "type": "string"
           }
         }
@@ -852,13 +883,13 @@
       "ProjectionApproveRequest": {
         "type": "object",
         "required": [
-          "previewId"
+          "preview_id"
         ],
         "properties": {
-          "authoritySource": {
+          "authority_source": {
             "$ref": "#/components/schemas/AuthoritySourceBody"
           },
-          "previewId": {
+          "preview_id": {
             "type": "string"
           }
         }
@@ -877,9 +908,9 @@
       "ProjectionPreviewResponse": {
         "type": "object",
         "required": [
-          "previewId",
+          "preview_id",
           "operations",
-          "requiresApproval"
+          "requires_approval"
         ],
         "properties": {
           "operations": {
@@ -888,10 +919,10 @@
               "type": "string"
             }
           },
-          "previewId": {
+          "preview_id": {
             "type": "string"
           },
-          "requiresApproval": {
+          "requires_approval": {
             "type": "boolean"
           }
         }
@@ -899,18 +930,18 @@
       "ProjectionResultResponse": {
         "type": "object",
         "required": [
-          "previewId",
+          "preview_id",
           "status",
-          "operationResults"
+          "operation_results"
         ],
         "properties": {
-          "operationResults": {
+          "operation_results": {
             "type": "array",
             "items": {
               "type": "string"
             }
           },
-          "previewId": {
+          "preview_id": {
             "type": "string"
           },
           "status": {
@@ -921,7 +952,8 @@
       "RiskReportResponse": {
         "type": "object",
         "required": [
-          "risks"
+          "risks",
+          "task_statuses"
         ],
         "properties": {
           "risks": {
@@ -929,20 +961,26 @@
             "items": {
               "type": "string"
             }
+          },
+          "task_statuses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskStatusCount"
+            }
           }
         }
       },
       "ScheduledTaskBody": {
         "type": "object",
         "required": [
-          "taskId",
+          "task_id",
           "start",
           "end",
-          "dependsOn",
-          "staticAnchor"
+          "depends_on",
+          "static_anchor"
         ],
         "properties": {
-          "dependsOn": {
+          "depends_on": {
             "type": "array",
             "items": {
               "type": "string"
@@ -958,10 +996,10 @@
             "format": "int64",
             "minimum": 0
           },
-          "staticAnchor": {
+          "static_anchor": {
             "type": "boolean"
           },
-          "taskId": {
+          "task_id": {
             "type": "string"
           }
         }
@@ -976,6 +1014,15 @@
           "decompose"
         ]
       },
+      "TaskLifecycleStatus": {
+        "type": "string",
+        "enum": [
+          "active",
+          "completed",
+          "failed",
+          "moot"
+        ]
+      },
       "TaskSpecBody": {
         "type": "object",
         "required": [
@@ -983,13 +1030,13 @@
           "duration"
         ],
         "properties": {
-          "affectCurrent": {
+          "affect_current": {
             "type": "boolean"
           },
-          "affectRequired": {
+          "affect_required": {
             "type": "boolean"
           },
-          "dependsOn": {
+          "depends_on": {
             "type": "array",
             "items": {
               "type": "string"
@@ -1002,6 +1049,22 @@
           },
           "id": {
             "type": "string"
+          }
+        }
+      },
+      "TaskStatusCount": {
+        "type": "object",
+        "required": [
+          "status",
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "status": {
+            "$ref": "#/components/schemas/TaskLifecycleStatus"
           }
         }
       },

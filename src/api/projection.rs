@@ -9,14 +9,14 @@ use crate::services::projection_service;
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct ProjectionPreviewRequest {
     #[serde(default)]
     pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct ProjectionPreviewResponse {
     pub preview_id: String,
     pub operations: Vec<String>,
@@ -48,7 +48,7 @@ impl From<AuthoritySourceBody> for AuthoritySource {
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct ProjectionApproveRequest {
     pub preview_id: String,
     #[serde(default = "default_authority_source")]
@@ -60,7 +60,7 @@ fn default_authority_source() -> AuthoritySourceBody {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct ProjectionResultResponse {
     pub preview_id: String,
     pub status: String,

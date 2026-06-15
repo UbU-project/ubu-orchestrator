@@ -9,7 +9,7 @@ use crate::services::planning_service;
 use crate::state::AppState;
 
 #[derive(Debug, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct CalendarResponse {
     pub plan_id: Option<String>,
     pub tasks: Vec<ScheduledTaskBody>,
