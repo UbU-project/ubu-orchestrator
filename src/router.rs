@@ -5,6 +5,16 @@ use crate::api;
 use crate::openapi;
 use crate::state::AppState;
 
+/*
+Loopback risk: Phase 1 mutating HTTP endpoints are bound for local use, but
+loopback-only binding is not a full security boundary. Local processes and
+malicious local web content can still reach these endpoints while the temporary
+HTTP bridge is present.
+
+TODO(phase2-tauri-bridge): Per-run bearer-token and CSRF defenses are
+intentionally deferred because this HTTP bridge is temporary pending the Tauri
+command bridge.
+*/
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(api::health::health))

@@ -63,6 +63,9 @@ pub async fn import_fixture(
     request_body = ImportLiveRequest,
     responses((status = 200, body = ImportResponse))
 )]
+// TODO(phase2-tauri-bridge): This mutating loopback endpoint is intentionally
+// left without per-run bearer-token or CSRF defenses while the temporary HTTP
+// bridge remains in Phase 1.
 pub async fn import_live(
     State(state): State<AppState>,
     Json(request): Json<ImportLiveRequest>,

@@ -86,6 +86,9 @@ pub async fn preview(
     request_body = ProjectionApproveRequest,
     responses((status = 200, body = ProjectionResultResponse))
 )]
+// TODO(phase2-tauri-bridge): This mutating loopback endpoint is intentionally
+// left without per-run bearer-token or CSRF defenses while the temporary HTTP
+// bridge remains in Phase 1.
 pub async fn approve(
     State(state): State<AppState>,
     Json(request): Json<ProjectionApproveRequest>,
