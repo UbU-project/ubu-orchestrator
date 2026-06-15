@@ -1,4 +1,4 @@
-use ubu_planning_core::{PlanningRequest, TaskSpec};
+use ubu_planning_core::{PlanningRequest, TaskSpec, PLANNING_SCHEMA_VERSION};
 
 use crate::adapters::planner_adapter::{CpuPlannerAdapter, PlannerAdapter};
 use crate::api::calendar::CalendarResponse;
@@ -72,6 +72,7 @@ async fn build_request_from_imports(state: &AppState) -> Result<PlanningRequest>
     }
 
     Ok(PlanningRequest {
+        schema_version: Some(PLANNING_SCHEMA_VERSION.to_owned()),
         request_id: "fixture-loop".to_owned(),
         tasks: memory
             .imported_candidates

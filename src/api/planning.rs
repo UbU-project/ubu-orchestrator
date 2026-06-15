@@ -1,7 +1,7 @@
 use axum::extract::State;
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use ubu_planning_core::{PlanningRequest, PlanningResponse, TaskSpec};
+use ubu_planning_core::{PlanningRequest, PlanningResponse, TaskSpec, PLANNING_SCHEMA_VERSION};
 use utoipa::ToSchema;
 
 use crate::errors::Result;
@@ -18,6 +18,8 @@ pub struct GeneratePlanningRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PlanningRequestBody {
+    #[serde(default)]
+    pub schema_version: Option<String>,
     pub request_id: String,
     #[serde(default)]
     pub tasks: Vec<TaskSpecBody>,
@@ -72,6 +74,11 @@ pub struct DiagnosticBody {
 impl From<PlanningRequestBody> for PlanningRequest {
     fn from(value: PlanningRequestBody) -> Self {
         Self {
+            schema_version: Some(
+                value
+                    .schema_version
+                    .unwrap_or_else(|| PLANNING_SCHEMA_VERSION.to_owned()),
+            ),
             request_id: value.request_id,
             tasks: value
                 .tasks
