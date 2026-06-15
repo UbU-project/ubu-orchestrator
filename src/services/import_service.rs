@@ -1,8 +1,12 @@
 use std::fs;
 
 use serde::Deserialize;
+use serde_json::json;
+use ubu_core::id_registry::ObjectType;
+use ubu_core::{AuthoritySource, UbuId, UbuTimestamp};
+use ubu_store::models::object_record::NewObjectRecord;
+use ubu_store::queries;
 
-use crate::adapters::store_adapter::{InMemoryStoreAdapter, StoreAdapter};
 use crate::api::github::{
     ImportFixtureRequest, ImportLiveRequest, ImportResponse, ImportedCandidate,
 };
@@ -13,7 +17,56 @@ use crate::state::AppState;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 struct FixtureFile {
-    candidates: Vec<ImportedCandidate>,
+    candidates: Vec<RawCandidate>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct RawCandidate {
+    pub title: String,
+    pub source: String,
+}
+
+async fn admit_task(
+    pool: &sqlx::SqlitePool,
+    title: &str,
+    source: &str,
+    authority_source: AuthoritySource,
+) -> Result<ImportedCandidate> {
+    let task_id = UbuId::new(ObjectType::Task).to_string();
+    let now = UbuTimestamp::now_utc().to_string();
+    let authority_str = serde_json::to_string(&authority_source)
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let authority_str = authority_str.trim_matches('"');
+
+    let record = NewObjectRecord {
+        id: task_id.clone(),
+        object_type: ObjectType::Task.as_str().to_owned(),
+        version: 1,
+        status: "active".to_owned(),
+        compartment_label: "github-import".to_owned(),
+        payload: json!({
+            "id": task_id,
+            "title": title,
+            "status": "active",
+            "provenance": {
+                "created_at": now,
+                "authority_source": authority_str
+            }
+        }),
+        created_at: now.clone(),
+        updated_at: now,
+    };
+
+    queries::admit_object(pool, record)
+        .await
+        .map_err(AppError::from)?;
+
+    Ok(ImportedCandidate {
+        task_id,
+        title: title.to_owned(),
+        source: source.to_owned(),
+    })
 }
 
 pub async fn import_fixture(
@@ -21,19 +74,23 @@ pub async fn import_fixture(
     request: ImportFixtureRequest,
 ) -> Result<ImportResponse> {
     let content = fs::read_to_string(&request.fixture_path)
-        .map_err(|error| AppError::BadRequest(format!("failed to read fixture: {error}")))?;
+        .map_err(|e| AppError::BadRequest(format!("failed to read fixture: {e}")))?;
     let fixture: FixtureFile = serde_json::from_str(&content)
-        .map_err(|error| AppError::BadRequest(format!("failed to parse fixture: {error}")))?;
+        .map_err(|e| AppError::BadRequest(format!("failed to parse fixture: {e}")))?;
 
-    let store = InMemoryStoreAdapter;
-    let admitted_to_store = store.admit_candidates(&fixture.candidates)?;
+    let pool = state.inner().store.pool();
+    let mut admitted = Vec::with_capacity(fixture.candidates.len());
+    for raw in &fixture.candidates {
+        let candidate =
+            admit_task(pool, &raw.title, &raw.source, AuthoritySource::System).await?;
+        admitted.push(candidate);
+    }
 
-    let mut memory = state.inner().memory.lock().await;
-    memory.imported_candidates = fixture.candidates.clone();
+    let count = admitted.len();
     Ok(ImportResponse {
         imported: fixture.candidates.len(),
-        admitted_to_store,
-        candidates: fixture.candidates,
+        admitted_to_store: count,
+        candidates: admitted,
     })
 }
 
@@ -53,23 +110,16 @@ pub async fn import_live(state: AppState, request: ImportLiveRequest) -> Result<
         ));
     }
 
-    let candidates = vec![ImportedCandidate {
-        task_id: format!("{}#live-import", request.repo),
-        title: format!(
-            "Import live GitHub state for {}/{}",
-            request.owner, request.repo
-        ),
-        source: "github_live_stub".to_owned(),
-    }];
+    let pool = state.inner().store.pool();
+    let title = format!(
+        "Import live GitHub state for {}/{}",
+        request.owner, request.repo
+    );
+    let candidate = admit_task(pool, &title, "github_live_stub", AuthoritySource::User).await?;
 
-    let store = InMemoryStoreAdapter;
-    let admitted_to_store = store.admit_candidates(&candidates)?;
-
-    let mut memory = state.inner().memory.lock().await;
-    memory.imported_candidates = candidates.clone();
     Ok(ImportResponse {
-        imported: candidates.len(),
-        admitted_to_store,
-        candidates,
+        imported: 1,
+        admitted_to_store: 1,
+        candidates: vec![candidate],
     })
 }

@@ -6,7 +6,10 @@ use ubu_orchestrator::state::AppState;
 
 #[tokio::test]
 async fn health_returns_ok() {
-    let app = ubu_orchestrator::build_router(AppState::new(ServerConfig::from_env()));
+    let state = AppState::in_memory(ServerConfig::from_env())
+        .await
+        .expect("state");
+    let app = ubu_orchestrator::build_router(state);
     let response = app
         .oneshot(
             Request::builder()

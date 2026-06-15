@@ -8,7 +8,10 @@ use ubu_orchestrator::state::AppState;
 
 #[tokio::test]
 async fn fixture_loop_reaches_projection_result() {
-    let app = ubu_orchestrator::build_router(AppState::new(ServerConfig::from_env()));
+    let state = AppState::in_memory(ServerConfig::from_env())
+        .await
+        .expect("state");
+    let app = ubu_orchestrator::build_router(state);
 
     let response = app
         .clone()
@@ -34,9 +37,34 @@ async fn fixture_loop_reaches_projection_result() {
         .expect("planning response");
     assert_eq!(response.status(), StatusCode::OK);
 
+    let next_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/next-action")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("next action response");
+    assert_eq!(next_response.status(), StatusCode::OK);
+
+    let next_body = next_response
+        .into_body()
+        .collect()
+        .await
+        .expect("next action body")
+        .to_bytes();
+    let next: Value = serde_json::from_slice(&next_body).expect("next action json");
+    let task_id = next
+        .get("task_id")
+        .and_then(Value::as_str)
+        .expect("task_id in next action");
+
+    let done_body = format!(r#"{{"note":"done"}}"#);
     let response = app
         .clone()
-        .oneshot(json_request("/task/issue-1/done", r#"{"note":"done"}"#))
+        .oneshot(json_request(&format!("/task/{task_id}/done"), &done_body))
         .await
         .expect("done response");
     assert_eq!(response.status(), StatusCode::OK);

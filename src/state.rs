@@ -1,13 +1,10 @@
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
-use ubu_planning_core::{Plan, PlanningRequest, PlanningResponse};
+use ubu_store::UbuStore;
 
-use crate::api::github::ImportedCandidate;
-use crate::api::next_action::NextActionResponse;
-use crate::api::projection::{ProjectionPreviewResponse, ProjectionResultResponse};
-use crate::api::user_action::LogEntryResponse;
 use crate::config::{SecretToken, ServerConfig};
+use crate::errors::StartupError;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -16,33 +13,41 @@ pub struct AppState {
 
 pub struct OrchestratorState {
     pub config: ServerConfig,
-    pub memory: Mutex<MemoryState>,
+    pub store: UbuStore,
     pub desktop_session_token: Mutex<Option<SecretToken>>,
-}
-
-#[derive(Debug, Default)]
-pub struct MemoryState {
-    pub bootstrap_started: bool,
-    pub bootstrap_answers: Vec<String>,
-    pub imported_candidates: Vec<ImportedCandidate>,
-    pub planning_request: Option<PlanningRequest>,
-    pub planning_response: Option<PlanningResponse>,
-    pub admitted_plan: Option<Plan>,
-    pub next_action: Option<NextActionResponse>,
-    pub log_entries: Vec<LogEntryResponse>,
-    pub projection_preview: Option<ProjectionPreviewResponse>,
-    pub projection_result: Option<ProjectionResultResponse>,
+    pub bootstrap_started: Mutex<bool>,
+    pub bootstrap_answers: Mutex<Vec<String>>,
 }
 
 impl AppState {
-    pub fn new(config: ServerConfig) -> Self {
-        Self {
+    pub async fn new(config: ServerConfig) -> Result<Self, StartupError> {
+        let store = UbuStore::connect(config.db_path())
+            .await
+            .map_err(StartupError::store_open)?;
+        Ok(Self {
             inner: Arc::new(OrchestratorState {
                 config,
-                memory: Mutex::new(MemoryState::default()),
+                store,
                 desktop_session_token: Mutex::new(None),
+                bootstrap_started: Mutex::new(false),
+                bootstrap_answers: Mutex::new(Vec::new()),
             }),
-        }
+        })
+    }
+
+    pub async fn in_memory(config: ServerConfig) -> Result<Self, StartupError> {
+        let store = UbuStore::in_memory()
+            .await
+            .map_err(StartupError::store_open)?;
+        Ok(Self {
+            inner: Arc::new(OrchestratorState {
+                config,
+                store,
+                desktop_session_token: Mutex::new(None),
+                bootstrap_started: Mutex::new(false),
+                bootstrap_answers: Mutex::new(Vec::new()),
+            }),
+        })
     }
 
     pub fn inner(&self) -> &Arc<OrchestratorState> {

@@ -12,7 +12,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = config.bind_addr();
     assert_loopback(addr);
 
-    let state = AppState::new(config);
+    let state = AppState::new(config).await?;
     let app = build_router(state);
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
