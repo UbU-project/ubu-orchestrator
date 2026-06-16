@@ -1,4 +1,5 @@
 pub mod bootstrap_service;
+pub mod desktop_session_service;
 pub mod import_service;
 pub mod log_service;
 pub mod next_action_service;

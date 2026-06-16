@@ -40,6 +40,36 @@
         }
       }
     },
+    "/bootstrap/seed": {
+      "post": {
+        "tags": [
+          "crate::api::bootstrap"
+        ],
+        "operationId": "seed",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BootstrapSeedRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BootstrapSeedResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/bootstrap/start": {
       "post": {
         "tags": [
@@ -73,6 +103,36 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CalendarResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/desktop/session/github-token": {
+      "post": {
+        "tags": [
+          "crate::api::desktop"
+        ],
+        "operationId": "github_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GithubTokenIntakeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubTokenIntakeResponse"
                 }
               }
             }
@@ -513,6 +573,14 @@
   },
   "components": {
     "schemas": {
+      "AttentionPreference": {
+        "type": "string",
+        "enum": [
+          "deep_work",
+          "mixed",
+          "quick_turnaround"
+        ]
+      },
       "AuthoritySourceBody": {
         "type": "string",
         "enum": [
@@ -548,6 +616,115 @@
           "answer_count": {
             "type": "integer",
             "minimum": 0
+          }
+        }
+      },
+      "BootstrapAnswers": {
+        "type": "object",
+        "required": [
+          "primary_objective"
+        ],
+        "properties": {
+          "attention_preference": {
+            "$ref": "#/components/schemas/AttentionPreference"
+          },
+          "planning_horizon_days": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "primary_objective": {
+            "type": "string"
+          },
+          "work_style": {
+            "$ref": "#/components/schemas/WorkStyle"
+          }
+        }
+      },
+      "BootstrapDiagnostic": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "BootstrapSeedRequest": {
+        "type": "object",
+        "required": [
+          "selected_repo",
+          "answers"
+        ],
+        "properties": {
+          "answers": {
+            "$ref": "#/components/schemas/BootstrapAnswers"
+          },
+          "schema_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "selected_repo": {
+            "$ref": "#/components/schemas/BootstrapSelectedRepo"
+          }
+        }
+      },
+      "BootstrapSeedResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "objective_ids",
+          "preference_ids",
+          "imported_tasks",
+          "diagnostics"
+        ],
+        "properties": {
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BootstrapDiagnostic"
+            }
+          },
+          "imported_tasks": {
+            "$ref": "#/components/schemas/ImportResponse"
+          },
+          "objective_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "preference_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        }
+      },
+      "BootstrapSelectedRepo": {
+        "type": "object",
+        "required": [
+          "owner",
+          "repo"
+        ],
+        "properties": {
+          "owner": {
+            "type": "string"
+          },
+          "repo": {
+            "type": "string"
           }
         }
       },
@@ -613,6 +790,42 @@
                 "$ref": "#/components/schemas/PlanningRequestBody"
               }
             ]
+          }
+        }
+      },
+      "GithubTokenIntakeRequest": {
+        "type": "object",
+        "required": [
+          "github_token"
+        ],
+        "properties": {
+          "github_token": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "GithubTokenIntakeResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "accepted",
+          "token_available"
+        ],
+        "properties": {
+          "accepted": {
+            "type": "boolean"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "token_available": {
+            "type": "boolean"
           }
         }
       },
@@ -1078,6 +1291,14 @@
             ]
           }
         }
+      },
+      "WorkStyle": {
+        "type": "string",
+        "enum": [
+          "focused",
+          "balanced",
+          "responsive"
+        ]
       }
     }
   },

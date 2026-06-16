@@ -32,11 +32,14 @@ async fn admit_task(
     title: &str,
     source: &str,
     authority_source: AuthoritySource,
+    provenance_source_kind: &str,
+    provenance_source_id: &str,
+    provenance_source_url: Option<String>,
 ) -> Result<ImportedCandidate> {
     let task_id = UbuId::new(ObjectType::Task).to_string();
     let now = UbuTimestamp::now_utc().to_string();
-    let authority_str = serde_json::to_string(&authority_source)
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let authority_str =
+        serde_json::to_string(&authority_source).map_err(|e| AppError::Internal(e.to_string()))?;
     let authority_str = authority_str.trim_matches('"');
 
     let record = NewObjectRecord {
@@ -51,7 +54,12 @@ async fn admit_task(
             "status": "active",
             "provenance": {
                 "created_at": now,
-                "authority_source": authority_str
+                "authority_source": authority_str,
+                "source": {
+                    "source_kind": provenance_source_kind,
+                    "source_id": provenance_source_id,
+                    "url": provenance_source_url
+                }
             }
         }),
         created_at: now.clone(),
@@ -81,8 +89,16 @@ pub async fn import_fixture(
     let pool = state.inner().store.pool();
     let mut admitted = Vec::with_capacity(fixture.candidates.len());
     for raw in &fixture.candidates {
-        let candidate =
-            admit_task(pool, &raw.title, &raw.source, AuthoritySource::System).await?;
+        let candidate = admit_task(
+            pool,
+            &raw.title,
+            &raw.source,
+            AuthoritySource::System,
+            "github_fixture",
+            &raw.source,
+            None,
+        )
+        .await?;
         admitted.push(candidate);
     }
 
@@ -111,11 +127,22 @@ pub async fn import_live(state: AppState, request: ImportLiveRequest) -> Result<
     }
 
     let pool = state.inner().store.pool();
+    let source_id = format!("{}/{}", request.owner, request.repo);
+    let source_url = format!("https://github.com/{source_id}");
     let title = format!(
         "Import live GitHub state for {}/{}",
         request.owner, request.repo
     );
-    let candidate = admit_task(pool, &title, "github_live_stub", AuthoritySource::User).await?;
+    let candidate = admit_task(
+        pool,
+        &title,
+        "github_live_stub",
+        AuthoritySource::System,
+        "github_repository",
+        &source_id,
+        Some(source_url),
+    )
+    .await?;
 
     Ok(ImportResponse {
         imported: 1,

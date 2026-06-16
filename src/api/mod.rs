@@ -1,5 +1,6 @@
 pub mod bootstrap;
 pub mod calendar;
+pub mod desktop;
 pub mod github;
 pub mod health;
 pub mod next_action;

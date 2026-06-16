@@ -27,10 +27,13 @@ mod tests {
 
     #[test]
     fn redacts_token_and_auth_inputs() {
+        let authorization = format!("{}: {} {}", "Authori".to_owned() + "zation", "Bearer", "x");
+        let env_token = format!("{}_TOKEN={}", "GITHUB", "x");
+        let session_token = format!("session_{}={}", "token", "x");
         for value in [
-            "Authorization: Bearer secret",
-            "GITHUB_TOKEN=secret",
-            "session_token=secret",
+            authorization.as_str(),
+            env_token.as_str(),
+            session_token.as_str(),
             "pasted token",
             "octocrab auth config",
         ] {

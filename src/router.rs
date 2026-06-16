@@ -20,6 +20,11 @@ pub fn build_router(state: AppState) -> Router {
         .route("/health", get(api::health::health))
         .route("/bootstrap/start", post(api::bootstrap::start))
         .route("/bootstrap/answer", post(api::bootstrap::answer))
+        .route("/bootstrap/seed", post(api::bootstrap::seed))
+        .route(
+            "/desktop/session/github-token",
+            post(api::desktop::github_token),
+        )
         .route("/github/import/fixture", post(api::github::import_fixture))
         .route("/github/import/live", post(api::github::import_live))
         .route("/planning/generate", post(api::planning::generate))
