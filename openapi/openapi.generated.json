@@ -340,6 +340,66 @@
         }
       }
     },
+    "/projection/reconcile": {
+      "post": {
+        "tags": [
+          "crate::api::projection"
+        ],
+        "operationId": "reconcile",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectionReconcileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectionReconcileResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projection/reconciliation/accept-external": {
+      "post": {
+        "tags": [
+          "crate::api::projection"
+        ],
+        "operationId": "accept_external",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectionAcceptExternalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectionAcceptExternalResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/reports/human-complete": {
       "get": {
         "tags": [
@@ -1351,16 +1411,222 @@
           }
         }
       },
-      "ProjectionApproveRequest": {
+      "PolicySummaryBody": {
         "type": "object",
         "required": [
-          "preview_id"
+          "legitimization",
+          "adjudication_reasons",
+          "checked_at"
+        ],
+        "properties": {
+          "adjudication_reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "checked_at": {
+            "type": "string"
+          },
+          "legitimization": {
+            "type": "string"
+          },
+          "local_only": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "no_cloud_llm": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "no_external_export": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        }
+      },
+      "ProjectionAcceptExternalRequest": {
+        "type": "object",
+        "required": [
+          "reconciliation_id",
+          "conflict_operation_id"
         ],
         "properties": {
           "authority_source": {
             "$ref": "#/components/schemas/AuthoritySourceBody"
           },
+          "conflict_operation_id": {
+            "type": "string"
+          },
+          "reconciliation_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ProjectionAcceptExternalResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "admitted_object_id",
+          "reconciliation_id",
+          "conflict_operation_id"
+        ],
+        "properties": {
+          "admitted_object_id": {
+            "type": "string"
+          },
+          "conflict_operation_id": {
+            "type": "string"
+          },
+          "reconciliation_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        }
+      },
+      "ProjectionApproveRequest": {
+        "type": "object",
+        "required": [
+          "preview_id",
+          "approved"
+        ],
+        "properties": {
+          "approved": {
+            "type": "boolean"
+          },
+          "approved_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "authority_source": {
+            "$ref": "#/components/schemas/AuthoritySourceBody"
+          },
           "preview_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ProjectionConflictBody": {
+        "type": "object",
+        "required": [
+          "operation_id",
+          "conflict_type",
+          "expected_label",
+          "observed_labels",
+          "message"
+        ],
+        "properties": {
+          "conflict_type": {
+            "type": "string"
+          },
+          "expected_label": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "observed_labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "operation_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ProjectionDiagnostic": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "operation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ProjectionOperationBody": {
+        "type": "object",
+        "required": [
+          "operation_id",
+          "kind",
+          "target",
+          "summary",
+          "payload"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "payload": {},
+          "summary": {
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/ProjectionTargetBody"
+          }
+        }
+      },
+      "ProjectionOperationResultBody": {
+        "type": "object",
+        "required": [
+          "operation_id",
+          "status"
+        ],
+        "properties": {
+          "authority_source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "status": {
             "type": "string"
           }
         }
@@ -1368,7 +1634,48 @@
       "ProjectionPreviewRequest": {
         "type": "object",
         "properties": {
+          "desired_labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "existing_repository_labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "issue_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "no_external_export": {
+            "type": "boolean"
+          },
+          "observed_labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "owner": {
+            "type": "string"
+          },
           "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repo": {
+            "type": "string"
+          },
+          "schema_version": {
             "type": [
               "string",
               "null"
@@ -1379,43 +1686,139 @@
       "ProjectionPreviewResponse": {
         "type": "object",
         "required": [
+          "schema_version",
           "preview_id",
           "operations",
+          "policy_summary",
           "requires_approval"
         ],
         "properties": {
           "operations": {
             "type": "array",
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/ProjectionOperationBody"
             }
+          },
+          "policy_summary": {
+            "$ref": "#/components/schemas/PolicySummaryBody"
           },
           "preview_id": {
             "type": "string"
           },
           "requires_approval": {
             "type": "boolean"
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        }
+      },
+      "ProjectionReconcileRequest": {
+        "type": "object",
+        "properties": {
+          "observed_labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "schema_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ProjectionReconcileResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "reconciliation_id",
+          "preview_id",
+          "status",
+          "conflicts",
+          "diagnostics"
+        ],
+        "properties": {
+          "conflicts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectionConflictBody"
+            }
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectionDiagnostic"
+            }
+          },
+          "preview_id": {
+            "type": "string"
+          },
+          "reconciliation_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
           }
         }
       },
       "ProjectionResultResponse": {
         "type": "object",
         "required": [
+          "schema_version",
           "preview_id",
           "status",
-          "operation_results"
+          "operation_results",
+          "diagnostics"
         ],
         "properties": {
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectionDiagnostic"
+            }
+          },
           "operation_results": {
             "type": "array",
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/ProjectionOperationResultBody"
             }
           },
           "preview_id": {
             "type": "string"
           },
+          "schema_version": {
+            "type": "string"
+          },
           "status": {
+            "type": "string"
+          }
+        }
+      },
+      "ProjectionTargetBody": {
+        "type": "object",
+        "required": [
+          "owner",
+          "repo"
+        ],
+        "properties": {
+          "issue_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "owner": {
+            "type": "string"
+          },
+          "repo": {
             "type": "string"
           }
         }

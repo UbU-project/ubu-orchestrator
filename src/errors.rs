@@ -61,6 +61,10 @@ impl StartupError {
     pub fn store_open(e: ubu_store::StoreError) -> Self {
         Self(format!("failed to open store: {e}"))
     }
+
+    pub fn projection_tables(e: sqlx::Error) -> Self {
+        Self(format!("failed to initialize projection tables: {e}"))
+    }
 }
 
 #[derive(Debug, Serialize)]

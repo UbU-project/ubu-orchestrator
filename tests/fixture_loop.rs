@@ -4,6 +4,9 @@ use http_body_util::BodyExt;
 use serde_json::Value;
 use tower::ServiceExt;
 use ubu_orchestrator::api::next_action::NEXT_ACTION_SCHEMA_VERSION;
+use ubu_orchestrator::api::projection::{
+    PROJECTION_APPROVAL_SCHEMA_VERSION, PROJECTION_PREVIEW_SCHEMA_VERSION,
+};
 use ubu_orchestrator::api::user_action::TASK_ACTION_SCHEMA_VERSION;
 use ubu_orchestrator::config::ServerConfig;
 use ubu_orchestrator::state::AppState;
@@ -78,7 +81,10 @@ async fn fixture_loop_reaches_projection_result() {
 
     let preview_response = app
         .clone()
-        .oneshot(json_request("/projection/preview", "{}"))
+        .oneshot(json_request(
+            "/projection/preview",
+            &format!(r#"{{"schema_version":"{PROJECTION_PREVIEW_SCHEMA_VERSION}"}}"#),
+        ))
         .await
         .expect("preview response");
     assert_eq!(preview_response.status(), StatusCode::OK);
@@ -95,7 +101,9 @@ async fn fixture_loop_reaches_projection_result() {
         .and_then(Value::as_str)
         .expect("preview id");
 
-    let approve_body = format!(r#"{{"preview_id":"{preview_id}","authority_source":"user"}}"#);
+    let approve_body = format!(
+        r#"{{"schema_version":"{PROJECTION_APPROVAL_SCHEMA_VERSION}","preview_id":"{preview_id}","approved":true,"authority_source":"user"}}"#
+    );
     let approve_response = app
         .oneshot(json_request("/projection/approve", &approve_body))
         .await

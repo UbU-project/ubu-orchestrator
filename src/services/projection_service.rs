@@ -1,24 +1,85 @@
-use serde_json::json;
+use std::collections::BTreeSet;
+
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use sqlx::Row;
+use ubu_core::core::{CompartmentBoundaryDecidedPayload, PolicyMember};
 use ubu_core::id_registry::ObjectType;
-use ubu_core::{UbuId, UbuTimestamp};
+use ubu_core::projection::{
+    OperationResult, OperationResultStatus, ProjectionApproval, ProjectionPreview,
+    ProjectionResult, ProjectionResultStatus,
+};
+use ubu_core::{
+    AuthoritySource, Legitimization, ObjectRef, PolicySummary, Provenance, SourceRef, UbuId,
+    UbuTimestamp,
+};
+use ubu_github_adapter::markers::is_managed_label;
+use ubu_github_adapter::projection::labels::{
+    apply_managed_label, managed_label_preflight, remove_managed_label,
+};
+use ubu_github_adapter::projection::operations::{
+    GitHubProjectionOperation, GitHubProjectionOperationKind, GitHubProjectionPayload,
+    GitHubProjectionTarget,
+};
+use ubu_github_adapter::projection::preview::{
+    preview_for_operations_with_existing_labels, ProjectionPreviewBatch,
+};
+use ubu_store::models::log_record::NewLogRecord;
+use ubu_store::models::object_record::NewObjectRecord;
 use ubu_store::models::projection_record::{NewProjectionPreviewRecord, NewProjectionResultRecord};
 use ubu_store::queries;
 
 use crate::api::projection::{
-    ProjectionApproveRequest, ProjectionPreviewRequest, ProjectionPreviewResponse,
-    ProjectionResultResponse,
+    PolicySummaryBody, ProjectionAcceptExternalRequest, ProjectionAcceptExternalResponse,
+    ProjectionApproveRequest, ProjectionConflictBody, ProjectionDiagnostic,
+    ProjectionOperationBody, ProjectionOperationResultBody, ProjectionPreviewRequest,
+    ProjectionPreviewResponse, ProjectionReconcileRequest, ProjectionReconcileResponse,
+    ProjectionResultResponse, ProjectionTargetBody, PROJECTION_APPROVAL_SCHEMA_VERSION,
+    PROJECTION_EXTERNAL_ACCEPT_SCHEMA_VERSION, PROJECTION_PREVIEW_SCHEMA_VERSION,
+    PROJECTION_RECONCILIATION_SCHEMA_VERSION, PROJECTION_RESULT_SCHEMA_VERSION,
 };
 use crate::errors::{AppError, Result};
 use crate::state::AppState;
 
 pub async fn preview(
     state: AppState,
-    _request: ProjectionPreviewRequest,
+    request: ProjectionPreviewRequest,
 ) -> Result<ProjectionPreviewResponse> {
-    let preview_id = UbuId::new(ObjectType::ProjectionPreview).to_string();
-    let now = UbuTimestamp::now_utc().to_string();
-    let operations = vec!["summarize_next_action".to_owned()];
+    validate_schema_version(
+        request.schema_version.as_deref(),
+        PROJECTION_PREVIEW_SCHEMA_VERSION,
+    )?;
+    validate_desired_labels(&request.desired_labels)?;
+
+    let mut operations = desired_label_diff(&request)?;
+    if operations.is_empty() {
+        if let Some(operation) = managed_label_preflight(
+            request.owner.clone(),
+            request.repo.clone(),
+            &request.existing_repository_labels,
+        ) {
+            operations.push(operation);
+        }
+    }
+
+    let mut batch = preview_for_operations_with_existing_labels(
+        operations,
+        &request.existing_repository_labels,
+    )
+    .map_err(|e| AppError::Internal(e.to_string()))?;
+    ensure_label_only_batch(&batch)?;
+    let policy_summary = resolved_policy_summary(request.no_external_export);
+    batch.preview.policy_summary = Some(policy_summary.clone());
+
+    let preview_id = batch.preview.id.to_string();
+    let created_at = batch.preview.created_at.to_string();
+    let payload = StoredPreviewPayload {
+        schema_version: PROJECTION_PREVIEW_SCHEMA_VERSION.to_owned(),
+        reason: request.reason,
+        preview: batch.preview.clone(),
+        github_operations: batch.github_operations.clone(),
+        policy_summary: policy_summary.clone(),
+    };
 
     queries::store_projection_preview(
         state.inner().store.pool(),
@@ -26,19 +87,23 @@ pub async fn preview(
             id: preview_id.clone(),
             request_id: preview_id.clone(),
             status: "pending".to_owned(),
-            payload: json!({
-                "operations": operations,
-                "requires_approval": true,
-            }),
-            created_at: now,
+            payload: serde_json::to_value(&payload)
+                .map_err(|e| AppError::Internal(e.to_string()))?,
+            created_at,
         },
     )
     .await
     .map_err(AppError::from)?;
 
     Ok(ProjectionPreviewResponse {
+        schema_version: PROJECTION_PREVIEW_SCHEMA_VERSION.to_owned(),
         preview_id,
-        operations,
+        operations: batch
+            .github_operations
+            .iter()
+            .map(operation_body)
+            .collect::<Result<Vec<_>>>()?,
+        policy_summary: policy_summary_body(&policy_summary)?,
         requires_approval: true,
     })
 }
@@ -47,56 +112,834 @@ pub async fn approve(
     state: AppState,
     request: ProjectionApproveRequest,
 ) -> Result<ProjectionResultResponse> {
-    UbuId::parse(&request.preview_id)
+    validate_schema_version(
+        request.schema_version.as_deref(),
+        PROJECTION_APPROVAL_SCHEMA_VERSION,
+    )?;
+    let preview_id = UbuId::parse(request.preview_id.clone())
         .map_err(|e| AppError::BadRequest(format!("invalid preview id: {e}")))?;
+    let pool = state.inner().store.pool();
+    let stored = load_preview(pool, preview_id.as_str()).await?;
+    let approved_at = match request.approved_at {
+        Some(value) => UbuTimestamp::parse(value)
+            .map_err(|e| AppError::BadRequest(format!("invalid approved_at: {e}")))?,
+        None => UbuTimestamp::now_utc(),
+    };
+    let requested_authority: AuthoritySource = request.authority_source.into();
+
+    let approval = ProjectionApproval {
+        preview_id,
+        approved: request.approved,
+        approved_at: approved_at.clone(),
+        authority_source: requested_authority,
+    };
+    persist_approval(pool, &approval).await?;
+
+    if !approval.approved {
+        let operation_results = stored
+            .github_operations
+            .iter()
+            .map(|operation| OperationResult {
+                operation_id: operation.operation_id.clone(),
+                status: OperationResultStatus::Skipped,
+                message: Some("projection batch was not approved".to_owned()),
+            })
+            .collect::<Vec<_>>();
+        let result = ProjectionResult {
+            preview_id: stored.preview.id.clone(),
+            applied_at: UbuTimestamp::now_utc(),
+            status: ProjectionResultStatus::Failed,
+            operation_results,
+        };
+        persist_result(pool, &result, Vec::new()).await?;
+        return result_response(&result, Vec::new());
+    }
+
+    let stored_batch = batch_from_stored(&stored);
+    ensure_label_only_batch(&stored_batch)?;
+    let policy_summary = stored
+        .preview
+        .policy_summary
+        .clone()
+        .unwrap_or_else(|| stored.policy_summary.clone());
+
+    let mut operation_results = Vec::new();
+    let mut diagnostics = Vec::new();
+    for operation in &stored.github_operations {
+        let adjudication = legitimize_export_operation(&policy_summary);
+        append_boundary_log(pool, &stored.preview, operation, &adjudication).await?;
+
+        match adjudication {
+            Legitimization::Accepted => {
+                match apply_mock_managed_label_write(pool, &stored.preview.id, operation).await {
+                    Ok(message) => operation_results.push(OperationResult {
+                        operation_id: operation.operation_id.clone(),
+                        status: OperationResultStatus::Applied,
+                        message: Some(message),
+                    }),
+                    Err(error) => operation_results.push(OperationResult {
+                        operation_id: operation.operation_id.clone(),
+                        status: OperationResultStatus::Failed,
+                        message: Some(error.to_string()),
+                    }),
+                }
+            }
+            Legitimization::NeedsReview | Legitimization::Rejected => {
+                let reason = denial_reason(&policy_summary);
+                diagnostics.push(ProjectionDiagnostic {
+                    code: "projection_denied".to_owned(),
+                    message: reason.clone(),
+                    operation_id: Some(operation.operation_id.clone()),
+                });
+                operation_results.push(OperationResult {
+                    operation_id: operation.operation_id.clone(),
+                    status: OperationResultStatus::Skipped,
+                    message: Some(reason),
+                });
+            }
+        }
+    }
+
+    let result = ProjectionResult {
+        preview_id: stored.preview.id.clone(),
+        applied_at: UbuTimestamp::now_utc(),
+        status: result_status(&operation_results),
+        operation_results,
+    };
+    persist_result(pool, &result, diagnostics.clone()).await?;
+    result_response(&result, diagnostics)
+}
+
+pub async fn reconcile(
+    state: AppState,
+    request: ProjectionReconcileRequest,
+) -> Result<ProjectionReconcileResponse> {
+    validate_schema_version(
+        request.schema_version.as_deref(),
+        PROJECTION_RECONCILIATION_SCHEMA_VERSION,
+    )?;
 
     let pool = state.inner().store.pool();
+    let last_result = load_last_applied_result(pool).await?;
+    let preview = load_preview(pool, &last_result.preview_id).await?;
+    let preview_batch = batch_from_stored(&preview);
+    let observed = request.observed_labels.into_iter().collect::<BTreeSet<_>>();
+    let conflicts = reconciliation_conflicts(&preview_batch, &last_result.result, &observed);
+    let status = if conflicts.is_empty() {
+        "matched"
+    } else if conflicts
+        .iter()
+        .any(|conflict| conflict.conflict_type == "drifted")
+    {
+        "drifted"
+    } else {
+        "missing"
+    };
+    let diagnostics = if conflicts.is_empty() {
+        Vec::new()
+    } else {
+        vec![ProjectionDiagnostic {
+            code: "projection_conflict".to_owned(),
+            message: "observed GitHub labels differ from the last applied projection".to_owned(),
+            operation_id: None,
+        }]
+    };
+    let reconciliation_id = UbuId::new(ObjectType::Snapshot).to_string();
+    let now = UbuTimestamp::now_utc().to_string();
+    let payload = json!({
+        "schema_version": PROJECTION_RECONCILIATION_SCHEMA_VERSION,
+        "preview_id": last_result.preview_id,
+        "result_id": last_result.result_id,
+        "status": status,
+        "observed_labels": observed.iter().cloned().collect::<Vec<_>>(),
+        "conflicts": conflicts,
+        "diagnostics": diagnostics,
+    });
 
-    let row = sqlx::query(
-        "SELECT id, payload_json FROM projection_previews WHERE id = ?",
+    sqlx::query(
+        "INSERT INTO projection_reconciliations
+        (id, preview_id, result_id, status, payload_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)",
     )
-    .bind(&request.preview_id)
-    .fetch_optional(pool)
+    .bind(&reconciliation_id)
+    .bind(&last_result.preview_id)
+    .bind(&last_result.result_id)
+    .bind(status)
+    .bind(serde_json::to_string(&payload).map_err(|e| AppError::Internal(e.to_string()))?)
+    .bind(now)
+    .execute(pool)
     .await
-    .map_err(|e| AppError::Internal(e.to_string()))?
-    .ok_or_else(|| AppError::NotFound("no projection preview available".to_owned()))?;
+    .map_err(|e| AppError::Internal(e.to_string()))?;
 
-    let stored_id: String = row
-        .try_get("id")
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    Ok(ProjectionReconcileResponse {
+        schema_version: PROJECTION_RECONCILIATION_SCHEMA_VERSION.to_owned(),
+        reconciliation_id,
+        preview_id: last_result.preview_id,
+        status: status.to_owned(),
+        conflicts,
+        diagnostics,
+    })
+}
+
+pub async fn accept_external(
+    state: AppState,
+    request: ProjectionAcceptExternalRequest,
+) -> Result<ProjectionAcceptExternalResponse> {
+    validate_schema_version(
+        request.schema_version.as_deref(),
+        PROJECTION_EXTERNAL_ACCEPT_SCHEMA_VERSION,
+    )?;
+    let pool = state.inner().store.pool();
+    let row = sqlx::query("SELECT payload_json FROM projection_reconciliations WHERE id = ?")
+        .bind(&request.reconciliation_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?
+        .ok_or_else(|| AppError::NotFound("projection reconciliation not found".to_owned()))?;
     let payload_json: String = row
         .try_get("payload_json")
         .map_err(|e| AppError::Internal(e.to_string()))?;
-
-    let payload: serde_json::Value = serde_json::from_str(&payload_json)
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-    let operations: Vec<String> =
-        serde_json::from_value(payload["operations"].clone()).unwrap_or_default();
-
-    let operation_results: Vec<String> = operations
+    let payload: ReconciliationPayload =
+        serde_json::from_str(&payload_json).map_err(|e| AppError::Internal(e.to_string()))?;
+    let conflict = payload
+        .conflicts
         .iter()
-        .map(|op| format!("{op}:applied"))
-        .collect();
+        .find(|conflict| conflict.operation_id == request.conflict_operation_id)
+        .ok_or_else(|| {
+            AppError::bad_request_diagnostic(
+                "unknown_projection_conflict",
+                "conflict_operation_id is not present in the reconciliation",
+            )
+        })?;
 
-    let result_id = UbuId::new(ObjectType::Snapshot).to_string();
     let now = UbuTimestamp::now_utc().to_string();
+    let admitted_object_id = UbuId::new(ObjectType::ExternalEvent).to_string();
+    let authority_source: AuthoritySource = request.authority_source.into();
+    let authority_source_wire = authority_source_wire(authority_source)?;
+    let source = SourceRef {
+        source_kind: "github".to_owned(),
+        source_id: format!("{}:{}", request.reconciliation_id, conflict.operation_id),
+        url: None,
+    };
+    let object_payload = json!({
+        "id": admitted_object_id,
+        "source": source,
+        "event_type": "github_projection_external_change_accepted",
+        "occurred_at": now,
+        "payload": {
+            "schema_version": PROJECTION_EXTERNAL_ACCEPT_SCHEMA_VERSION,
+            "reconciliation_id": request.reconciliation_id,
+            "conflict": conflict,
+            "provenance": {
+                "created_at": now,
+                "authority_source": authority_source_wire,
+                "source": {
+                    "source_kind": "github",
+                    "source_id": format!("{}:{}", payload.preview_id, conflict.operation_id),
+                    "url": Value::Null
+                }
+            }
+        }
+    });
 
-    queries::store_projection_result(
+    queries::admit_object(
         pool,
-        NewProjectionResultRecord {
-            id: result_id,
-            preview_id: stored_id.clone(),
-            status: "applied".to_owned(),
-            payload: json!({ "operation_results": operation_results }),
-            created_at: now,
+        NewObjectRecord {
+            id: admitted_object_id.clone(),
+            object_type: ObjectType::ExternalEvent.as_str().to_owned(),
+            version: 1,
+            status: "active".to_owned(),
+            compartment_label: "github-import".to_owned(),
+            payload: object_payload,
+            created_at: now.clone(),
+            updated_at: now,
         },
     )
     .await
     .map_err(AppError::from)?;
 
-    Ok(ProjectionResultResponse {
-        preview_id: stored_id,
-        status: "applied".to_owned(),
-        operation_results,
+    Ok(ProjectionAcceptExternalResponse {
+        schema_version: PROJECTION_EXTERNAL_ACCEPT_SCHEMA_VERSION.to_owned(),
+        admitted_object_id,
+        reconciliation_id: request.reconciliation_id,
+        conflict_operation_id: request.conflict_operation_id,
     })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredPreviewPayload {
+    schema_version: String,
+    reason: Option<String>,
+    preview: ProjectionPreview,
+    github_operations: Vec<GitHubProjectionOperation>,
+    policy_summary: PolicySummary,
+}
+
+#[derive(Debug, Clone)]
+struct StoredProjectionResult {
+    result_id: String,
+    preview_id: String,
+    result: ProjectionResult,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ReconciliationPayload {
+    preview_id: String,
+    conflicts: Vec<ProjectionConflictBody>,
+}
+
+fn validate_schema_version(actual: Option<&str>, expected: &str) -> Result<()> {
+    match actual {
+        Some(value) if value == expected => Ok(()),
+        Some(other) => Err(AppError::bad_request_diagnostic(
+            "unknown_schema_version",
+            format!("unsupported schema_version `{other}`"),
+        )),
+        None => Err(AppError::bad_request_diagnostic(
+            "missing_schema_version",
+            "schema_version is required",
+        )),
+    }
+}
+
+fn validate_desired_labels(labels: &[String]) -> Result<()> {
+    for label in labels {
+        if !is_managed_label(label) {
+            return Err(AppError::bad_request_diagnostic(
+                "unmanaged_projection_label",
+                format!("projection labels are limited to UbU-managed labels, got `{label}`"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn desired_label_diff(
+    request: &ProjectionPreviewRequest,
+) -> Result<Vec<GitHubProjectionOperation>> {
+    let Some(issue_number) = request.issue_number else {
+        return Ok(Vec::new());
+    };
+
+    let desired = request
+        .desired_labels
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let observed = request
+        .observed_labels
+        .iter()
+        .filter(|label| is_managed_label(label))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let target =
+        GitHubProjectionTarget::issue(request.owner.clone(), request.repo.clone(), issue_number);
+
+    let mut operations = Vec::new();
+    for label in desired.difference(&observed) {
+        operations.push(apply_managed_label(
+            stable_operation_id("apply", &request.owner, &request.repo, issue_number, label),
+            target.clone(),
+            label.clone(),
+        ));
+    }
+    for label in observed.difference(&desired) {
+        operations.push(remove_managed_label(
+            stable_operation_id("remove", &request.owner, &request.repo, issue_number, label),
+            target.clone(),
+            label.clone(),
+        ));
+    }
+    Ok(operations)
+}
+
+fn stable_operation_id(
+    action: &str,
+    owner: &str,
+    repo: &str,
+    issue_number: u64,
+    label: &str,
+) -> String {
+    format!(
+        "label-{action}-{}-{}-{issue_number}-{}",
+        owner.to_ascii_lowercase().replace('/', "-"),
+        repo.to_ascii_lowercase().replace('/', "-"),
+        label.to_ascii_lowercase().replace('/', "-")
+    )
+}
+
+fn resolved_policy_summary(no_external_export: bool) -> PolicySummary {
+    let checked_at = UbuTimestamp::now_utc();
+    if no_external_export {
+        return PolicySummary {
+            legitimization: Legitimization::Rejected,
+            adjudication_reasons: vec![
+                "effective compartment policy forbids external export".to_owned()
+            ],
+            local_only: Some(false),
+            no_cloud_llm: Some(false),
+            no_external_export: Some(true),
+            checked_at,
+        };
+    }
+
+    PolicySummary {
+        legitimization: Legitimization::Accepted,
+        adjudication_reasons: vec![
+            "managed-label projection is allowed for automation worker export".to_owned(),
+        ],
+        local_only: Some(false),
+        no_cloud_llm: Some(false),
+        no_external_export: Some(false),
+        checked_at,
+    }
+}
+
+async fn load_preview(pool: &sqlx::SqlitePool, preview_id: &str) -> Result<StoredPreviewPayload> {
+    let row = sqlx::query("SELECT payload_json FROM projection_previews WHERE id = ?")
+        .bind(preview_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?
+        .ok_or_else(|| AppError::NotFound("projection preview not found".to_owned()))?;
+    let payload_json: String = row
+        .try_get("payload_json")
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let payload: StoredPreviewPayload =
+        serde_json::from_str(&payload_json).map_err(|e| AppError::Internal(e.to_string()))?;
+    if payload.schema_version != PROJECTION_PREVIEW_SCHEMA_VERSION {
+        return Err(AppError::bad_request_diagnostic(
+            "unknown_schema_version",
+            format!(
+                "stored preview has unsupported schema_version `{}`",
+                payload.schema_version
+            ),
+        ));
+    }
+    Ok(payload)
+}
+
+fn batch_from_stored(stored: &StoredPreviewPayload) -> ProjectionPreviewBatch {
+    ProjectionPreviewBatch {
+        preview: stored.preview.clone(),
+        github_operations: stored.github_operations.clone(),
+    }
+}
+
+fn ensure_label_only_batch(batch: &ProjectionPreviewBatch) -> Result<()> {
+    for operation in &batch.github_operations {
+        let is_label_operation = matches!(
+            (&operation.kind, &operation.payload),
+            (
+                GitHubProjectionOperationKind::ManagedLabelPreflight,
+                GitHubProjectionPayload::ManagedLabelPreflight(_)
+            ) | (
+                GitHubProjectionOperationKind::ApplyLabel
+                    | GitHubProjectionOperationKind::RemoveLabel,
+                GitHubProjectionPayload::Label { .. }
+            )
+        );
+        if !is_label_operation {
+            return Err(AppError::bad_request_diagnostic(
+                "unsupported_projection_operation",
+                "O7 projection writes are limited to managed-label operations",
+            ));
+        }
+    }
+    for operation in &batch.preview.operations {
+        if !matches!(
+            operation.kind,
+            ubu_core::projection::ProjectionOperationKind::Label
+        ) {
+            return Err(AppError::bad_request_diagnostic(
+                "unsupported_projection_operation",
+                "O7 projection previews may contain only label operations",
+            ));
+        }
+    }
+    Ok(())
+}
+
+async fn persist_approval(pool: &sqlx::SqlitePool, approval: &ProjectionApproval) -> Result<()> {
+    let id = UbuId::new(ObjectType::Snapshot).to_string();
+    let created_at = UbuTimestamp::now_utc().to_string();
+    let authority_source = authority_source_wire(approval.authority_source)?;
+    let payload = json!({
+        "schema_version": PROJECTION_APPROVAL_SCHEMA_VERSION,
+        "preview_id": approval.preview_id,
+        "approved": approval.approved,
+        "authority_source": authority_source,
+        "approved_at": approval.approved_at,
+    });
+    sqlx::query(
+        "INSERT INTO projection_approvals
+        (id, preview_id, approved, authority_source, payload_json, approved_at, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(id)
+    .bind(approval.preview_id.to_string())
+    .bind(if approval.approved { 1_i64 } else { 0_i64 })
+    .bind(authority_source)
+    .bind(serde_json::to_string(&payload).map_err(|e| AppError::Internal(e.to_string()))?)
+    .bind(approval.approved_at.to_string())
+    .bind(created_at)
+    .execute(pool)
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?;
+    Ok(())
+}
+
+fn legitimize_export_operation(policy_summary: &PolicySummary) -> Legitimization {
+    if policy_summary.no_external_export == Some(true) {
+        return Legitimization::Rejected;
+    }
+    policy_summary.legitimization
+}
+
+async fn append_boundary_log(
+    pool: &sqlx::SqlitePool,
+    preview: &ProjectionPreview,
+    operation: &GitHubProjectionOperation,
+    adjudication: &Legitimization,
+) -> Result<()> {
+    let now = UbuTimestamp::now_utc();
+    let provenance = Provenance {
+        created_at: now.clone(),
+        created_by: None,
+        authority_source: AuthoritySource::AutomationWorker,
+        source: Some(operation.target.source_ref("github")),
+        source_refs: None,
+    };
+    let payload = CompartmentBoundaryDecidedPayload {
+        compartment_ref: ObjectRef {
+            id: UbuId::new(ObjectType::Compartment),
+            object_type: ObjectType::Compartment,
+        },
+        member_evaluated: PolicyMember::NoExternalExport,
+        adjudication_result: *adjudication,
+        actor_identity_ref: ObjectRef {
+            id: UbuId::new(ObjectType::Identity),
+            object_type: ObjectType::Identity,
+        },
+        authority_source: AuthoritySource::AutomationWorker,
+        reason: match adjudication {
+            Legitimization::Accepted => {
+                "managed-label export accepted by projection enforcement gate".to_owned()
+            }
+            Legitimization::NeedsReview => {
+                "managed-label export requires review and was not written".to_owned()
+            }
+            Legitimization::Rejected => {
+                "managed-label export rejected by projection enforcement gate".to_owned()
+            }
+        },
+        effective_time: now.clone(),
+        provenance: provenance.clone(),
+    };
+    queries::append_log_entry(
+        pool,
+        NewLogRecord {
+            id: UbuId::new(ObjectType::LogEntry).to_string(),
+            event_type: "compartment_boundary_decided".to_owned(),
+            object_refs: json!([preview.id.to_string(), operation.operation_id]),
+            payload: serde_json::to_value(payload)
+                .map_err(|e| AppError::Internal(e.to_string()))?,
+            provenance: serde_json::to_value(provenance)
+                .map_err(|e| AppError::Internal(e.to_string()))?,
+            created_at: now.to_string(),
+        },
+    )
+    .await
+    .map_err(AppError::from)?;
+    Ok(())
+}
+
+async fn apply_mock_managed_label_write(
+    pool: &sqlx::SqlitePool,
+    preview_id: &UbuId,
+    operation: &GitHubProjectionOperation,
+) -> Result<String> {
+    ensure_operation_payload_managed(operation)?;
+    let now = UbuTimestamp::now_utc().to_string();
+    let authority_source = authority_source_wire(AuthoritySource::AutomationWorker)?;
+    let payload = json!({
+        "schema_version": PROJECTION_RESULT_SCHEMA_VERSION,
+        "operation": operation,
+        "authority_source": authority_source,
+    });
+    sqlx::query(
+        "INSERT INTO projection_worker_writes
+        (id, preview_id, operation_id, authority_source, payload_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(UbuId::new(ObjectType::AutomationWorker).to_string())
+    .bind(preview_id.to_string())
+    .bind(&operation.operation_id)
+    .bind(authority_source)
+    .bind(serde_json::to_string(&payload).map_err(|e| AppError::Internal(e.to_string()))?)
+    .bind(now)
+    .execute(pool)
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?;
+    Ok("managed-label operation written by automation_worker mock adapter".to_owned())
+}
+
+fn ensure_operation_payload_managed(operation: &GitHubProjectionOperation) -> Result<()> {
+    match &operation.payload {
+        GitHubProjectionPayload::ManagedLabelPreflight(payload) => {
+            for label in &payload.missing_labels {
+                if !is_managed_label(label) {
+                    return Err(AppError::bad_request_diagnostic(
+                        "unmanaged_projection_label",
+                        format!("managed-label preflight contains unmanaged label `{label}`"),
+                    ));
+                }
+            }
+        }
+        GitHubProjectionPayload::Label { label } if is_managed_label(label) => {}
+        _ => {
+            return Err(AppError::bad_request_diagnostic(
+                "unsupported_projection_operation",
+                "only managed-label writes are allowed in O7",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn denial_reason(policy_summary: &PolicySummary) -> String {
+    if policy_summary.adjudication_reasons.is_empty() {
+        return "projection operation was not accepted by the enforcement gate".to_owned();
+    }
+    policy_summary.adjudication_reasons.join("; ")
+}
+
+fn result_status(operation_results: &[OperationResult]) -> ProjectionResultStatus {
+    if operation_results
+        .iter()
+        .all(|result| result.status == OperationResultStatus::Applied)
+    {
+        ProjectionResultStatus::Applied
+    } else if operation_results
+        .iter()
+        .any(|result| result.status == OperationResultStatus::Applied)
+    {
+        ProjectionResultStatus::Partial
+    } else {
+        ProjectionResultStatus::Failed
+    }
+}
+
+async fn persist_result(
+    pool: &sqlx::SqlitePool,
+    result: &ProjectionResult,
+    diagnostics: Vec<ProjectionDiagnostic>,
+) -> Result<String> {
+    let result_id = UbuId::new(ObjectType::Snapshot).to_string();
+    let status = projection_result_status_wire(result.status)?;
+    let payload = json!({
+        "schema_version": PROJECTION_RESULT_SCHEMA_VERSION,
+        "result": result,
+        "diagnostics": diagnostics,
+    });
+    queries::store_projection_result(
+        pool,
+        NewProjectionResultRecord {
+            id: result_id.clone(),
+            preview_id: result.preview_id.to_string(),
+            status,
+            payload,
+            created_at: result.applied_at.to_string(),
+        },
+    )
+    .await
+    .map_err(AppError::from)?;
+    Ok(result_id)
+}
+
+fn result_response(
+    result: &ProjectionResult,
+    diagnostics: Vec<ProjectionDiagnostic>,
+) -> Result<ProjectionResultResponse> {
+    Ok(ProjectionResultResponse {
+        schema_version: PROJECTION_RESULT_SCHEMA_VERSION.to_owned(),
+        preview_id: result.preview_id.to_string(),
+        status: projection_result_status_wire(result.status)?,
+        operation_results: result
+            .operation_results
+            .iter()
+            .map(|result| {
+                Ok(ProjectionOperationResultBody {
+                    operation_id: result.operation_id.clone(),
+                    status: operation_result_status_wire(result.status)?,
+                    message: result.message.clone(),
+                    authority_source: if result.status == OperationResultStatus::Applied {
+                        Some(authority_source_wire(AuthoritySource::AutomationWorker)?)
+                    } else {
+                        None
+                    },
+                })
+            })
+            .collect::<Result<Vec<_>>>()?,
+        diagnostics,
+    })
+}
+
+async fn load_last_applied_result(pool: &sqlx::SqlitePool) -> Result<StoredProjectionResult> {
+    let row = sqlx::query(
+        "SELECT id, preview_id, payload_json FROM projection_results
+        WHERE status IN ('applied', 'partial')
+        ORDER BY created_at DESC
+        LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?
+    .ok_or_else(|| AppError::NotFound("no applied projection result found".to_owned()))?;
+    let result_id: String = row
+        .try_get("id")
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let preview_id: String = row
+        .try_get("preview_id")
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let payload_json: String = row
+        .try_get("payload_json")
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let payload: Value =
+        serde_json::from_str(&payload_json).map_err(|e| AppError::Internal(e.to_string()))?;
+    let result: ProjectionResult = serde_json::from_value(payload["result"].clone())
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    Ok(StoredProjectionResult {
+        result_id,
+        preview_id,
+        result,
+    })
+}
+
+fn reconciliation_conflicts(
+    preview: &ProjectionPreviewBatch,
+    result: &ProjectionResult,
+    observed: &BTreeSet<String>,
+) -> Vec<ProjectionConflictBody> {
+    let applied = result
+        .operation_results
+        .iter()
+        .filter(|result| result.status == OperationResultStatus::Applied)
+        .map(|result| result.operation_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut conflicts = Vec::new();
+
+    for operation in &preview.github_operations {
+        if !applied.contains(operation.operation_id.as_str()) {
+            continue;
+        }
+        match &operation.payload {
+            GitHubProjectionPayload::ManagedLabelPreflight(payload) => {
+                for label in &payload.missing_labels {
+                    if !observed.contains(label) {
+                        conflicts.push(conflict(
+                            operation,
+                            "missing",
+                            label,
+                            observed,
+                            "managed repository label is missing from observed GitHub state",
+                        ));
+                    }
+                }
+            }
+            GitHubProjectionPayload::Label { label }
+                if operation.kind == GitHubProjectionOperationKind::ApplyLabel =>
+            {
+                if !observed.contains(label) {
+                    conflicts.push(conflict(
+                        operation,
+                        "missing",
+                        label,
+                        observed,
+                        "applied managed label is missing from observed GitHub state",
+                    ));
+                }
+            }
+            GitHubProjectionPayload::Label { label }
+                if operation.kind == GitHubProjectionOperationKind::RemoveLabel =>
+            {
+                if observed.contains(label) {
+                    conflicts.push(conflict(
+                        operation,
+                        "drifted",
+                        label,
+                        observed,
+                        "removed managed label is still present in observed GitHub state",
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    conflicts
+}
+
+fn conflict(
+    operation: &GitHubProjectionOperation,
+    conflict_type: &str,
+    label: &str,
+    observed: &BTreeSet<String>,
+    message: &str,
+) -> ProjectionConflictBody {
+    ProjectionConflictBody {
+        operation_id: operation.operation_id.clone(),
+        conflict_type: conflict_type.to_owned(),
+        expected_label: label.to_owned(),
+        observed_labels: observed.iter().cloned().collect(),
+        message: message.to_owned(),
+    }
+}
+
+fn operation_body(operation: &GitHubProjectionOperation) -> Result<ProjectionOperationBody> {
+    Ok(ProjectionOperationBody {
+        operation_id: operation.operation_id.clone(),
+        kind: "label".to_owned(),
+        target: ProjectionTargetBody {
+            owner: operation.target.owner.clone(),
+            repo: operation.target.repo.clone(),
+            issue_number: operation.target.issue_number,
+        },
+        summary: operation.summary.clone(),
+        payload: serde_json::to_value(&operation.payload)
+            .map_err(|e| AppError::Internal(e.to_string()))?,
+    })
+}
+
+fn policy_summary_body(policy_summary: &PolicySummary) -> Result<PolicySummaryBody> {
+    Ok(PolicySummaryBody {
+        legitimization: legitimization_wire(policy_summary.legitimization)?,
+        adjudication_reasons: policy_summary.adjudication_reasons.clone(),
+        local_only: policy_summary.local_only,
+        no_cloud_llm: policy_summary.no_cloud_llm,
+        no_external_export: policy_summary.no_external_export,
+        checked_at: policy_summary.checked_at.to_string(),
+    })
+}
+
+fn projection_result_status_wire(status: ProjectionResultStatus) -> Result<String> {
+    wire_string(status)
+}
+
+fn operation_result_status_wire(status: OperationResultStatus) -> Result<String> {
+    wire_string(status)
+}
+
+fn legitimization_wire(legitimization: Legitimization) -> Result<String> {
+    wire_string(legitimization)
+}
+
+fn authority_source_wire(authority_source: AuthoritySource) -> Result<String> {
+    wire_string(authority_source)
+}
+
+fn wire_string<T: Serialize>(value: T) -> Result<String> {
+    let serialized =
+        serde_json::to_string(&value).map_err(|e| AppError::Internal(e.to_string()))?;
+    Ok(serialized.trim_matches('"').to_owned())
 }

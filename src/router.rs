@@ -44,6 +44,11 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/projection/preview", post(api::projection::preview))
         .route("/projection/approve", post(api::projection::approve))
+        .route("/projection/reconcile", post(api::projection::reconcile))
+        .route(
+            "/projection/reconciliation/accept-external",
+            post(api::projection::accept_external),
+        )
         .route("/reports/risk", get(api::reports::risk))
         .route("/reports/human-complete", get(api::reports::human_complete))
         .route("/openapi.json", get(openapi::openapi_json))
