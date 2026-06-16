@@ -14,6 +14,7 @@ pub use router::build_router;
 #[cfg(test)]
 mod integration {
     use crate::api::github::ImportFixtureRequest;
+    use crate::api::next_action::{NextActionRequest, NEXT_ACTION_SCHEMA_VERSION};
     use crate::api::planning::GeneratePlanningRequest;
     use crate::config::ServerConfig;
     use crate::services::{import_service, next_action_service, planning_service};
@@ -39,31 +40,36 @@ mod integration {
         .expect("fixture import succeeds");
 
         assert_eq!(
-            import_resp.imported,
-            import_resp.admitted_to_store,
+            import_resp.imported, import_resp.admitted_to_store,
             "all candidates admitted"
         );
-        assert!(
-            !import_resp.candidates.is_empty(),
-            "at least one candidate"
-        );
+        assert!(!import_resp.candidates.is_empty(), "at least one candidate");
 
-        let plan_resp = planning_service::generate(
-            state.clone(),
-            GeneratePlanningRequest { request: None },
-        )
-        .await
-        .expect("plan generation succeeds");
+        let plan_resp =
+            planning_service::generate(state.clone(), GeneratePlanningRequest { request: None })
+                .await
+                .expect("plan generation succeeds");
 
         assert!(plan_resp.plan.is_some(), "plan was generated");
 
-        let next = next_action_service::get_next_action(state.clone())
-            .await
-            .expect("next action available after planning");
+        let next = next_action_service::get_next_action(
+            state.clone(),
+            NextActionRequest {
+                schema_version: Some(NEXT_ACTION_SCHEMA_VERSION.to_owned()),
+            },
+        )
+        .await
+        .expect("next action available after planning");
 
-        assert!(!next.task_id.is_empty(), "next action has a task_id");
-        assert!(next.readiness, "task is reported ready");
-        assert!(next.end > next.start, "scheduled window is valid");
+        let recommendation = next.recommendation.expect("recommendation is available");
+        assert!(
+            !recommendation.task_id.is_empty(),
+            "next action has a task_id"
+        );
+        assert_eq!(
+            recommendation.readiness,
+            crate::api::next_action::ReadinessState::Ready
+        );
     }
 
     #[tokio::test]
@@ -79,17 +85,19 @@ mod integration {
         .await
         .expect("import on first request");
 
-        planning_service::generate(
+        planning_service::generate(state.clone(), GeneratePlanningRequest { request: None })
+            .await
+            .expect("plan on second request");
+
+        let next = next_action_service::get_next_action(
             state.clone(),
-            GeneratePlanningRequest { request: None },
+            NextActionRequest {
+                schema_version: Some(NEXT_ACTION_SCHEMA_VERSION.to_owned()),
+            },
         )
         .await
-        .expect("plan on second request");
+        .expect("next action on third request");
 
-        let next = next_action_service::get_next_action(state.clone())
-            .await
-            .expect("next action on third request");
-
-        assert!(!next.task_id.is_empty());
+        assert!(next.recommendation.is_some());
     }
 }

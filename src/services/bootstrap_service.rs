@@ -52,6 +52,7 @@ pub async fn seed(state: AppState, request: BootstrapSeedRequest) -> Result<Boot
             owner: request.selected_repo.owner,
             repo: request.selected_repo.repo,
             session_token: None,
+            objective_id: Some(objective_id.clone()),
         },
     )
     .await?;

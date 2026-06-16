@@ -7,6 +7,8 @@ use crate::errors::Result;
 use crate::services::log_service;
 use crate::state::AppState;
 
+pub const TASK_ACTION_SCHEMA_VERSION: &str = "ubu.orchestrator.task_action.v1";
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskActionKind {
@@ -45,6 +47,44 @@ pub struct UserActionRequest {
     pub note: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordedTaskActionKind {
+    Complete,
+    Override,
+    Snooze,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct RecordedTaskActionRequest {
+    pub schema_version: Option<String>,
+    pub action: RecordedTaskActionKind,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct RecordedTaskActionResponse {
+    pub schema_version: String,
+    pub log_id: String,
+    pub task_id: String,
+    pub action: RecordedTaskActionKind,
+    pub task_status: TaskLifecycleStatus,
+    pub authority_source: String,
+    pub transition_applied: bool,
+    pub note: Option<String>,
+    pub diagnostics: Vec<ActionDiagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct ActionDiagnostic {
+    pub code: String,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct LogEntryResponse {
@@ -70,6 +110,23 @@ pub async fn start(
 ) -> Result<Json<LogEntryResponse>> {
     Ok(Json(
         log_service::append_action(state, task_id, TaskActionKind::Start, request).await?,
+    ))
+}
+
+#[utoipa::path(
+    post,
+    path = "/task/{task_id}/action",
+    params(("task_id" = String, Path)),
+    request_body = RecordedTaskActionRequest,
+    responses((status = 200, body = RecordedTaskActionResponse))
+)]
+pub async fn record_action(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+    Json(request): Json<RecordedTaskActionRequest>,
+) -> Result<Json<RecordedTaskActionResponse>> {
+    Ok(Json(
+        log_service::record_task_action(state, task_id, request).await?,
     ))
 }
 

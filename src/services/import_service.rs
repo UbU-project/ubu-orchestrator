@@ -35,6 +35,7 @@ async fn admit_task(
     provenance_source_kind: &str,
     provenance_source_id: &str,
     provenance_source_url: Option<String>,
+    objective_id: Option<String>,
 ) -> Result<ImportedCandidate> {
     let task_id = UbuId::new(ObjectType::Task).to_string();
     let now = UbuTimestamp::now_utc().to_string();
@@ -42,26 +43,31 @@ async fn admit_task(
         serde_json::to_string(&authority_source).map_err(|e| AppError::Internal(e.to_string()))?;
     let authority_str = authority_str.trim_matches('"');
 
+    let mut payload = json!({
+        "id": task_id.clone(),
+        "title": title,
+        "status": "active",
+        "provenance": {
+            "created_at": now,
+            "authority_source": authority_str,
+            "source": {
+                "source_kind": provenance_source_kind,
+                "source_id": provenance_source_id,
+                "url": provenance_source_url
+            }
+        }
+    });
+    if let Some(objective_id) = objective_id {
+        payload["objective_id"] = json!(objective_id);
+    }
+
     let record = NewObjectRecord {
         id: task_id.clone(),
         object_type: ObjectType::Task.as_str().to_owned(),
         version: 1,
         status: "active".to_owned(),
         compartment_label: "github-import".to_owned(),
-        payload: json!({
-            "id": task_id,
-            "title": title,
-            "status": "active",
-            "provenance": {
-                "created_at": now,
-                "authority_source": authority_str,
-                "source": {
-                    "source_kind": provenance_source_kind,
-                    "source_id": provenance_source_id,
-                    "url": provenance_source_url
-                }
-            }
-        }),
+        payload,
         created_at: now.clone(),
         updated_at: now,
     };
@@ -96,6 +102,7 @@ pub async fn import_fixture(
             AuthoritySource::System,
             "github_fixture",
             &raw.source,
+            None,
             None,
         )
         .await?;
@@ -141,6 +148,7 @@ pub async fn import_live(state: AppState, request: ImportLiveRequest) -> Result<
         "github_repository",
         &source_id,
         Some(source_url),
+        request.objective_id,
     )
     .await?;
 

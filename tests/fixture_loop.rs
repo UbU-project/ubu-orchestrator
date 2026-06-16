@@ -3,6 +3,8 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use serde_json::Value;
 use tower::ServiceExt;
+use ubu_orchestrator::api::next_action::NEXT_ACTION_SCHEMA_VERSION;
+use ubu_orchestrator::api::user_action::TASK_ACTION_SCHEMA_VERSION;
 use ubu_orchestrator::config::ServerConfig;
 use ubu_orchestrator::state::AppState;
 
@@ -41,7 +43,9 @@ async fn fixture_loop_reaches_projection_result() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/next-action")
+                .uri(format!(
+                    "/next-action?schema_version={NEXT_ACTION_SCHEMA_VERSION}"
+                ))
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -57,14 +61,17 @@ async fn fixture_loop_reaches_projection_result() {
         .to_bytes();
     let next: Value = serde_json::from_slice(&next_body).expect("next action json");
     let task_id = next
-        .get("task_id")
+        .get("recommendation")
+        .and_then(|value| value.get("task_id"))
         .and_then(Value::as_str)
         .expect("task_id in next action");
 
-    let done_body = format!(r#"{{"note":"done"}}"#);
+    let done_body = format!(
+        r#"{{"schema_version":"{TASK_ACTION_SCHEMA_VERSION}","action":"complete","note":"done"}}"#
+    );
     let response = app
         .clone()
-        .oneshot(json_request(&format!("/task/{task_id}/done"), &done_body))
+        .oneshot(json_request(&format!("/task/{task_id}/action"), &done_body))
         .await
         .expect("done response");
     assert_eq!(response.status(), StatusCode::OK);

@@ -226,6 +226,16 @@
           "crate::api::next_action"
         ],
         "operationId": "next_action",
+        "parameters": [
+          {
+            "name": "schema_version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "",
@@ -363,6 +373,46 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RiskReportResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/task/{task_id}/action": {
+      "post": {
+        "tags": [
+          "crate::api::user_action"
+        ],
+        "operationId": "record_action",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordedTaskActionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordedTaskActionResponse"
                 }
               }
             }
@@ -573,6 +623,21 @@
   },
   "components": {
     "schemas": {
+      "ActionDiagnostic": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
       "AttentionPreference": {
         "type": "string",
         "enum": [
@@ -889,6 +954,12 @@
           "repo"
         ],
         "properties": {
+          "objective_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "owner": {
             "type": "string"
           },
@@ -980,30 +1051,135 @@
           }
         }
       },
-      "NextActionResponse": {
+      "NextActionDiagnostic": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "blocked_task_count",
+          "sampled_task_ids"
+        ],
+        "properties": {
+          "blocked_task_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "code": {
+            "$ref": "#/components/schemas/NextActionDiagnosticCode"
+          },
+          "message": {
+            "type": "string"
+          },
+          "sampled_task_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "NextActionDiagnosticCode": {
+        "type": "string",
+        "enum": [
+          "no_admitted_tasks",
+          "no_active_tasks",
+          "all_candidates_blocked_on_unmet_dependencies",
+          "all_candidates_blocked_on_preconditions",
+          "no_ready_task"
+        ]
+      },
+      "NextActionExplanation": {
+        "type": "object",
+        "required": [
+          "template_id",
+          "label",
+          "message",
+          "readiness_state",
+          "source_refs"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "parent_objective": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/NextActionObjectiveRef"
+              }
+            ]
+          },
+          "readiness_state": {
+            "$ref": "#/components/schemas/ReadinessState"
+          },
+          "source_refs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NextActionSourceRef"
+            }
+          },
+          "template_id": {
+            "type": "string"
+          }
+        }
+      },
+      "NextActionObjectiveRef": {
+        "type": "object",
+        "required": [
+          "objective_id",
+          "title"
+        ],
+        "properties": {
+          "objective_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "NextActionRecommendation": {
         "type": "object",
         "required": [
           "task_id",
           "title",
           "status",
           "readiness",
-          "start",
-          "end"
+          "source_refs",
+          "selection",
+          "explanation"
         ],
         "properties": {
-          "end": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
+          "explanation": {
+            "$ref": "#/components/schemas/NextActionExplanation"
+          },
+          "parent_objective": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/NextActionObjectiveRef"
+              }
+            ]
           },
           "readiness": {
-            "type": "boolean",
+            "$ref": "#/components/schemas/ReadinessState",
             "description": "Computed response field; not a persisted task lifecycle status."
           },
-          "start": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
+          "selection": {
+            "$ref": "#/components/schemas/NextActionSelection"
+          },
+          "source_refs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NextActionSourceRef"
+            }
           },
           "status": {
             "$ref": "#/components/schemas/TaskLifecycleStatus"
@@ -1013,6 +1189,88 @@
           },
           "title": {
             "type": "string"
+          }
+        }
+      },
+      "NextActionRequest": {
+        "type": "object",
+        "properties": {
+          "schema_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "NextActionResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "diagnostics"
+        ],
+        "properties": {
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NextActionDiagnostic"
+            }
+          },
+          "recommendation": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/NextActionRecommendation"
+              }
+            ]
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        }
+      },
+      "NextActionSelection": {
+        "type": "object",
+        "required": [
+          "rule",
+          "tiebreak"
+        ],
+        "properties": {
+          "priority": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "rule": {
+            "type": "string"
+          },
+          "tiebreak": {
+            "type": "string"
+          }
+        }
+      },
+      "NextActionSourceRef": {
+        "type": "object",
+        "required": [
+          "source_kind",
+          "source_id"
+        ],
+        "properties": {
+          "source_id": {
+            "type": "string"
+          },
+          "source_kind": {
+            "type": "string"
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -1159,6 +1417,92 @@
           },
           "status": {
             "type": "string"
+          }
+        }
+      },
+      "ReadinessState": {
+        "type": "string",
+        "enum": [
+          "ready",
+          "blocked"
+        ]
+      },
+      "RecordedTaskActionKind": {
+        "type": "string",
+        "enum": [
+          "complete",
+          "override",
+          "snooze"
+        ]
+      },
+      "RecordedTaskActionRequest": {
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/RecordedTaskActionKind"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "schema_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "RecordedTaskActionResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "log_id",
+          "task_id",
+          "action",
+          "task_status",
+          "authority_source",
+          "transition_applied",
+          "diagnostics"
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/RecordedTaskActionKind"
+          },
+          "authority_source": {
+            "type": "string"
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActionDiagnostic"
+            }
+          },
+          "log_id": {
+            "type": "string"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "task_status": {
+            "$ref": "#/components/schemas/TaskLifecycleStatus"
+          },
+          "transition_applied": {
+            "type": "boolean"
           }
         }
       },

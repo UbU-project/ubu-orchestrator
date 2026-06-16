@@ -27,6 +27,8 @@ pub struct ImportLiveRequest {
     /// Developer mode uses `GITHUB_TOKEN` from the environment instead.
     #[serde(default)]
     pub session_token: Option<String>,
+    #[serde(default)]
+    pub objective_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
