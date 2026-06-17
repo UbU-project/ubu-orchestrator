@@ -280,6 +280,36 @@
         }
       }
     },
+    "/planning/recalculate": {
+      "post": {
+        "tags": [
+          "crate::api::recalculation"
+        ],
+        "operationId": "recalculate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecalculationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecalculationResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projection/approve": {
       "post": {
         "tags": [
@@ -871,7 +901,7 @@
       "CalendarResponse": {
         "type": "object",
         "required": [
-          "tasks"
+          "steps"
         ],
         "properties": {
           "plan_id": {
@@ -880,7 +910,7 @@
               "null"
             ]
           },
-          "tasks": {
+          "steps": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/ScheduledTaskBody"
@@ -914,6 +944,12 @@
               {
                 "$ref": "#/components/schemas/PlanningRequestBody"
               }
+            ]
+          },
+          "schema_version": {
+            "type": [
+              "string",
+              "null"
             ]
           }
         }
@@ -1334,27 +1370,59 @@
           }
         }
       },
+      "ObjectRefBody": {
+        "type": "object",
+        "required": [
+          "id",
+          "object_type"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "object_type": {
+            "type": "string"
+          }
+        }
+      },
       "PlanBody": {
         "type": "object",
         "required": [
-          "plan_id",
+          "id",
           "status",
-          "tasks"
+          "steps",
+          "created_at"
         ],
         "properties": {
-          "plan_id": {
+          "created_at": {
+            "type": "string"
+          },
+          "id": {
             "type": "string"
           },
           "status": {
             "type": "string"
           },
-          "tasks": {
+          "steps": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/ScheduledTaskBody"
             }
+          },
+          "supersedes_plan_id": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
+      },
+      "PlanningModeBody": {
+        "type": "string",
+        "enum": [
+          "fresh_generation",
+          "repair"
+        ]
       },
       "PlanningRequestBody": {
         "type": "object",
@@ -1362,8 +1430,29 @@
           "request_id"
         ],
         "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/PlanningModeBody"
+          },
+          "repair_context": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RepairContextBody"
+              }
+            ]
+          },
           "request_id": {
             "type": "string"
+          },
+          "rng_seed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
           },
           "schema_version": {
             "type": [
@@ -1371,11 +1460,31 @@
               "null"
             ]
           },
+          "task_graph": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TaskGraphBody"
+              }
+            ]
+          },
           "tasks": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/TaskSpecBody"
             }
+          },
+          "time_window": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TimeWindowBody"
+              }
+            ]
           }
         }
       },
@@ -1830,6 +1939,93 @@
           "blocked"
         ]
       },
+      "RecalculationRequest": {
+        "type": "object",
+        "required": [
+          "triggered_at",
+          "trigger_type"
+        ],
+        "properties": {
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "objects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObjectRefBody"
+            }
+          },
+          "schema_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "trigger_type": {
+            "$ref": "#/components/schemas/RecalculationTriggerTypeBody"
+          },
+          "triggered_at": {
+            "type": "string"
+          }
+        }
+      },
+      "RecalculationResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "trigger_type",
+          "repair_scope",
+          "prior_plan_id",
+          "diagnostics"
+        ],
+        "properties": {
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DiagnosticBody"
+            }
+          },
+          "plan": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PlanBody"
+              }
+            ]
+          },
+          "prior_plan_id": {
+            "type": "string"
+          },
+          "repair_scope": {
+            "$ref": "#/components/schemas/RepairScopeBody"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "trigger_type": {
+            "$ref": "#/components/schemas/RecalculationTriggerTypeBody"
+          }
+        }
+      },
+      "RecalculationTriggerTypeBody": {
+        "type": "string",
+        "enum": [
+          "task_completed",
+          "task_failed",
+          "task_moot",
+          "user_override",
+          "observed_snapshot",
+          "external_event",
+          "github_update",
+          "low_compact_calendar_coverage",
+          "worker_request"
+        ]
+      },
       "RecordedTaskActionKind": {
         "type": "string",
         "enum": [
@@ -1909,6 +2105,41 @@
           }
         }
       },
+      "RepairContextBody": {
+        "type": "object",
+        "required": [
+          "prior_plan_id",
+          "last_legitimate_plan_ref",
+          "repair_scope"
+        ],
+        "properties": {
+          "last_legitimate_plan_ref": {
+            "type": "string"
+          },
+          "observed_divergence_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "prior_plan_id": {
+            "type": "string"
+          },
+          "repair_scope": {
+            "$ref": "#/components/schemas/RepairScopeBody"
+          }
+        }
+      },
+      "RepairScopeBody": {
+        "type": "string",
+        "enum": [
+          "remaining_window",
+          "failed_task",
+          "moot_task",
+          "override_placement",
+          "full_window"
+        ]
+      },
       "RiskReportResponse": {
         "type": "object",
         "required": [
@@ -1933,11 +2164,14 @@
       "ScheduledTaskBody": {
         "type": "object",
         "required": [
+          "index",
           "task_id",
+          "summary",
           "start",
           "end",
           "depends_on",
-          "static_anchor"
+          "static_anchor",
+          "placement_authority"
         ],
         "properties": {
           "depends_on": {
@@ -1951,6 +2185,14 @@
             "format": "int64",
             "minimum": 0
           },
+          "index": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "placement_authority": {
+            "type": "string"
+          },
           "start": {
             "type": "integer",
             "format": "int64",
@@ -1959,8 +2201,24 @@
           "static_anchor": {
             "type": "boolean"
           },
+          "summary": {
+            "type": "string"
+          },
           "task_id": {
             "type": "string"
+          }
+        }
+      },
+      "StaticAnchorBody": {
+        "type": "object",
+        "required": [
+          "start"
+        ],
+        "properties": {
+          "start": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -1973,6 +2231,41 @@
           "reject",
           "decompose"
         ]
+      },
+      "TaskGraphBody": {
+        "type": "object",
+        "required": [
+          "topological_order"
+        ],
+        "properties": {
+          "edges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskGraphEdgeBody"
+            }
+          },
+          "topological_order": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "TaskGraphEdgeBody": {
+        "type": "object",
+        "required": [
+          "before",
+          "after"
+        ],
+        "properties": {
+          "after": {
+            "type": "string"
+          },
+          "before": {
+            "type": "string"
+          }
+        }
       },
       "TaskLifecycleStatus": {
         "type": "string",
@@ -2009,6 +2302,26 @@
           },
           "id": {
             "type": "string"
+          },
+          "static_anchor": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StaticAnchorBody"
+              }
+            ]
+          },
+          "window": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TimeWindowBody"
+              }
+            ]
           }
         }
       },
@@ -2025,6 +2338,25 @@
           },
           "status": {
             "$ref": "#/components/schemas/TaskLifecycleStatus"
+          }
+        }
+      },
+      "TimeWindowBody": {
+        "type": "object",
+        "required": [
+          "start",
+          "end"
+        ],
+        "properties": {
+          "end": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "start": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },

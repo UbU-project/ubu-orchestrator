@@ -28,6 +28,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/github/import/fixture", post(api::github::import_fixture))
         .route("/github/import/live", post(api::github::import_live))
         .route("/planning/generate", post(api::planning::generate))
+        .route(
+            "/planning/recalculate",
+            post(api::recalculation::recalculate),
+        )
         .route("/calendar/current", get(api::calendar::current))
         .route("/next-action", get(api::next_action::next_action))
         .route("/task/:task_id/start", post(api::user_action::start))

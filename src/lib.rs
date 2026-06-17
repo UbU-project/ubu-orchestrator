@@ -45,10 +45,15 @@ mod integration {
         );
         assert!(!import_resp.candidates.is_empty(), "at least one candidate");
 
-        let plan_resp =
-            planning_service::generate(state.clone(), GeneratePlanningRequest { request: None })
-                .await
-                .expect("plan generation succeeds");
+        let plan_resp = planning_service::generate(
+            state.clone(),
+            GeneratePlanningRequest {
+                schema_version: None,
+                request: None,
+            },
+        )
+        .await
+        .expect("plan generation succeeds");
 
         assert!(plan_resp.plan.is_some(), "plan was generated");
 
@@ -85,9 +90,15 @@ mod integration {
         .await
         .expect("import on first request");
 
-        planning_service::generate(state.clone(), GeneratePlanningRequest { request: None })
-            .await
-            .expect("plan on second request");
+        planning_service::generate(
+            state.clone(),
+            GeneratePlanningRequest {
+                schema_version: None,
+                request: None,
+            },
+        )
+        .await
+        .expect("plan on second request");
 
         let next = next_action_service::get_next_action(
             state.clone(),

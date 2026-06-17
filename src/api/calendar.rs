@@ -12,7 +12,7 @@ use crate::state::AppState;
 #[serde(rename_all = "snake_case")]
 pub struct CalendarResponse {
     pub plan_id: Option<String>,
-    pub tasks: Vec<ScheduledTaskBody>,
+    pub steps: Vec<ScheduledTaskBody>,
 }
 
 #[utoipa::path(
