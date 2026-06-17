@@ -3,11 +3,12 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::Row;
-use ubu_core::core::{CompartmentBoundaryDecidedPayload, PolicyMember};
+use ubu_core::core::CompartmentBoundaryDecidedPayload;
 use ubu_core::id_registry::ObjectType;
 use ubu_core::projection::{
-    OperationResult, OperationResultStatus, ProjectionApproval, ProjectionPreview,
-    ProjectionResult, ProjectionResultStatus,
+    ExportGateDecision, ExportPermit, ExportProjectionContext, Legitimizer, OperationResult,
+    OperationResultStatus, ProjectionApproval, ProjectionOperation, ProjectionOperationKind,
+    ProjectionPreview, ProjectionResult, ProjectionResultStatus,
 };
 use ubu_core::{
     AuthoritySource, Legitimization, ObjectRef, PolicySummary, Provenance, SourceRef, UbuId,
@@ -20,9 +21,6 @@ use ubu_github_adapter::projection::labels::{
 use ubu_github_adapter::projection::operations::{
     GitHubProjectionOperation, GitHubProjectionOperationKind, GitHubProjectionPayload,
     GitHubProjectionTarget,
-};
-use ubu_github_adapter::projection::preview::{
-    preview_for_operations_with_existing_labels, ProjectionPreviewBatch,
 };
 use ubu_store::models::log_record::NewLogRecord;
 use ubu_store::models::object_record::NewObjectRecord;
@@ -166,12 +164,37 @@ pub async fn approve(
     let mut operation_results = Vec::new();
     let mut diagnostics = Vec::new();
     for operation in &stored.github_operations {
-        let adjudication = legitimize_export_operation(&policy_summary);
-        append_boundary_log(pool, &stored.preview, operation, &adjudication).await?;
+        let core_operation = preview_operation(&stored.preview, operation)?;
+        let adjudication = gate_export_operation(
+            core_operation,
+            operation,
+            Some(&policy_summary),
+            AuthoritySource::AutomationWorker,
+        );
+        append_boundary_log(
+            pool,
+            &stored.preview,
+            operation,
+            &adjudication.decision.log_payload,
+        )
+        .await?;
 
-        match adjudication {
+        match adjudication.decision.legitimization {
             Legitimization::Accepted => {
-                match apply_mock_managed_label_write(pool, &stored.preview.id, operation).await {
+                let Some(permit) = adjudication.permit() else {
+                    operation_results.push(OperationResult {
+                        operation_id: operation.operation_id.clone(),
+                        status: OperationResultStatus::Failed,
+                        message: Some(
+                            "accepted projection export did not include a core export permit"
+                                .to_owned(),
+                        ),
+                    });
+                    continue;
+                };
+                match apply_mock_managed_label_write(pool, &stored.preview.id, operation, permit)
+                    .await
+                {
                     Ok(message) => operation_results.push(OperationResult {
                         operation_id: operation.operation_id.clone(),
                         status: OperationResultStatus::Applied,
@@ -376,6 +399,12 @@ struct StoredPreviewPayload {
 }
 
 #[derive(Debug, Clone)]
+struct ProjectionPreviewBatch {
+    preview: ProjectionPreview,
+    github_operations: Vec<GitHubProjectionOperation>,
+}
+
+#[derive(Debug, Clone)]
 struct StoredProjectionResult {
     result_id: String,
     preview_id: String,
@@ -526,6 +555,86 @@ fn batch_from_stored(stored: &StoredPreviewPayload) -> ProjectionPreviewBatch {
     }
 }
 
+fn preview_for_operations_with_existing_labels(
+    operations: Vec<GitHubProjectionOperation>,
+    existing_labels: &[String],
+) -> Result<ProjectionPreviewBatch> {
+    let operations = with_managed_label_preflight(operations, existing_labels);
+    let core_operations = operations
+        .iter()
+        .map(core_operation_from_github)
+        .collect::<Result<Vec<_>>>()?;
+    Ok(ProjectionPreviewBatch {
+        preview: ProjectionPreview {
+            id: UbuId::new(ObjectType::ProjectionPreview),
+            created_at: UbuTimestamp::now_utc(),
+            operations: core_operations,
+            policy_summary: None,
+        },
+        github_operations: operations,
+    })
+}
+
+fn with_managed_label_preflight(
+    operations: Vec<GitHubProjectionOperation>,
+    existing_labels: &[String],
+) -> Vec<GitHubProjectionOperation> {
+    let mut repositories = operations
+        .iter()
+        .map(|operation| {
+            (
+                operation.target.owner.as_str(),
+                operation.target.repo.as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+    repositories.sort_unstable();
+    repositories.dedup();
+
+    let mut preflight = repositories
+        .into_iter()
+        .filter_map(|(owner, repo)| managed_label_preflight(owner, repo, existing_labels))
+        .collect::<Vec<_>>();
+    preflight.extend(operations);
+    preflight
+}
+
+fn core_operation_from_github(
+    operation: &GitHubProjectionOperation,
+) -> Result<ProjectionOperation> {
+    let kind = match operation.kind {
+        GitHubProjectionOperationKind::ManagedLabelPreflight
+        | GitHubProjectionOperationKind::ApplyLabel
+        | GitHubProjectionOperationKind::RemoveLabel => ProjectionOperationKind::Label,
+        GitHubProjectionOperationKind::CreateComment => ProjectionOperationKind::Comment,
+        GitHubProjectionOperationKind::CreateManagedIssue => ProjectionOperationKind::Create,
+    };
+    Ok(ProjectionOperation {
+        operation_id: operation.operation_id.clone(),
+        kind,
+        target: github_target_source_ref(&operation.target, "github"),
+        summary: operation.summary.clone(),
+        payload: Some(
+            serde_json::to_value(operation).map_err(|e| AppError::Internal(e.to_string()))?,
+        ),
+    })
+}
+
+fn github_target_source_ref(target: &GitHubProjectionTarget, kind: &str) -> SourceRef {
+    let source_id = match target.issue_number {
+        Some(number) => format!("{}/{}#{}", target.owner, target.repo, number),
+        None => format!("{}/{}", target.owner, target.repo),
+    };
+    SourceRef {
+        source_kind: kind.to_owned(),
+        source_id,
+        url: Some(format!(
+            "https://github.com/{}/{}",
+            target.owner, target.repo
+        )),
+    }
+}
+
 fn ensure_label_only_batch(batch: &ProjectionPreviewBatch) -> Result<()> {
     for operation in &batch.github_operations {
         let is_label_operation = matches!(
@@ -547,10 +656,7 @@ fn ensure_label_only_batch(batch: &ProjectionPreviewBatch) -> Result<()> {
         }
     }
     for operation in &batch.preview.operations {
-        if !matches!(
-            operation.kind,
-            ubu_core::projection::ProjectionOperationKind::Label
-        ) {
+        if !matches!(operation.kind, ProjectionOperationKind::Label) {
             return Err(AppError::bad_request_diagnostic(
                 "unsupported_projection_operation",
                 "O7 projection previews may contain only label operations",
@@ -589,64 +695,73 @@ async fn persist_approval(pool: &sqlx::SqlitePool, approval: &ProjectionApproval
     Ok(())
 }
 
-fn legitimize_export_operation(policy_summary: &PolicySummary) -> Legitimization {
-    if policy_summary.no_external_export == Some(true) {
-        return Legitimization::Rejected;
-    }
-    policy_summary.legitimization
+fn preview_operation<'a>(
+    preview: &'a ProjectionPreview,
+    operation: &GitHubProjectionOperation,
+) -> Result<&'a ProjectionOperation> {
+    preview
+        .operations
+        .iter()
+        .find(|candidate| candidate.operation_id == operation.operation_id)
+        .ok_or_else(|| {
+            AppError::Internal(format!(
+                "stored preview is missing core projection operation `{}`",
+                operation.operation_id
+            ))
+        })
+}
+
+fn gate_export_operation(
+    core_operation: &ProjectionOperation,
+    github_operation: &GitHubProjectionOperation,
+    effective_policy: Option<&PolicySummary>,
+    authority_source: AuthoritySource,
+) -> ExportGateDecision {
+    let effective_time = UbuTimestamp::now_utc();
+    let compartment_ref = ObjectRef {
+        id: UbuId::new(ObjectType::Compartment),
+        object_type: ObjectType::Compartment,
+    };
+    let actor_identity_ref = ObjectRef {
+        id: UbuId::new(ObjectType::Identity),
+        object_type: ObjectType::Identity,
+    };
+    let provenance = Provenance {
+        created_at: effective_time.clone(),
+        created_by: None,
+        authority_source,
+        source: Some(github_target_source_ref(&github_operation.target, "github")),
+        source_refs: None,
+    };
+
+    Legitimizer::gate_export_projection(ExportProjectionContext {
+        operation: core_operation,
+        effective_policy,
+        compartment_ref: &compartment_ref,
+        actor_identity_ref: &actor_identity_ref,
+        authority_source,
+        effective_time,
+        provenance: &provenance,
+    })
 }
 
 async fn append_boundary_log(
     pool: &sqlx::SqlitePool,
     preview: &ProjectionPreview,
     operation: &GitHubProjectionOperation,
-    adjudication: &Legitimization,
+    log_payload: &CompartmentBoundaryDecidedPayload,
 ) -> Result<()> {
-    let now = UbuTimestamp::now_utc();
-    let provenance = Provenance {
-        created_at: now.clone(),
-        created_by: None,
-        authority_source: AuthoritySource::AutomationWorker,
-        source: Some(operation.target.source_ref("github")),
-        source_refs: None,
-    };
-    let payload = CompartmentBoundaryDecidedPayload {
-        compartment_ref: ObjectRef {
-            id: UbuId::new(ObjectType::Compartment),
-            object_type: ObjectType::Compartment,
-        },
-        member_evaluated: PolicyMember::NoExternalExport,
-        adjudication_result: *adjudication,
-        actor_identity_ref: ObjectRef {
-            id: UbuId::new(ObjectType::Identity),
-            object_type: ObjectType::Identity,
-        },
-        authority_source: AuthoritySource::AutomationWorker,
-        reason: match adjudication {
-            Legitimization::Accepted => {
-                "managed-label export accepted by projection enforcement gate".to_owned()
-            }
-            Legitimization::NeedsReview => {
-                "managed-label export requires review and was not written".to_owned()
-            }
-            Legitimization::Rejected => {
-                "managed-label export rejected by projection enforcement gate".to_owned()
-            }
-        },
-        effective_time: now.clone(),
-        provenance: provenance.clone(),
-    };
     queries::append_log_entry(
         pool,
         NewLogRecord {
             id: UbuId::new(ObjectType::LogEntry).to_string(),
             event_type: "compartment_boundary_decided".to_owned(),
             object_refs: json!([preview.id.to_string(), operation.operation_id]),
-            payload: serde_json::to_value(payload)
+            payload: serde_json::to_value(log_payload)
                 .map_err(|e| AppError::Internal(e.to_string()))?,
-            provenance: serde_json::to_value(provenance)
+            provenance: serde_json::to_value(&log_payload.provenance)
                 .map_err(|e| AppError::Internal(e.to_string()))?,
-            created_at: now.to_string(),
+            created_at: log_payload.effective_time.to_string(),
         },
     )
     .await
@@ -658,10 +773,18 @@ async fn apply_mock_managed_label_write(
     pool: &sqlx::SqlitePool,
     preview_id: &UbuId,
     operation: &GitHubProjectionOperation,
+    permit: &ExportPermit,
 ) -> Result<String> {
     ensure_operation_payload_managed(operation)?;
+    if permit.operation_id() != operation.operation_id {
+        return Err(AppError::Internal(format!(
+            "core export permit for `{}` cannot authorize operation `{}`",
+            permit.operation_id(),
+            operation.operation_id
+        )));
+    }
     let now = UbuTimestamp::now_utc().to_string();
-    let authority_source = authority_source_wire(AuthoritySource::AutomationWorker)?;
+    let authority_source = authority_source_wire(permit.authority_source())?;
     let payload = json!({
         "schema_version": PROJECTION_RESULT_SCHEMA_VERSION,
         "operation": operation,
@@ -942,4 +1065,52 @@ fn wire_string<T: Serialize>(value: T) -> Result<String> {
     let serialized =
         serde_json::to_string(&value).map_err(|e| AppError::Internal(e.to_string()))?;
     Ok(serialized.trim_matches('"').to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn user_authority_export_context_is_rejected_without_permit() {
+        let github_operation = apply_managed_label(
+            "label-apply-ubu-project-ubu-orchestrator-7-ubu-managed",
+            GitHubProjectionTarget::issue("UbU-project", "ubu-orchestrator", 7),
+            "ubu-managed",
+        );
+        let batch = preview_for_operations_with_existing_labels(
+            vec![github_operation.clone()],
+            &["ubu".to_owned(), "ubu-managed".to_owned()],
+        )
+        .expect("preview batch");
+        let policy_summary = resolved_policy_summary(false);
+        let core_operation =
+            preview_operation(&batch.preview, &github_operation).expect("core operation");
+
+        let adjudication = gate_export_operation(
+            core_operation,
+            &github_operation,
+            Some(&policy_summary),
+            AuthoritySource::User,
+        );
+
+        assert_eq!(
+            adjudication.decision.legitimization,
+            Legitimization::Rejected
+        );
+        assert!(adjudication.permit().is_none());
+        assert_eq!(
+            adjudication.decision.log_payload.adjudication_result,
+            Legitimization::Rejected
+        );
+        assert_eq!(
+            adjudication.decision.log_payload.authority_source,
+            AuthoritySource::User
+        );
+        assert!(adjudication
+            .decision
+            .adjudication_reasons
+            .iter()
+            .any(|reason| reason.contains("user-equivalent")));
+    }
 }

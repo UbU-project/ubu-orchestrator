@@ -90,6 +90,14 @@ async fn rejected_projection_is_logged_and_not_written() {
     assert_eq!(result["diagnostics"][0]["code"], "projection_denied");
     assert_eq!(worker_write_count(&pool).await, 0);
     assert_eq!(boundary_log_count(&pool).await, 1);
+    let payload = boundary_log_payload(&pool).await;
+    assert_eq!(payload["adjudication_result"], "rejected");
+    assert_eq!(payload["member_evaluated"], "no_external_export");
+    assert_eq!(payload["authority_source"], "automation_worker");
+    assert_eq!(
+        payload["provenance"]["authority_source"],
+        "automation_worker"
+    );
 }
 
 #[tokio::test]
@@ -97,6 +105,7 @@ async fn reconciliation_surfaces_conflict_and_accepts_external_change() {
     let state = AppState::in_memory(ServerConfig::from_env())
         .await
         .expect("state");
+    let pool = state.inner().store.pool().clone();
     let app = ubu_orchestrator::build_router(state);
 
     let preview = create_preview(&app, false).await;
@@ -121,6 +130,11 @@ async fn reconciliation_surfaces_conflict_and_accepts_external_change() {
         result["operation_results"][0]["authority_source"],
         "automation_worker"
     );
+    assert_eq!(worker_write_count(&pool).await, 1);
+    assert_eq!(boundary_log_count(&pool).await, 1);
+    let payload = boundary_log_payload(&pool).await;
+    assert_eq!(payload["adjudication_result"], "accepted");
+    assert_eq!(payload["authority_source"], "automation_worker");
 
     let reconcile = format!(
         r#"{{
@@ -199,6 +213,16 @@ async fn boundary_log_count(pool: &sqlx::SqlitePool) -> i64 {
     .fetch_one(pool)
     .await
     .expect("log count")
+}
+
+async fn boundary_log_payload(pool: &sqlx::SqlitePool) -> Value {
+    let payload_json: String = sqlx::query_scalar(
+        "SELECT payload_json FROM logs WHERE event_type = 'compartment_boundary_decided'",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("boundary log payload");
+    serde_json::from_str(&payload_json).expect("boundary payload json")
 }
 
 async fn worker_write_count(pool: &sqlx::SqlitePool) -> i64 {
