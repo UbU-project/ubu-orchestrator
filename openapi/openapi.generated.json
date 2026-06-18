@@ -728,6 +728,133 @@
           }
         }
       },
+      "AffectDimensionLegitimizationBody": {
+        "type": "object",
+        "required": [
+          "satisfaction",
+          "threshold",
+          "margin",
+          "stale"
+        ],
+        "properties": {
+          "margin": {
+            "type": "number",
+            "format": "double"
+          },
+          "satisfaction": {
+            "type": "number",
+            "format": "double"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "threshold": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "AffectDirectionBody": {
+        "type": "string",
+        "enum": [
+          "higher_is_better",
+          "lower_is_better"
+        ]
+      },
+      "AffectLegitimizationModeBody": {
+        "type": "string",
+        "enum": [
+          "enforce",
+          "warn_only"
+        ]
+      },
+      "AffectObservationBody": {
+        "type": "object",
+        "properties": {
+          "dimensions": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/AffectObservationValueBody"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "AffectObservationValueBody": {
+        "type": "object",
+        "required": [
+          "value",
+          "observed_at",
+          "source_kind"
+        ],
+        "properties": {
+          "observed_at": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "source_kind": {
+            "type": "string"
+          },
+          "value": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "AffectProfileBody": {
+        "type": "object",
+        "properties": {
+          "dimensions": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/AffectToleranceBody"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "$ref": "#/components/schemas/AffectLegitimizationModeBody"
+          }
+        }
+      },
+      "AffectToleranceBody": {
+        "type": "object",
+        "required": [
+          "direction",
+          "location",
+          "scale",
+          "threshold"
+        ],
+        "properties": {
+          "direction": {
+            "$ref": "#/components/schemas/AffectDirectionBody"
+          },
+          "freshness_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "location": {
+            "type": "number",
+            "format": "double"
+          },
+          "scale": {
+            "type": "number",
+            "format": "double"
+          },
+          "threshold": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
       "AttentionPreference": {
         "type": "string",
         "enum": [
@@ -780,6 +907,12 @@
           "primary_objective"
         ],
         "properties": {
+          "acceptable_energy_floor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "attention_preference": {
             "$ref": "#/components/schemas/AttentionPreference"
           },
@@ -790,6 +923,18 @@
           },
           "primary_objective": {
             "type": "string"
+          },
+          "tolerable_intensity_ceiling": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tolerable_stress_ceiling": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "work_style": {
             "$ref": "#/components/schemas/WorkStyle"
@@ -904,6 +1049,16 @@
           "steps"
         ],
         "properties": {
+          "legitimization": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LegitimizationReportBody"
+              }
+            ]
+          },
           "plan_id": {
             "type": [
               "string",
@@ -1111,6 +1266,59 @@
           },
           "title": {
             "type": "string"
+          }
+        }
+      },
+      "LegitimizationReportBody": {
+        "type": "object",
+        "required": [
+          "result",
+          "mode",
+          "affect_feasible"
+        ],
+        "properties": {
+          "affect_feasible": {
+            "type": "boolean"
+          },
+          "affect_margin": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "dimensions": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/AffectDimensionLegitimizationBody"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "$ref": "#/components/schemas/AffectLegitimizationModeBody"
+          },
+          "result": {
+            "type": "string"
+          },
+          "stale_affect_warning": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stale_dimensions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "violated_dimensions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -1400,6 +1608,16 @@
           "id": {
             "type": "string"
           },
+          "legitimization": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LegitimizationReportBody"
+              }
+            ]
+          },
           "status": {
             "type": "string"
           },
@@ -1430,6 +1648,32 @@
           "request_id"
         ],
         "properties": {
+          "affect_observation": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AffectObservationBody"
+              }
+            ]
+          },
+          "affect_profile": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AffectProfileBody"
+              }
+            ]
+          },
+          "affect_warning": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "mode": {
             "$ref": "#/components/schemas/PlanningModeBody"
           },
@@ -1501,6 +1745,16 @@
             "items": {
               "$ref": "#/components/schemas/DiagnosticBody"
             }
+          },
+          "legitimization": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LegitimizationReportBody"
+              }
+            ]
           },
           "plan": {
             "oneOf": [
@@ -2283,12 +2537,6 @@
           "duration"
         ],
         "properties": {
-          "affect_current": {
-            "type": "boolean"
-          },
-          "affect_required": {
-            "type": "boolean"
-          },
           "depends_on": {
             "type": "array",
             "items": {

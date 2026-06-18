@@ -6,7 +6,7 @@ use sqlx::Row;
 use tower::ServiceExt;
 use ubu_core::id_registry::ObjectType;
 use ubu_core::{UbuId, UbuTimestamp};
-use ubu_orchestrator::api::planning::PlanningModeBody;
+use ubu_orchestrator::api::planning::{AffectLegitimizationModeBody, PlanningModeBody};
 use ubu_orchestrator::api::recalculation::RECALCULATION_SCHEMA_VERSION;
 use ubu_orchestrator::config::ServerConfig;
 use ubu_orchestrator::services::planning_service;
@@ -44,6 +44,120 @@ async fn store_backed_request_uses_calendar_window_and_topological_order() {
 }
 
 #[tokio::test]
+async fn store_backed_request_uses_affect_preferences_and_fresh_snapshot() {
+    let state = test_state().await;
+    admit_task(&state, "Plan with affect", json!({"duration_minutes": 15})).await;
+    admit_preference(&state, "acceptable_energy_floor", json!("high")).await;
+    admit_preference(&state, "tolerable_stress_ceiling", json!(6.0)).await;
+    admit_preference(&state, "tolerable_intensity_ceiling", json!("moderate")).await;
+    store_calendar_window(&state, "2026-06-10T15:00:00Z", "2026-06-10T16:00:00Z").await;
+    admit_snapshot(
+        &state,
+        "2026-06-10T15:00:00Z",
+        json!({
+            "energy": 8.0,
+            "stress": 4.0,
+            "mood_intensity": 5.0
+        }),
+    )
+    .await;
+
+    let request = planning_service::build_request_from_store(&state)
+        .await
+        .expect("request");
+    let profile = request.affect_profile.expect("affect profile");
+    let observation = request.affect_observation.expect("affect observation");
+
+    assert_eq!(profile.mode, AffectLegitimizationModeBody::Enforce);
+    assert_eq!(profile.dimensions["energy"].location, 7.0);
+    assert_eq!(profile.dimensions["stress"].location, 6.0);
+    assert_eq!(profile.dimensions["mood_intensity"].location, 5.0);
+    assert_eq!(
+        observation.dimensions["energy"].source_kind,
+        "live_observation"
+    );
+    assert!(request.affect_warning.is_none());
+    let task = serde_json::to_value(&request.tasks[0]).expect("task json");
+    assert!(task.get("affect_required").is_none());
+    assert!(task.get("affect_current").is_none());
+}
+
+#[tokio::test]
+async fn missing_affect_snapshot_uses_bootstrap_default_observation_in_warn_only() {
+    let state = test_state().await;
+    admit_task(
+        &state,
+        "Plan without snapshot",
+        json!({"duration_minutes": 15}),
+    )
+    .await;
+
+    let request = planning_service::build_request_from_store(&state)
+        .await
+        .expect("request");
+    let profile = request.affect_profile.expect("affect profile");
+    let observation = request.affect_observation.expect("affect observation");
+
+    assert_eq!(profile.mode, AffectLegitimizationModeBody::WarnOnly);
+    assert_eq!(profile.dimensions["energy"].location, 4.0);
+    assert_eq!(profile.dimensions["stress"].location, 7.0);
+    assert_eq!(profile.dimensions["mood_intensity"].location, 8.0);
+    assert_eq!(
+        observation.dimensions["energy"].source_kind,
+        "bootstrap_default_profile"
+    );
+    assert!(request
+        .affect_warning
+        .as_deref()
+        .expect("affect warning")
+        .contains("missing affect observation"));
+}
+
+#[tokio::test]
+async fn stale_affect_snapshot_is_not_presented_as_current() {
+    let state = test_state().await;
+    admit_task(
+        &state,
+        "Plan with stale affect",
+        json!({"duration_minutes": 15}),
+    )
+    .await;
+    admit_preference(&state, "affect_freshness_seconds", json!(60)).await;
+    store_calendar_window(&state, "2026-06-10T15:00:00Z", "2026-06-10T16:00:00Z").await;
+    admit_snapshot(
+        &state,
+        "2026-06-10T14:00:00Z",
+        json!({
+            "energy": 1.0,
+            "stress": 10.0,
+            "mood_intensity": 10.0
+        }),
+    )
+    .await;
+
+    let request = planning_service::build_request_from_store(&state)
+        .await
+        .expect("request");
+    let profile = request.affect_profile.expect("affect profile");
+    let observation = request.affect_observation.expect("affect observation");
+
+    assert_eq!(profile.mode, AffectLegitimizationModeBody::WarnOnly);
+    assert_eq!(
+        observation.dimensions["energy"].source_kind,
+        "bootstrap_default_profile"
+    );
+    assert_eq!(
+        observation.dimensions["energy"].observed_at,
+        timestamp_minutes("2026-06-10T15:00:00Z")
+    );
+    assert!(request
+        .affect_warning
+        .as_deref()
+        .expect("affect warning")
+        .contains("stale affect observation"));
+}
+
+#[tokio::test]
 async fn generate_persists_canonical_timed_plan_and_current_calendar_serves_steps() {
     let state = test_state().await;
     admit_task(&state, "Plan me", json!({"duration_minutes": 10})).await;
@@ -71,6 +185,15 @@ async fn generate_persists_canonical_timed_plan_and_current_calendar_serves_step
     assert!(payload["steps"][0].get("start").is_some());
     assert!(payload["steps"][0].get("end").is_some());
     assert!(payload.get("tasks").is_none());
+    assert_eq!(payload["legitimization"]["mode"], "warn_only");
+    assert!(payload["legitimization"]["dimensions"]["energy"]
+        .get("satisfaction")
+        .is_some());
+    assert!(payload["legitimization"]
+        .get("stale_affect_warning")
+        .and_then(Value::as_str)
+        .expect("affect warning")
+        .contains("missing affect observation"));
 
     let calendar_response = app
         .oneshot(
@@ -84,6 +207,10 @@ async fn generate_persists_canonical_timed_plan_and_current_calendar_serves_step
     assert_eq!(calendar_response.status(), StatusCode::OK);
     let body = json_body(calendar_response).await;
     assert!(body["steps"].as_array().expect("steps").len() == 1);
+    assert_eq!(body["legitimization"]["mode"], "warn_only");
+    assert!(body["legitimization"]["dimensions"]["energy"]
+        .get("satisfaction")
+        .is_some());
 }
 
 #[tokio::test]
@@ -222,6 +349,95 @@ async fn admit_task(state: &AppState, title: &str, extra: Value) -> String {
     .await
     .expect("task admitted");
     id
+}
+
+async fn admit_preference(state: &AppState, name: &str, value: Value) -> String {
+    let id = UbuId::new(ObjectType::Preference).to_string();
+    let now = UbuTimestamp::now_utc().to_string();
+    queries::admit_object(
+        state.inner().store.pool(),
+        NewObjectRecord {
+            id: id.clone(),
+            object_type: ObjectType::Preference.as_str().to_owned(),
+            version: 1,
+            status: "active".to_owned(),
+            compartment_label: "test".to_owned(),
+            payload: json!({
+                "id": id,
+                "name": name,
+                "value": value,
+                "authority_source": "user",
+                "provenance": {
+                    "created_at": now,
+                    "authority_source": "user",
+                    "source": {
+                        "source_kind": "test",
+                        "source_id": name
+                    }
+                }
+            }),
+            created_at: now.clone(),
+            updated_at: now,
+        },
+    )
+    .await
+    .expect("preference admitted");
+    id
+}
+
+async fn admit_snapshot(state: &AppState, observed_at: &str, values: Value) -> String {
+    let id = UbuId::new(ObjectType::Snapshot).to_string();
+    queries::admit_object(
+        state.inner().store.pool(),
+        NewObjectRecord {
+            id: id.clone(),
+            object_type: ObjectType::Snapshot.as_str().to_owned(),
+            version: 1,
+            status: "active".to_owned(),
+            compartment_label: "test".to_owned(),
+            payload: json!({
+                "id": id,
+                "captured_at": observed_at,
+                "objects": [],
+                "affect": {
+                    "source_kind": "live_observation",
+                    "observed_at": observed_at,
+                    "dimensions": {
+                        "energy": snapshot_dimension(
+                            "energy",
+                            "higher_is_better",
+                            values["energy"].as_f64().expect("energy")
+                        ),
+                        "stress": snapshot_dimension(
+                            "stress",
+                            "lower_is_better",
+                            values["stress"].as_f64().expect("stress")
+                        ),
+                        "mood_intensity": snapshot_dimension(
+                            "mood_intensity",
+                            "lower_is_better",
+                            values["mood_intensity"].as_f64().expect("mood intensity")
+                        )
+                    }
+                }
+            }),
+            created_at: observed_at.to_owned(),
+            updated_at: observed_at.to_owned(),
+        },
+    )
+    .await
+    .expect("snapshot admitted");
+    id
+}
+
+fn snapshot_dimension(dimension: &str, direction: &str, value: f64) -> Value {
+    json!({
+        "dimension": dimension,
+        "direction": direction,
+        "value": value,
+        "scale": {"min": 0, "max": 10},
+        "threshold": {"warning_delta": 1.0, "critical_delta": 2.0}
+    })
 }
 
 async fn store_calendar_window(state: &AppState, start: &str, end: &str) {

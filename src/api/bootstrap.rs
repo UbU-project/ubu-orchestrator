@@ -55,6 +55,12 @@ pub struct BootstrapAnswers {
     pub planning_horizon_days: u8,
     #[serde(default = "default_attention_preference")]
     pub attention_preference: AttentionPreference,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acceptable_energy_floor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tolerable_stress_ceiling: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tolerable_intensity_ceiling: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, ToSchema)]

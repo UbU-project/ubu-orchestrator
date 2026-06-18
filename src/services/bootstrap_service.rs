@@ -185,7 +185,7 @@ async fn admit_preferences(
     pool: &sqlx::SqlitePool,
     request: &BootstrapSeedRequest,
 ) -> Result<Vec<String>> {
-    let preferences = [
+    let mut preferences = vec![
         (
             "work_style",
             json!(work_style_value(request.answers.work_style)),
@@ -201,6 +201,15 @@ async fn admit_preferences(
             )),
         ),
     ];
+    if let Some(value) = request.answers.acceptable_energy_floor.as_deref() {
+        preferences.push(("acceptable_energy_floor", json!(value.trim())));
+    }
+    if let Some(value) = request.answers.tolerable_stress_ceiling.as_deref() {
+        preferences.push(("tolerable_stress_ceiling", json!(value.trim())));
+    }
+    if let Some(value) = request.answers.tolerable_intensity_ceiling.as_deref() {
+        preferences.push(("tolerable_intensity_ceiling", json!(value.trim())));
+    }
 
     let mut admitted = Vec::with_capacity(preferences.len());
     for (name, value) in preferences {

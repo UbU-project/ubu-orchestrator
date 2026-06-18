@@ -14,14 +14,19 @@ use ubu_store::queries;
 use crate::adapters::planner_adapter::{CpuPlannerAdapter, PlannerAdapter};
 use crate::api::calendar::CalendarResponse;
 use crate::api::planning::{
-    DiagnosticBody, GeneratePlanningRequest, PlanBody, PlanningModeBody, PlanningRequestBody,
-    PlanningResponseBody, RepairContextBody, RepairScopeBody, ScheduledTaskBody, StaticAnchorBody,
-    TaskGraphBody, TaskGraphEdgeBody, TaskSpecBody, TimeWindowBody,
+    legitimization_report_body, AffectDirectionBody, AffectLegitimizationModeBody,
+    AffectObservationBody, AffectObservationValueBody, AffectProfileBody, AffectToleranceBody,
+    DiagnosticBody, GeneratePlanningRequest, LegitimizationReportBody, PlanBody, PlanningModeBody,
+    PlanningRequestBody, PlanningResponseBody, RepairContextBody, RepairScopeBody,
+    ScheduledTaskBody, StaticAnchorBody, TaskGraphBody, TaskGraphEdgeBody, TaskSpecBody,
+    TimeWindowBody,
 };
 use crate::errors::{AppError, Result};
 use crate::state::AppState;
 
 const DEFAULT_TASK_DURATION_MINUTES: u64 = 30;
+const DEFAULT_AFFECT_SCALE: f64 = 1.5;
+const DEFAULT_AFFECT_THRESHOLD: f64 = 0.5;
 
 pub async fn generate(
     state: AppState,
@@ -40,6 +45,9 @@ pub async fn generate(
     let adapter = CpuPlannerAdapter;
     let response = adapter.plan(kernel_request);
     let diagnostics = diagnostics_from_kernel(response.diagnostics);
+    let legitimization = response
+        .legitimization
+        .map(|report| legitimization_report_body(report, planning_request.affect_warning.clone()));
     let plan = match response.plan {
         Some(plan) => {
             let stored = persist_kernel_plan(
@@ -47,6 +55,7 @@ pub async fn generate(
                 &planning_request.request_id,
                 &plan,
                 &planning_request,
+                legitimization.clone(),
                 None,
                 Vec::new(),
             )
@@ -60,6 +69,7 @@ pub async fn generate(
         schema_version: response.schema_version,
         request_id: response.request_id,
         plan,
+        legitimization,
         diagnostics,
     })
 }
@@ -81,6 +91,7 @@ pub async fn current_calendar(state: AppState) -> Result<CalendarResponse> {
         return Ok(CalendarResponse {
             plan_id: None,
             steps: Vec::new(),
+            legitimization: None,
         });
     };
 
@@ -92,6 +103,7 @@ pub async fn current_calendar(state: AppState) -> Result<CalendarResponse> {
     Ok(CalendarResponse {
         plan_id: Some(plan.id),
         steps: plan.steps,
+        legitimization: plan.legitimization,
     })
 }
 
@@ -153,6 +165,7 @@ pub async fn persist_repair_plan(
         &request.request_id,
         repaired_plan,
         request,
+        None,
         Some(prior_plan.id.clone()),
         frozen_steps,
     )
@@ -203,7 +216,7 @@ pub fn kernel_plan_body(plan: KernelPlan) -> PlanBody {
         id: plan.plan_id,
         status: format!("{:?}", plan.status).to_ascii_lowercase(),
         steps: plan
-            .tasks
+            .steps
             .into_iter()
             .enumerate()
             .map(|(index, task)| ScheduledTaskBody {
@@ -223,6 +236,7 @@ pub fn kernel_plan_body(plan: KernelPlan) -> PlanBody {
             .collect(),
         created_at,
         supersedes_plan_id: None,
+        legitimization: None,
     }
 }
 
@@ -278,8 +292,6 @@ async fn build_request_from_store_with_context(
             id: task.id.clone(),
             duration: duration_minutes(&task.payload),
             depends_on: dependencies,
-            affect_required: false,
-            affect_current: false,
             window: None,
             static_anchor: None,
         });
@@ -316,6 +328,8 @@ async fn build_request_from_store_with_context(
     let task_graph = task_graph(&task_bodies)?;
     let request_id = UbuId::new(ObjectType::Plan).to_string();
     let rng_seed = stable_seed(&request_id, &time_window, &task_graph.topological_order);
+    let affect_profile = build_affect_profile(pool).await?;
+    let affect_resolution = resolve_affect_observation(pool, &affect_profile, &time_window).await?;
 
     Ok(PlanningRequestBody {
         schema_version: Some(PLANNING_SCHEMA_VERSION.to_owned()),
@@ -325,6 +339,9 @@ async fn build_request_from_store_with_context(
         time_window: Some(time_window),
         task_graph: Some(task_graph),
         repair_context,
+        affect_profile: Some(affect_resolution.profile),
+        affect_observation: Some(affect_resolution.observation),
+        affect_warning: affect_resolution.warning,
         tasks: task_bodies,
     })
 }
@@ -334,6 +351,7 @@ async fn persist_kernel_plan(
     request_id: &str,
     kernel_plan: &KernelPlan,
     request: &PlanningRequestBody,
+    legitimization: Option<LegitimizationReportBody>,
     supersedes_plan_id: Option<String>,
     frozen_steps: Vec<ScheduledTaskBody>,
 ) -> Result<PlanBody> {
@@ -345,7 +363,7 @@ async fn persist_kernel_plan(
         steps.iter().map(|step| step.task_id.clone()).collect();
     steps.extend(
         kernel_plan
-            .tasks
+            .steps
             .iter()
             .filter(|task| !existing_task_ids.contains(&task.task_id))
             .map(|task| scheduled_task_body(task, &titles, request)),
@@ -366,6 +384,7 @@ async fn persist_kernel_plan(
         steps,
         created_at: now.clone(),
         supersedes_plan_id,
+        legitimization,
     };
     validate_canonical_plan(&plan)?;
 
@@ -589,6 +608,381 @@ fn duration_minutes(payload: &Value) -> u64 {
         .unwrap_or(DEFAULT_TASK_DURATION_MINUTES)
 }
 
+struct AffectResolution {
+    profile: AffectProfileBody,
+    observation: AffectObservationBody,
+    warning: Option<String>,
+}
+
+async fn build_affect_profile(pool: &sqlx::SqlitePool) -> Result<AffectProfileBody> {
+    let preferences = active_preferences(pool).await?;
+    let energy_defaulted = !has_any_preference(
+        &preferences,
+        &[
+            "acceptable_energy_floor",
+            "affect_energy_floor",
+            "energy_floor",
+        ],
+    );
+    let stress_defaulted = !has_any_preference(
+        &preferences,
+        &[
+            "tolerable_stress_ceiling",
+            "affect_stress_ceiling",
+            "stress_ceiling",
+        ],
+    );
+    let intensity_defaulted = !has_any_preference(
+        &preferences,
+        &[
+            "tolerable_intensity_ceiling",
+            "tolerable_mood_intensity_ceiling",
+            "affect_mood_intensity_ceiling",
+            "mood_intensity_ceiling",
+        ],
+    );
+
+    let mut dimensions = BTreeMap::new();
+    dimensions.insert(
+        "energy".to_owned(),
+        affect_tolerance(
+            AffectDirectionBody::HigherIsBetter,
+            preference_location(
+                &preferences,
+                &[
+                    "acceptable_energy_floor",
+                    "affect_energy_floor",
+                    "energy_floor",
+                ],
+                4.0,
+            ),
+            preference_freshness_seconds(&preferences, "energy"),
+        ),
+    );
+    dimensions.insert(
+        "stress".to_owned(),
+        affect_tolerance(
+            AffectDirectionBody::LowerIsBetter,
+            preference_location(
+                &preferences,
+                &[
+                    "tolerable_stress_ceiling",
+                    "affect_stress_ceiling",
+                    "stress_ceiling",
+                ],
+                7.0,
+            ),
+            preference_freshness_seconds(&preferences, "stress"),
+        ),
+    );
+    dimensions.insert(
+        "mood_intensity".to_owned(),
+        affect_tolerance(
+            AffectDirectionBody::LowerIsBetter,
+            preference_location(
+                &preferences,
+                &[
+                    "tolerable_intensity_ceiling",
+                    "tolerable_mood_intensity_ceiling",
+                    "affect_mood_intensity_ceiling",
+                    "mood_intensity_ceiling",
+                ],
+                8.0,
+            ),
+            preference_freshness_seconds(&preferences, "mood_intensity"),
+        ),
+    );
+
+    let mut profile = AffectProfileBody {
+        mode: AffectLegitimizationModeBody::Enforce,
+        dimensions,
+    };
+    if energy_defaulted && stress_defaulted && intensity_defaulted {
+        profile.mode = AffectLegitimizationModeBody::Enforce;
+    }
+    Ok(profile)
+}
+
+async fn active_preferences(pool: &sqlx::SqlitePool) -> Result<HashMap<String, Value>> {
+    let rows = sqlx::query(
+        "SELECT payload_json FROM objects
+        WHERE object_type = ? AND status = ?
+        ORDER BY updated_at DESC",
+    )
+    .bind(ObjectType::Preference.as_str())
+    .bind("active")
+    .fetch_all(pool)
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    let mut preferences = HashMap::new();
+    for row in rows {
+        let payload_json: String = row
+            .try_get("payload_json")
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        let payload: Value = serde_json::from_str(&payload_json)
+            .map_err(|e| AppError::Internal(format!("failed to deserialize preference: {e}")))?;
+        let Some(name) = payload.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        preferences
+            .entry(name.to_owned())
+            .or_insert_with(|| payload.get("value").cloned().unwrap_or(Value::Null));
+    }
+    Ok(preferences)
+}
+
+fn affect_tolerance(
+    direction: AffectDirectionBody,
+    location: f64,
+    freshness_seconds: Option<u64>,
+) -> AffectToleranceBody {
+    AffectToleranceBody {
+        direction,
+        location,
+        scale: DEFAULT_AFFECT_SCALE,
+        threshold: DEFAULT_AFFECT_THRESHOLD,
+        freshness_seconds,
+    }
+}
+
+fn has_any_preference(preferences: &HashMap<String, Value>, names: &[&str]) -> bool {
+    names.iter().any(|name| preferences.contains_key(*name))
+}
+
+fn preference_location(
+    preferences: &HashMap<String, Value>,
+    names: &[&str],
+    default_location: f64,
+) -> f64 {
+    names
+        .iter()
+        .find_map(|name| preferences.get(*name).and_then(location_value))
+        .unwrap_or(default_location)
+}
+
+fn location_value(value: &Value) -> Option<f64> {
+    if let Some(number) = value.as_f64() {
+        return finite_0_to_10(number);
+    }
+    let text = value.as_str()?.trim().to_ascii_lowercase();
+    let mapped = match text.as_str() {
+        "very_low" | "very low" => 2.0,
+        "low" => 3.0,
+        "medium" | "moderate" | "balanced" => 5.0,
+        "high" => 7.0,
+        "very_high" | "very high" => 8.0,
+        _ => text.parse::<f64>().ok()?,
+    };
+    finite_0_to_10(mapped)
+}
+
+fn finite_0_to_10(value: f64) -> Option<f64> {
+    (value.is_finite() && (0.0..=10.0).contains(&value)).then_some(value)
+}
+
+fn preference_freshness_seconds(
+    preferences: &HashMap<String, Value>,
+    dimension: &str,
+) -> Option<u64> {
+    let per_dimension = format!("{dimension}_freshness_seconds");
+    preferences
+        .get(&per_dimension)
+        .or_else(|| preferences.get("affect_freshness_seconds"))
+        .and_then(u64_value)
+}
+
+fn u64_value(value: &Value) -> Option<u64> {
+    value
+        .as_u64()
+        .or_else(|| value.as_str()?.trim().parse::<u64>().ok())
+}
+
+async fn resolve_affect_observation(
+    pool: &sqlx::SqlitePool,
+    profile: &AffectProfileBody,
+    time_window: &TimeWindowBody,
+) -> Result<AffectResolution> {
+    let profile_defaulted = affect_profile_uses_bootstrap_defaults(profile);
+    let mut warnings = Vec::new();
+    if profile_defaulted {
+        warnings.push(
+            "affect profile uses bootstrap default review priors; review calibration recommended"
+                .to_owned(),
+        );
+    }
+
+    let snapshot = latest_snapshot_affect(pool).await?;
+    let fallback_reason = match snapshot {
+        None => Some("missing affect observation"),
+        Some(ref observation) if missing_profile_dimensions(profile, observation) => {
+            Some("incomplete affect observation")
+        }
+        Some(ref observation) if stale_profile_dimensions(profile, observation, time_window) => {
+            Some("stale affect observation")
+        }
+        Some(_) => None,
+    };
+
+    let mut resolved_profile = profile.clone();
+    let observation = if let Some(reason) = fallback_reason {
+        resolved_profile.mode = AffectLegitimizationModeBody::WarnOnly;
+        warnings.push(format!(
+            "{reason}; using bootstrap default profile observation in warn_only mode"
+        ));
+        bootstrap_affect_observation(profile, time_window.start)
+    } else {
+        snapshot.expect("snapshot exists when no fallback reason is present")
+    };
+
+    Ok(AffectResolution {
+        profile: resolved_profile,
+        observation,
+        warning: (!warnings.is_empty()).then(|| warnings.join("; ")),
+    })
+}
+
+fn affect_profile_uses_bootstrap_defaults(profile: &AffectProfileBody) -> bool {
+    matches!(
+        profile.dimensions.get("energy"),
+        Some(tolerance) if tolerance.location == 4.0
+    ) && matches!(
+        profile.dimensions.get("stress"),
+        Some(tolerance) if tolerance.location == 7.0
+    ) && matches!(
+        profile.dimensions.get("mood_intensity"),
+        Some(tolerance) if tolerance.location == 8.0
+    )
+}
+
+async fn latest_snapshot_affect(pool: &sqlx::SqlitePool) -> Result<Option<AffectObservationBody>> {
+    let row = sqlx::query(
+        "SELECT payload_json FROM objects
+        WHERE object_type = ? AND status = ?
+        ORDER BY updated_at DESC
+        LIMIT 1",
+    )
+    .bind(ObjectType::Snapshot.as_str())
+    .bind("active")
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let payload_json: String = row
+        .try_get("payload_json")
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let payload: Value = serde_json::from_str(&payload_json)
+        .map_err(|e| AppError::Internal(format!("failed to deserialize snapshot: {e}")))?;
+    Ok(snapshot_affect_observation(&payload)?)
+}
+
+fn snapshot_affect_observation(payload: &Value) -> Result<Option<AffectObservationBody>> {
+    let Some(affect) = payload.get("affect") else {
+        return Ok(None);
+    };
+    let source_kind = affect
+        .get("source_kind")
+        .and_then(Value::as_str)
+        .unwrap_or("live_observation")
+        .to_owned();
+    let observed_at = affect
+        .get("observed_at")
+        .and_then(observed_at_minutes)
+        .or_else(|| payload.get("captured_at").and_then(observed_at_minutes));
+    let Some(observed_at) = observed_at else {
+        return Ok(None);
+    };
+    let Some(dimensions_value) = affect.get("dimensions").and_then(Value::as_object) else {
+        return Ok(None);
+    };
+
+    let mut dimensions = BTreeMap::new();
+    for dimension in ["energy", "stress", "mood_intensity"] {
+        let Some(value) = dimensions_value
+            .get(dimension)
+            .and_then(|dimension| dimension.get("value"))
+            .and_then(Value::as_f64)
+        else {
+            continue;
+        };
+        dimensions.insert(
+            dimension.to_owned(),
+            AffectObservationValueBody {
+                value,
+                observed_at,
+                source_kind: source_kind.clone(),
+            },
+        );
+    }
+    if dimensions.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(AffectObservationBody { dimensions }))
+}
+
+fn observed_at_minutes(value: &Value) -> Option<u64> {
+    value.as_u64().or_else(|| {
+        value
+            .as_str()
+            .and_then(|timestamp| timestamp_minutes(timestamp).ok())
+    })
+}
+
+fn missing_profile_dimensions(
+    profile: &AffectProfileBody,
+    observation: &AffectObservationBody,
+) -> bool {
+    profile
+        .dimensions
+        .keys()
+        .any(|dimension| !observation.dimensions.contains_key(dimension))
+}
+
+fn stale_profile_dimensions(
+    profile: &AffectProfileBody,
+    observation: &AffectObservationBody,
+    time_window: &TimeWindowBody,
+) -> bool {
+    profile.dimensions.iter().any(|(dimension, tolerance)| {
+        let Some(freshness_seconds) = tolerance.freshness_seconds else {
+            return false;
+        };
+        let Some(observed) = observation.dimensions.get(dimension) else {
+            return false;
+        };
+        time_window
+            .start
+            .saturating_sub(observed.observed_at)
+            .saturating_mul(60)
+            > freshness_seconds
+    })
+}
+
+fn bootstrap_affect_observation(
+    profile: &AffectProfileBody,
+    observed_at: u64,
+) -> AffectObservationBody {
+    AffectObservationBody {
+        dimensions: profile
+            .dimensions
+            .iter()
+            .map(|(dimension, tolerance)| {
+                (
+                    dimension.clone(),
+                    AffectObservationValueBody {
+                        value: tolerance.location,
+                        observed_at,
+                        source_kind: "bootstrap_default_profile".to_owned(),
+                    },
+                )
+            })
+            .collect(),
+    }
+}
+
 async fn task_titles(pool: &sqlx::SqlitePool) -> Result<HashMap<String, String>> {
     let rows = sqlx::query("SELECT id, payload_json FROM objects WHERE object_type = ?")
         .bind(ObjectType::Task.as_str())
@@ -657,14 +1051,25 @@ impl From<StaticAnchorBody> for ubu_planning_core::StaticAnchor {
 }
 
 pub fn repair_kernel_request(request: &PlanningRequestBody) -> RepairRequest {
+    let planning_request = PlanningRequest::from(request.clone());
     RepairRequest {
         schema_version: request.schema_version.clone(),
         request_id: request.request_id.clone(),
         candidate: KernelPlan {
             plan_id: "repair-candidate-empty".to_owned(),
             status: PlanStatus::Candidate,
-            tasks: Vec::new(),
+            supersedes_plan_id: request
+                .repair_context
+                .as_ref()
+                .map(|context| context.prior_plan_id.clone()),
+            steps: Vec::new(),
         },
-        tasks: PlanningRequest::from(request.clone()).tasks,
+        rng_seed: planning_request.rng_seed,
+        time_window: planning_request.time_window,
+        tasks: planning_request.task_graph.tasks,
+        topological_order: planning_request.task_graph.topological_order,
+        repair_context: planning_request.repair_context,
+        affect_profile: planning_request.affect_profile,
+        affect_observation: planning_request.affect_observation,
     }
 }
