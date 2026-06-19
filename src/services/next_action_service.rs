@@ -9,8 +9,10 @@ use crate::api::next_action::{
     NextActionRecommendation, NextActionRequest, NextActionResponse, NextActionSelection,
     NextActionSourceRef, ReadinessState, NEXT_ACTION_SCHEMA_VERSION,
 };
+use crate::api::planning::{AffectLegitimizationModeBody, LegitimizationReportBody, PlanBody};
 use crate::api::user_action::TaskLifecycleStatus;
 use crate::errors::{AppError, Result};
+use crate::services::planning_service;
 use crate::state::AppState;
 
 pub async fn get_next_action(
@@ -20,6 +22,21 @@ pub async fn get_next_action(
     validate_schema_version(request.schema_version.as_deref())?;
 
     let pool = state.inner().store.pool();
+    let current_calendar = planning_service::latest_admitted_plan(&state)
+        .await?
+        .filter(|plan| plan.legitimization.is_some());
+
+    if let Some(plan) = current_calendar.as_ref() {
+        if matches!(
+            plan.legitimization.as_ref(),
+            Some(report)
+                if report.mode == AffectLegitimizationModeBody::Enforce
+                    && report.result == "failed"
+        ) {
+            return Ok(failed_legitimization_response(plan));
+        }
+    }
+
     let tasks = load_tasks(pool).await?;
     if tasks.is_empty() {
         return Ok(diagnostic_response(NextActionDiagnostic {
@@ -57,6 +74,47 @@ pub async fn get_next_action(
         })
         .collect::<Vec<_>>();
 
+    if let Some(plan) = current_calendar.as_ref() {
+        let Some(first_placement) = plan.steps.iter().min_by(|left, right| {
+            left.start
+                .cmp(&right.start)
+                .then_with(|| left.end.cmp(&right.end))
+                .then_with(|| left.task_id.cmp(&right.task_id))
+        }) else {
+            return Ok(diagnostic_response(NextActionDiagnostic {
+                code: NextActionDiagnosticCode::NoReadyTask,
+                message: "the current legitimized Calendar has no Task placements".to_owned(),
+                blocked_task_count: 0,
+                sampled_task_ids: Vec::new(),
+            }));
+        };
+
+        let Some(task) = active_tasks
+            .iter()
+            .find(|task| task.record.id == first_placement.task_id)
+        else {
+            return Ok(diagnostic_response(NextActionDiagnostic {
+                code: NextActionDiagnosticCode::NoReadyTask,
+                message: "the first placement in the current legitimized Calendar is not an active admitted Task"
+                    .to_owned(),
+                blocked_task_count: 1,
+                sampled_task_ids: vec![first_placement.task_id.clone()],
+            }));
+        };
+
+        return recommendation_response(
+            pool,
+            task,
+            NextActionSelection {
+                rule: "legitimized_calendar_first_placement".to_owned(),
+                priority: explicit_priority(&task.payload),
+                tiebreak: "start ascending, then end ascending, then task_id ascending".to_owned(),
+            },
+            plan.legitimization.as_ref().and_then(calendar_warning),
+        )
+        .await;
+    }
+
     candidates.sort_by(|(left, _), (right, _)| {
         explicit_priority(&left.payload)
             .unwrap_or(i64::MAX)
@@ -69,28 +127,19 @@ pub async fn get_next_action(
         .iter()
         .find(|(_, readiness)| readiness.state == ReadinessState::Ready)
     {
-        let source_refs = source_refs(&task.payload);
-        let parent_objective = parent_objective(pool, &task.payload).await?;
-        let explanation = explanation(parent_objective.clone(), source_refs.clone());
-
-        return Ok(NextActionResponse {
-            schema_version: NEXT_ACTION_SCHEMA_VERSION.to_owned(),
-            recommendation: Some(NextActionRecommendation {
-                task_id: task.record.id.clone(),
-                title: task_title(&task.payload, &task.record.id),
-                status: TaskLifecycleStatus::Active,
-                readiness: ReadinessState::Ready,
-                parent_objective,
-                source_refs,
-                selection: NextActionSelection {
-                    rule: "readiness_ordered_skeleton".to_owned(),
-                    priority: explicit_priority(&task.payload),
-                    tiebreak: "explicit priority ascending, then created_at ascending, then task_id ascending".to_owned(),
-                },
-                explanation,
-            }),
-            diagnostics: Vec::new(),
-        });
+        return recommendation_response(
+            pool,
+            task,
+            NextActionSelection {
+                rule: "readiness_ordered_skeleton".to_owned(),
+                priority: explicit_priority(&task.payload),
+                tiebreak:
+                    "explicit priority ascending, then created_at ascending, then task_id ascending"
+                        .to_owned(),
+            },
+            None,
+        )
+        .await;
     }
 
     let blocked_task_count = candidates.len();
@@ -128,6 +177,76 @@ pub async fn get_next_action(
         blocked_task_count,
         sampled_task_ids,
     }))
+}
+
+fn failed_legitimization_response(plan: &PlanBody) -> NextActionResponse {
+    let sampled_task_ids = plan
+        .steps
+        .iter()
+        .map(|step| step.task_id.clone())
+        .take(3)
+        .collect();
+    diagnostic_response(NextActionDiagnostic {
+        code: NextActionDiagnosticCode::NoReadyTask,
+        message: "the current Calendar failed affect legitimization under enforce mode; no Task can be recommended"
+            .to_owned(),
+        blocked_task_count: plan.steps.len(),
+        sampled_task_ids,
+    })
+}
+
+async fn recommendation_response(
+    pool: &sqlx::SqlitePool,
+    task: &TaskRow,
+    selection: NextActionSelection,
+    warning: Option<String>,
+) -> Result<NextActionResponse> {
+    let source_refs = source_refs(&task.payload);
+    let parent_objective = parent_objective(pool, &task.payload).await?;
+    let from_calendar = selection.rule == "legitimized_calendar_first_placement";
+    let explanation = explanation(
+        parent_objective.clone(),
+        source_refs.clone(),
+        from_calendar,
+        warning,
+    );
+
+    Ok(NextActionResponse {
+        schema_version: NEXT_ACTION_SCHEMA_VERSION.to_owned(),
+        recommendation: Some(NextActionRecommendation {
+            task_id: task.record.id.clone(),
+            title: task_title(&task.payload, &task.record.id),
+            status: TaskLifecycleStatus::Active,
+            readiness: ReadinessState::Ready,
+            parent_objective,
+            source_refs,
+            selection,
+            explanation,
+        }),
+        diagnostics: Vec::new(),
+    })
+}
+
+fn calendar_warning(report: &LegitimizationReportBody) -> Option<String> {
+    if report.mode != AffectLegitimizationModeBody::WarnOnly {
+        return None;
+    }
+
+    let mut details = Vec::new();
+    if report.result != "passed" {
+        details.push(format!("legitimization result `{}`", report.result));
+    }
+    if !report.violated_dimensions.is_empty() {
+        details.push(format!(
+            "violated affect dimensions: {}",
+            report.violated_dimensions.join(", ")
+        ));
+    }
+    if let Some(warning) = report.stale_affect_warning.as_ref() {
+        details.push(warning.clone());
+    }
+
+    (!details.is_empty()).then(|| format!("Calendar warning (warn_only): {}.", details.join("; ")))
 }
 
 fn validate_schema_version(schema_version: Option<&str>) -> Result<()> {
@@ -338,6 +457,8 @@ fn source_ref(value: &Value) -> Option<NextActionSourceRef> {
 fn explanation(
     parent_objective: Option<NextActionObjectiveRef>,
     source_refs: Vec<NextActionSourceRef>,
+    from_calendar: bool,
+    warning: Option<String>,
 ) -> NextActionExplanation {
     let objective_text = parent_objective
         .as_ref()
@@ -349,11 +470,20 @@ fn explanation(
         format!("{} provenance source reference(s)", source_refs.len())
     };
 
+    let warning_text = warning
+        .map(|warning| format!(" {warning}"))
+        .unwrap_or_default();
+    let selection_text = if from_calendar {
+        "selected the first Task placement in the current legitimized Calendar"
+    } else {
+        "selected a ready Task"
+    };
+
     NextActionExplanation {
         template_id: "readiness_based_recommendation.v1".to_owned(),
         label: "readiness-based recommendation".to_owned(),
         message: format!(
-            "Readiness-based recommendation: selected a ready Task linked to {objective_text} with {provenance_text}."
+            "Readiness-based recommendation: {selection_text} linked to {objective_text} with {provenance_text}.{warning_text}"
         ),
         readiness_state: ReadinessState::Ready,
         parent_objective,
