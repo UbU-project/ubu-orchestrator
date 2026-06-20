@@ -5,8 +5,8 @@ use sqlx::Row;
 use ubu_core::id_registry::ObjectType;
 use ubu_core::{UbuId, UbuTimestamp};
 use ubu_planning_core::{
-    Plan as KernelPlan, PlanStatus, PlanningRequest, RepairRequest, ScheduledTask, TimeWindow,
-    PLANNING_SCHEMA_VERSION,
+    Plan as KernelPlan, PlanCandidate, PlanStatus, PlanningRequest, RepairRequest, ScheduledTask,
+    TimeWindow, PLANNING_SCHEMA_VERSION,
 };
 use ubu_store::models::plan_record::NewPlanRecord;
 use ubu_store::queries;
@@ -14,12 +14,13 @@ use ubu_store::queries;
 use crate::adapters::planner_adapter::{CpuPlannerAdapter, PlannerAdapter};
 use crate::api::calendar::CalendarResponse;
 use crate::api::planning::{
-    legitimization_report_body, AffectDirectionBody, AffectLegitimizationModeBody,
+    candidate_role_body, feasibility_summary_body, legitimization_report_body, score_summary_body,
+    semi_legitimization_summary_body, AffectDirectionBody, AffectLegitimizationModeBody,
     AffectObservationBody, AffectObservationValueBody, AffectProfileBody, AffectToleranceBody,
-    DiagnosticBody, GeneratePlanningRequest, LegitimizationReportBody, PlanBody, PlanningModeBody,
-    PlanningRequestBody, PlanningResponseBody, RepairContextBody, RepairScopeBody,
-    ScheduledTaskBody, StaticAnchorBody, TaskGraphBody, TaskGraphEdgeBody, TaskSpecBody,
-    TimeWindowBody,
+    DiagnosticBody, GeneratePlanningRequest, LegitimizationReportBody, PlanBody, PlanCandidateBody,
+    PlanningModeBody, PlanningRequestBody, PlanningResponseBody, RepairContextBody,
+    RepairScopeBody, ScheduledTaskBody, ScoringPolicyBody, StaticAnchorBody, TaskGraphBody,
+    TaskGraphEdgeBody, TaskSpecBody, TimeWindowBody,
 };
 use crate::errors::{AppError, Result};
 use crate::state::AppState;
@@ -43,32 +44,67 @@ pub async fn generate(
 
     let kernel_request = PlanningRequest::from(planning_request.clone());
     let adapter = CpuPlannerAdapter;
-    let response = adapter.plan(kernel_request);
-    let diagnostics = diagnostics_from_kernel(response.diagnostics);
-    let legitimization = response
-        .legitimization
-        .map(|report| legitimization_report_body(report, planning_request.affect_warning.clone()));
-    let plan = match response.plan {
-        Some(plan) => {
+    let response = adapter.plan(kernel_request.clone());
+    let mut diagnostics = diagnostics_from_kernel(response.diagnostics);
+    let mut candidates = response.plan_candidates;
+    let selected_index = candidates.iter().position(|candidate| candidate.rank == 1);
+    let (plan, selected_candidate, alternatives, legitimization) = match selected_index {
+        Some(selected_index) => {
+            let selected = candidates.remove(selected_index);
+            let full_legitimization = ubu_planning_core::legitimization::full_legitimize(
+                &selected.schedule,
+                kernel_request.affect_profile.as_ref(),
+                kernel_request.affect_observation.as_ref(),
+            );
+            let legitimization = Some(legitimization_report_body(
+                full_legitimization.report,
+                planning_request.affect_warning.clone(),
+            ));
+            let titles = task_titles(state.inner().store.pool()).await?;
+            let selected_candidate = kernel_candidate_body(&selected, &titles, &planning_request);
+            let alternatives = candidates
+                .iter()
+                .map(|candidate| kernel_candidate_body(candidate, &titles, &planning_request))
+                .collect::<Vec<_>>();
             let stored = persist_kernel_plan(
                 &state,
                 &planning_request.request_id,
-                &plan,
+                &selected.schedule,
                 &planning_request,
-                legitimization.clone(),
-                None,
+                PersistPlanMetadata {
+                    legitimization: legitimization.clone(),
+                    selected_candidate: Some(selected_candidate.clone()),
+                    alternatives: alternatives.clone(),
+                    supersedes_plan_id: None,
+                },
                 Vec::new(),
             )
             .await?;
-            Some(stored)
+            (
+                Some(stored),
+                Some(selected_candidate),
+                alternatives,
+                legitimization,
+            )
         }
-        None => None,
+        None => {
+            if !candidates.is_empty() {
+                diagnostics.push(DiagnosticBody {
+                    code: "missing_rank_one_candidate".to_owned(),
+                    message: "planning kernel returned candidates without a rank-1 selection"
+                        .to_owned(),
+                });
+            }
+            (None, None, Vec::new(), None)
+        }
     };
 
     Ok(PlanningResponseBody {
         schema_version: response.schema_version,
         request_id: response.request_id,
         plan,
+        selected_candidate,
+        alternatives,
         legitimization,
         diagnostics,
     })
@@ -92,6 +128,8 @@ pub async fn current_calendar(state: AppState) -> Result<CalendarResponse> {
             plan_id: None,
             steps: Vec::new(),
             legitimization: None,
+            selected_candidate: None,
+            alternatives: Vec::new(),
         });
     };
 
@@ -104,6 +142,8 @@ pub async fn current_calendar(state: AppState) -> Result<CalendarResponse> {
         plan_id: Some(plan.id),
         steps: plan.steps,
         legitimization: plan.legitimization,
+        selected_candidate: plan.selected_candidate,
+        alternatives: plan.alternatives,
     })
 }
 
@@ -165,8 +205,12 @@ pub async fn persist_repair_plan(
         &request.request_id,
         repaired_plan,
         request,
-        None,
-        Some(prior_plan.id.clone()),
+        PersistPlanMetadata {
+            legitimization: None,
+            selected_candidate: None,
+            alternatives: Vec::new(),
+            supersedes_plan_id: Some(prior_plan.id.clone()),
+        },
         frozen_steps,
     )
     .await
@@ -237,6 +281,8 @@ pub fn kernel_plan_body(plan: KernelPlan) -> PlanBody {
         created_at,
         supersedes_plan_id: None,
         legitimization: None,
+        selected_candidate: None,
+        alternatives: Vec::new(),
     }
 }
 
@@ -342,6 +388,7 @@ async fn build_request_from_store_with_context(
         affect_profile: Some(affect_resolution.profile),
         affect_observation: Some(affect_resolution.observation),
         affect_warning: affect_resolution.warning,
+        scoring_policy: ScoringPolicyBody::default(),
         tasks: task_bodies,
     })
 }
@@ -351,8 +398,7 @@ async fn persist_kernel_plan(
     request_id: &str,
     kernel_plan: &KernelPlan,
     request: &PlanningRequestBody,
-    legitimization: Option<LegitimizationReportBody>,
-    supersedes_plan_id: Option<String>,
+    metadata: PersistPlanMetadata,
     frozen_steps: Vec<ScheduledTaskBody>,
 ) -> Result<PlanBody> {
     let plan_id = UbuId::new(ObjectType::Plan).to_string();
@@ -383,8 +429,10 @@ async fn persist_kernel_plan(
         status: "admitted".to_owned(),
         steps,
         created_at: now.clone(),
-        supersedes_plan_id,
-        legitimization,
+        supersedes_plan_id: metadata.supersedes_plan_id,
+        legitimization: metadata.legitimization,
+        selected_candidate: metadata.selected_candidate,
+        alternatives: metadata.alternatives,
     };
     validate_canonical_plan(&plan)?;
 
@@ -403,6 +451,13 @@ async fn persist_kernel_plan(
     .map_err(AppError::from)?;
 
     Ok(plan)
+}
+
+struct PersistPlanMetadata {
+    legitimization: Option<LegitimizationReportBody>,
+    selected_candidate: Option<PlanCandidateBody>,
+    alternatives: Vec<PlanCandidateBody>,
+    supersedes_plan_id: Option<String>,
 }
 
 fn scheduled_task_body(
@@ -431,6 +486,40 @@ fn scheduled_task_body(
         depends_on: task.depends_on.clone(),
         static_anchor: task.static_anchor,
         placement_authority,
+    }
+}
+
+fn kernel_candidate_body(
+    candidate: &PlanCandidate,
+    titles: &HashMap<String, String>,
+    request: &PlanningRequestBody,
+) -> PlanCandidateBody {
+    let mut steps = candidate
+        .schedule
+        .steps
+        .iter()
+        .map(|task| scheduled_task_body(task, titles, request))
+        .collect::<Vec<_>>();
+    steps.sort_by(|left, right| {
+        left.start
+            .cmp(&right.start)
+            .then_with(|| left.end.cmp(&right.end))
+            .then_with(|| left.task_id.cmp(&right.task_id))
+    });
+    for (index, step) in steps.iter_mut().enumerate() {
+        step.index = index as u32;
+    }
+
+    PlanCandidateBody {
+        candidate_id: candidate.candidate_id.clone(),
+        rank: candidate.rank,
+        candidate_role: candidate_role_body(candidate.candidate_role),
+        steps,
+        score_summary: score_summary_body(candidate.score_summary.clone()),
+        feasibility_summary: feasibility_summary_body(candidate.feasibility_summary.clone()),
+        semi_legitimization_summary: semi_legitimization_summary_body(
+            candidate.semi_legitimization_summary.clone(),
+        ),
     }
 }
 

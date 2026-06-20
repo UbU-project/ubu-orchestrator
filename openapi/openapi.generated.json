@@ -1046,9 +1046,16 @@
       "CalendarResponse": {
         "type": "object",
         "required": [
-          "steps"
+          "steps",
+          "alternatives"
         ],
         "properties": {
+          "alternatives": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanCandidateBody"
+            }
+          },
           "legitimization": {
             "oneOf": [
               {
@@ -1065,6 +1072,16 @@
               "null"
             ]
           },
+          "selected_candidate": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PlanCandidateBody"
+              }
+            ]
+          },
           "steps": {
             "type": "array",
             "items": {
@@ -1072,6 +1089,15 @@
             }
           }
         }
+      },
+      "CandidateRoleBody": {
+        "type": "string",
+        "enum": [
+          "highest_utility",
+          "most_robust",
+          "most_schedule_diverse",
+          "other"
+        ]
       },
       "DiagnosticBody": {
         "type": "object",
@@ -1085,6 +1111,34 @@
           },
           "message": {
             "type": "string"
+          }
+        }
+      },
+      "FeasibilitySummaryBody": {
+        "type": "object",
+        "required": [
+          "hard_constraints_assumed_satisfied_by_engine",
+          "affect_feasible"
+        ],
+        "properties": {
+          "affect_feasible": {
+            "type": "boolean"
+          },
+          "hard_constraints_assumed_satisfied_by_engine": {
+            "type": "boolean"
+          },
+          "minimum_affect_score": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "violated_affect_dimensions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -1602,6 +1656,12 @@
           "created_at"
         ],
         "properties": {
+          "alternatives": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanCandidateBody"
+            }
+          },
           "created_at": {
             "type": "string"
           },
@@ -1615,6 +1675,16 @@
               },
               {
                 "$ref": "#/components/schemas/LegitimizationReportBody"
+              }
+            ]
+          },
+          "selected_candidate": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PlanCandidateBody"
               }
             ]
           },
@@ -1632,6 +1702,45 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "PlanCandidateBody": {
+        "type": "object",
+        "required": [
+          "candidate_id",
+          "rank",
+          "candidate_role",
+          "steps",
+          "score_summary",
+          "feasibility_summary",
+          "semi_legitimization_summary"
+        ],
+        "properties": {
+          "candidate_id": {
+            "type": "string"
+          },
+          "candidate_role": {
+            "$ref": "#/components/schemas/CandidateRoleBody"
+          },
+          "feasibility_summary": {
+            "$ref": "#/components/schemas/FeasibilitySummaryBody"
+          },
+          "rank": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "score_summary": {
+            "$ref": "#/components/schemas/ScoreSummaryBody"
+          },
+          "semi_legitimization_summary": {
+            "$ref": "#/components/schemas/SemiLegitimizationSummaryBody"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScheduledTaskBody"
+            }
           }
         }
       },
@@ -1704,6 +1813,10 @@
               "null"
             ]
           },
+          "scoring_policy": {
+            "$ref": "#/components/schemas/ScoringPolicyBody",
+            "description": "C-1 trade-off weights. Omitted policies use equal weights; the orchestrator\nforwards the effective values and never learns or mutates them."
+          },
           "task_graph": {
             "oneOf": [
               {
@@ -1740,6 +1853,12 @@
           "diagnostics"
         ],
         "properties": {
+          "alternatives": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanCandidateBody"
+            }
+          },
           "diagnostics": {
             "type": "array",
             "items": {
@@ -1771,6 +1890,16 @@
           },
           "schema_version": {
             "type": "string"
+          },
+          "selected_candidate": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PlanCandidateBody"
+              }
+            ]
           }
         }
       },
@@ -2460,6 +2589,119 @@
           },
           "task_id": {
             "type": "string"
+          }
+        }
+      },
+      "ScoreSummaryBody": {
+        "type": "object",
+        "required": [
+          "utility_score",
+          "robustness_score",
+          "affect_margin_score",
+          "schedule_diversity_score",
+          "total_score"
+        ],
+        "properties": {
+          "affect_margin_score": {
+            "type": "number",
+            "format": "double"
+          },
+          "robustness_score": {
+            "type": "number",
+            "format": "double"
+          },
+          "schedule_diversity_score": {
+            "type": "number",
+            "format": "double"
+          },
+          "total_score": {
+            "type": "number",
+            "format": "double"
+          },
+          "utility_score": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "ScoringPolicyBody": {
+        "type": "object",
+        "properties": {
+          "affect_margin_weight": {
+            "type": "number",
+            "format": "double",
+            "description": "Affect-margin contribution weight. C-1 default: 1.0."
+          },
+          "robustness_weight": {
+            "type": "number",
+            "format": "double",
+            "description": "Approximate pre-rollout robustness contribution weight. C-1 default: 1.0."
+          },
+          "schedule_diversity_weight": {
+            "type": "number",
+            "format": "double",
+            "description": "Schedule-diversity contribution weight. C-1 default: 1.0."
+          },
+          "utility_weight": {
+            "type": "number",
+            "format": "double",
+            "description": "Utility contribution weight. C-1 default: 1.0."
+          }
+        }
+      },
+      "SemiLegitimizationResultBody": {
+        "type": "string",
+        "enum": [
+          "passes_cheap_checks",
+          "reject_obvious",
+          "needs_full_legitimization"
+        ]
+      },
+      "SemiLegitimizationSummaryBody": {
+        "type": "object",
+        "required": [
+          "result"
+        ],
+        "properties": {
+          "affect_budget_ok": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "dependency_fragility_ok": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "legitimacy_delta_estimate": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "local_repair_viable": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "result": {
+            "$ref": "#/components/schemas/SemiLegitimizationResultBody"
+          },
+          "slack_preserved": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "user_mode_compatible": {
+            "type": [
+              "boolean",
+              "null"
+            ]
           }
         }
       },

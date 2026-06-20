@@ -5,9 +5,10 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use ubu_planning_core::{
     AffectDirection, AffectLegitimizationMode, AffectObservation, AffectObservationValue,
-    AffectProfile, AffectTolerance, LegitimizationReport, LegitimizationResult, PlanningMode,
-    PlanningRequest, PlanningResponse, RepairContext, RepairScope, StaticAnchor, TaskGraph,
-    TaskSpec, TimeWindow, PLANNING_SCHEMA_VERSION,
+    AffectProfile, AffectTolerance, CandidateRole, DurationModel, FeasibilitySummary,
+    LegitimizationReport, LegitimizationResult, PlanningMode, PlanningRequest, RepairContext,
+    RepairScope, ScoreSummary, ScoringPolicy, SemiLegitimizationResult, SemiLegitimizationSummary,
+    StaticAnchor, TaskGraph, TaskSpec, TimeWindow, PLANNING_SCHEMA_VERSION,
 };
 use utoipa::ToSchema;
 
@@ -46,8 +47,44 @@ pub struct PlanningRequestBody {
     pub affect_observation: Option<AffectObservationBody>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub affect_warning: Option<String>,
+    /// C-1 trade-off weights. Omitted policies use equal weights; the orchestrator
+    /// forwards the effective values and never learns or mutates them.
+    #[serde(default)]
+    pub scoring_policy: ScoringPolicyBody,
     #[serde(default)]
     pub tasks: Vec<TaskSpecBody>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct ScoringPolicyBody {
+    /// Utility contribution weight. C-1 default: 1.0.
+    #[serde(default = "default_scoring_weight")]
+    pub utility_weight: f64,
+    /// Approximate pre-rollout robustness contribution weight. C-1 default: 1.0.
+    #[serde(default = "default_scoring_weight")]
+    pub robustness_weight: f64,
+    /// Affect-margin contribution weight. C-1 default: 1.0.
+    #[serde(default = "default_scoring_weight")]
+    pub affect_margin_weight: f64,
+    /// Schedule-diversity contribution weight. C-1 default: 1.0.
+    #[serde(default = "default_scoring_weight")]
+    pub schedule_diversity_weight: f64,
+}
+
+impl Default for ScoringPolicyBody {
+    fn default() -> Self {
+        Self {
+            utility_weight: default_scoring_weight(),
+            robustness_weight: default_scoring_weight(),
+            affect_margin_weight: default_scoring_weight(),
+            schedule_diversity_weight: default_scoring_weight(),
+        }
+    }
+}
+
+fn default_scoring_weight() -> f64 {
+    1.0
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -182,6 +219,10 @@ pub struct PlanningResponseBody {
     pub request_id: String,
     pub plan: Option<PlanBody>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_candidate: Option<PlanCandidateBody>,
+    #[serde(default)]
+    pub alternatives: Vec<PlanCandidateBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub legitimization: Option<LegitimizationReportBody>,
     pub diagnostics: Vec<DiagnosticBody>,
 }
@@ -197,6 +238,78 @@ pub struct PlanBody {
     pub supersedes_plan_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legitimization: Option<LegitimizationReportBody>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_candidate: Option<PlanCandidateBody>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alternatives: Vec<PlanCandidateBody>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct PlanCandidateBody {
+    pub candidate_id: String,
+    pub rank: usize,
+    pub candidate_role: CandidateRoleBody,
+    pub steps: Vec<ScheduledTaskBody>,
+    pub score_summary: ScoreSummaryBody,
+    pub feasibility_summary: FeasibilitySummaryBody,
+    pub semi_legitimization_summary: SemiLegitimizationSummaryBody,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CandidateRoleBody {
+    HighestUtility,
+    MostRobust,
+    MostScheduleDiverse,
+    Other,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct ScoreSummaryBody {
+    pub utility_score: f64,
+    pub robustness_score: f64,
+    pub affect_margin_score: f64,
+    pub schedule_diversity_score: f64,
+    pub total_score: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct FeasibilitySummaryBody {
+    pub hard_constraints_assumed_satisfied_by_engine: bool,
+    pub affect_feasible: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_affect_score: Option<f64>,
+    #[serde(default)]
+    pub violated_affect_dimensions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SemiLegitimizationResultBody {
+    PassesCheapChecks,
+    RejectObvious,
+    NeedsFullLegitimization,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct SemiLegitimizationSummaryBody {
+    pub result: SemiLegitimizationResultBody,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub affect_budget_ok: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slack_preserved: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dependency_fragility_ok: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_mode_compatible: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_repair_viable: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legitimacy_delta_estimate: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -253,7 +366,12 @@ impl From<PlanningRequestBody> for PlanningRequest {
             .into_iter()
             .map(|task| TaskSpec {
                 id: task.id,
-                duration: task.duration,
+                duration: DurationModel::Fixed {
+                    seconds: task.duration,
+                },
+                correlation_groups: Vec::new(),
+                value: 1.0,
+                priority: 1.0,
                 depends_on: task.depends_on,
                 window: task.window.map(|window| TimeWindow {
                     start: window.start,
@@ -289,31 +407,69 @@ impl From<PlanningRequestBody> for PlanningRequest {
             repair_context: value.repair_context.map(repair_context),
             affect_profile: value.affect_profile.map(affect_profile),
             affect_observation: value.affect_observation.map(affect_observation),
+            scoring_policy: scoring_policy(value.scoring_policy),
             prior_plan: None,
         }
     }
 }
 
-impl From<PlanningResponse> for PlanningResponseBody {
-    fn from(value: PlanningResponse) -> Self {
-        Self {
-            schema_version: value.schema_version,
-            request_id: value.request_id,
-            legitimization: value
-                .legitimization
-                .map(|report| legitimization_report_body(report, None)),
-            plan: value
-                .plan
-                .map(crate::services::planning_service::kernel_plan_body),
-            diagnostics: value
-                .diagnostics
-                .into_iter()
-                .map(|diagnostic| DiagnosticBody {
-                    code: format!("{:?}", diagnostic.code),
-                    message: diagnostic.message,
-                })
-                .collect(),
-        }
+fn scoring_policy(value: ScoringPolicyBody) -> ScoringPolicy {
+    ScoringPolicy {
+        utility_weight: value.utility_weight,
+        robustness_weight: value.robustness_weight,
+        affect_margin_weight: value.affect_margin_weight,
+        schedule_diversity_weight: value.schedule_diversity_weight,
+    }
+}
+
+pub fn candidate_role_body(role: CandidateRole) -> CandidateRoleBody {
+    match role {
+        CandidateRole::HighestUtility => CandidateRoleBody::HighestUtility,
+        CandidateRole::MostRobust => CandidateRoleBody::MostRobust,
+        CandidateRole::MostScheduleDiverse => CandidateRoleBody::MostScheduleDiverse,
+        CandidateRole::Other => CandidateRoleBody::Other,
+    }
+}
+
+pub fn score_summary_body(summary: ScoreSummary) -> ScoreSummaryBody {
+    ScoreSummaryBody {
+        utility_score: summary.utility_score,
+        robustness_score: summary.robustness_score,
+        affect_margin_score: summary.affect_margin_score,
+        schedule_diversity_score: summary.schedule_diversity_score,
+        total_score: summary.total_score,
+    }
+}
+
+pub fn feasibility_summary_body(summary: FeasibilitySummary) -> FeasibilitySummaryBody {
+    FeasibilitySummaryBody {
+        hard_constraints_assumed_satisfied_by_engine: summary
+            .hard_constraints_assumed_satisfied_by_engine,
+        affect_feasible: summary.affect_feasible,
+        minimum_affect_score: summary.minimum_affect_score,
+        violated_affect_dimensions: summary.violated_affect_dimensions,
+    }
+}
+
+pub fn semi_legitimization_summary_body(
+    summary: SemiLegitimizationSummary,
+) -> SemiLegitimizationSummaryBody {
+    SemiLegitimizationSummaryBody {
+        result: match summary.result {
+            SemiLegitimizationResult::PassesCheapChecks => {
+                SemiLegitimizationResultBody::PassesCheapChecks
+            }
+            SemiLegitimizationResult::RejectObvious => SemiLegitimizationResultBody::RejectObvious,
+            SemiLegitimizationResult::NeedsFullLegitimization => {
+                SemiLegitimizationResultBody::NeedsFullLegitimization
+            }
+        },
+        affect_budget_ok: summary.affect_budget_ok,
+        slack_preserved: summary.slack_preserved,
+        dependency_fragility_ok: summary.dependency_fragility_ok,
+        user_mode_compatible: summary.user_mode_compatible,
+        local_repair_viable: summary.local_repair_viable,
+        legitimacy_delta_estimate: summary.legitimacy_delta_estimate,
     }
 }
 

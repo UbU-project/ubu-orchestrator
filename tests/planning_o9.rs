@@ -6,11 +6,13 @@ use sqlx::Row;
 use tower::ServiceExt;
 use ubu_core::id_registry::ObjectType;
 use ubu_core::{UbuId, UbuTimestamp};
+use ubu_orchestrator::api::next_action::NEXT_ACTION_SCHEMA_VERSION;
 use ubu_orchestrator::api::planning::{AffectLegitimizationModeBody, PlanningModeBody};
 use ubu_orchestrator::api::recalculation::RECALCULATION_SCHEMA_VERSION;
 use ubu_orchestrator::config::ServerConfig;
 use ubu_orchestrator::services::planning_service;
 use ubu_orchestrator::state::AppState;
+use ubu_planning_core::{PlanningRequest, PLANNING_SCHEMA_VERSION};
 use ubu_store::models::calendar_record::NewCalendarRecord;
 use ubu_store::models::log_record::NewLogRecord;
 use ubu_store::models::object_record::NewObjectRecord;
@@ -32,15 +34,115 @@ async fn store_backed_request_uses_calendar_window_and_topological_order() {
         .await
         .expect("request");
 
-    let window = request.time_window.expect("time window");
+    let window = request.time_window.as_ref().expect("time window");
     assert_eq!(window.start, timestamp_minutes("2026-06-10T15:00:00Z"));
     assert_eq!(window.end, timestamp_minutes("2026-06-10T17:00:00Z"));
     assert_eq!(
-        request.task_graph.expect("task graph").topological_order,
+        request
+            .task_graph
+            .as_ref()
+            .expect("task graph")
+            .topological_order,
         vec![first, second]
     );
     assert_eq!(request.mode, PlanningModeBody::FreshGeneration);
     assert!(request.rng_seed.is_some());
+    assert_eq!(request.scoring_policy.utility_weight, 1.0);
+    assert_eq!(request.scoring_policy.robustness_weight, 1.0);
+    assert_eq!(request.scoring_policy.affect_margin_weight, 1.0);
+    assert_eq!(request.scoring_policy.schedule_diversity_weight, 1.0);
+
+    let kernel_request = PlanningRequest::from(request);
+    assert_eq!(kernel_request.scoring_policy.utility_weight, 1.0);
+    assert_eq!(kernel_request.scoring_policy.robustness_weight, 1.0);
+    assert_eq!(kernel_request.scoring_policy.affect_margin_weight, 1.0);
+    assert_eq!(kernel_request.scoring_policy.schedule_diversity_weight, 1.0);
+}
+
+#[tokio::test]
+async fn ranked_candidates_are_persisted_and_calendar_selects_rank_one() {
+    let state = test_state().await;
+    admit_task(
+        &state,
+        "First candidate task",
+        json!({"duration_minutes": 10}),
+    )
+    .await;
+    admit_task(
+        &state,
+        "Second candidate task",
+        json!({"duration_minutes": 10}),
+    )
+    .await;
+    store_calendar_window(&state, "2026-06-10T15:00:00Z", "2026-06-10T18:00:00Z").await;
+    let app = ubu_orchestrator::build_router(state);
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            "/planning/generate",
+            json!({"schema_version": PLANNING_SCHEMA_VERSION}),
+        ))
+        .await
+        .expect("generate response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let generated = json_body(response).await;
+
+    assert_eq!(generated["schema_version"], PLANNING_SCHEMA_VERSION);
+    assert_eq!(generated["selected_candidate"]["rank"], 1);
+    assert!(!generated["alternatives"]
+        .as_array()
+        .expect("alternatives")
+        .is_empty());
+    assert!(generated["alternatives"].as_array().unwrap().len() <= 15);
+    assert_eq!(
+        generated["plan"]["steps"],
+        generated["selected_candidate"]["steps"]
+    );
+    let selected_total = generated["selected_candidate"]["score_summary"]["total_score"]
+        .as_f64()
+        .expect("selected total score");
+    for alternative in generated["alternatives"].as_array().unwrap() {
+        assert!(alternative["rank"].as_u64().unwrap() > 1);
+        assert!(alternative["candidate_role"].is_string());
+        assert!(alternative["score_summary"]["total_score"].is_number());
+        assert!(alternative["semi_legitimization_summary"]["result"].is_string());
+        assert!(
+            selected_total
+                >= alternative["score_summary"]["total_score"]
+                    .as_f64()
+                    .expect("alternative total score")
+        );
+    }
+    assert!(!generated.to_string().contains("probability"));
+
+    let calendar_response = app
+        .clone()
+        .oneshot(get_request("/calendar/current"))
+        .await
+        .expect("calendar response");
+    assert_eq!(calendar_response.status(), StatusCode::OK);
+    let calendar = json_body(calendar_response).await;
+    assert_eq!(
+        calendar["selected_candidate"],
+        generated["selected_candidate"]
+    );
+    assert_eq!(calendar["alternatives"], generated["alternatives"]);
+    assert_eq!(calendar["steps"], calendar["selected_candidate"]["steps"]);
+    assert!(!calendar.to_string().contains("probability"));
+
+    let next_action_response = app
+        .oneshot(get_request(&format!(
+            "/next-action?schema_version={NEXT_ACTION_SCHEMA_VERSION}"
+        )))
+        .await
+        .expect("next action response");
+    assert_eq!(next_action_response.status(), StatusCode::OK);
+    let next_action = json_body(next_action_response).await;
+    assert_eq!(
+        next_action["recommendation"]["task_id"],
+        calendar["selected_candidate"]["steps"][0]["task_id"]
+    );
 }
 
 #[tokio::test]
@@ -492,6 +594,13 @@ fn json_request(uri: &str, body: Value) -> Request<Body> {
         .uri(uri)
         .header("content-type", "application/json")
         .body(Body::from(body.to_string()))
+        .expect("request")
+}
+
+fn get_request(uri: &str) -> Request<Body> {
+    Request::builder()
+        .uri(uri)
+        .body(Body::empty())
         .expect("request")
 }
 

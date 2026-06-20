@@ -3,7 +3,7 @@ use axum::Json;
 use serde::Serialize;
 use utoipa::ToSchema;
 
-use crate::api::planning::{LegitimizationReportBody, ScheduledTaskBody};
+use crate::api::planning::{LegitimizationReportBody, PlanCandidateBody, ScheduledTaskBody};
 use crate::errors::Result;
 use crate::services::planning_service;
 use crate::state::AppState;
@@ -15,6 +15,9 @@ pub struct CalendarResponse {
     pub steps: Vec<ScheduledTaskBody>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub legitimization: Option<LegitimizationReportBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_candidate: Option<PlanCandidateBody>,
+    pub alternatives: Vec<PlanCandidateBody>,
 }
 
 #[utoipa::path(
