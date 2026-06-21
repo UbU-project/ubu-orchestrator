@@ -2039,7 +2039,7 @@
       "ProbabilityQualityBody": {
         "type": "string",
         "enum": [
-          "estimated",
+          "full",
           "degraded_numeric_jitter",
           "degraded_independence",
           "not_estimated"

@@ -305,7 +305,7 @@ pub struct PlanCandidateBody {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ProbabilityQualityBody {
-    Estimated,
+    Full,
     DegradedNumericJitter,
     DegradedIndependence,
     NotEstimated,
@@ -473,7 +473,7 @@ impl From<PlanningRequestBody> for PlanningRequest {
 
 pub fn probability_quality_body(quality: ProbabilityQuality) -> ProbabilityQualityBody {
     match quality {
-        ProbabilityQuality::Estimated => ProbabilityQualityBody::Estimated,
+        ProbabilityQuality::Full => ProbabilityQualityBody::Full,
         ProbabilityQuality::DegradedNumericJitter => ProbabilityQualityBody::DegradedNumericJitter,
         ProbabilityQuality::DegradedIndependence => ProbabilityQualityBody::DegradedIndependence,
         ProbabilityQuality::NotEstimated => ProbabilityQualityBody::NotEstimated,

@@ -7,7 +7,9 @@ use tower::ServiceExt;
 use ubu_core::id_registry::ObjectType;
 use ubu_core::{UbuId, UbuTimestamp};
 use ubu_orchestrator::api::next_action::NEXT_ACTION_SCHEMA_VERSION;
-use ubu_orchestrator::api::planning::{AffectLegitimizationModeBody, PlanningModeBody};
+use ubu_orchestrator::api::planning::{
+    AffectLegitimizationModeBody, PlanningModeBody, ProbabilityQualityBody,
+};
 use ubu_orchestrator::api::recalculation::RECALCULATION_SCHEMA_VERSION;
 use ubu_orchestrator::config::ServerConfig;
 use ubu_orchestrator::services::planning_service;
@@ -17,6 +19,17 @@ use ubu_store::models::calendar_record::NewCalendarRecord;
 use ubu_store::models::log_record::NewLogRecord;
 use ubu_store::models::object_record::NewObjectRecord;
 use ubu_store::queries;
+
+#[test]
+fn probability_quality_full_round_trips_and_estimated_is_rejected() {
+    let encoded = serde_json::to_string(&ProbabilityQualityBody::Full).expect("serialize full");
+    assert_eq!(encoded, r#""full""#);
+    assert_eq!(
+        serde_json::from_str::<ProbabilityQualityBody>(&encoded).expect("deserialize full"),
+        ProbabilityQualityBody::Full
+    );
+    assert!(serde_json::from_str::<ProbabilityQualityBody>(r#""estimated""#).is_err());
+}
 
 #[tokio::test]
 async fn store_backed_request_uses_calendar_window_and_topological_order() {
@@ -100,7 +113,10 @@ async fn ranked_candidates_are_persisted_and_calendar_selects_rank_one() {
     assert!(generated["selected_candidate"]["probability_interval_low"].is_number());
     assert!(generated["selected_candidate"]["probability_interval_high"].is_number());
     assert!(generated["selected_candidate"]["robustness_score"].is_number());
-    assert!(generated["selected_candidate"]["probability_quality"].is_string());
+    assert_eq!(
+        generated["selected_candidate"]["probability_quality"],
+        "full"
+    );
     assert!(!generated["alternatives"]
         .as_array()
         .expect("alternatives")
@@ -113,23 +129,34 @@ async fn ranked_candidates_are_persisted_and_calendar_selects_rank_one() {
     let selected_total = generated["selected_candidate"]["score_summary"]["total_score"]
         .as_f64()
         .expect("selected total score");
+    let mut saw_retained_non_finalist = false;
     for alternative in generated["alternatives"].as_array().unwrap() {
-        assert!(alternative["rank"].as_u64().unwrap() > 1);
+        let rank = alternative["rank"].as_u64().unwrap();
+        assert!(rank > 1);
         assert!(alternative["candidate_role"].is_string());
         assert!(alternative["score_summary"]["total_score"].is_number());
         assert!(alternative["semi_legitimization_summary"]["result"].is_string());
-        assert!(alternative["display_probability"].is_number());
-        assert!(alternative["probability_interval_low"].is_number());
-        assert!(alternative["probability_interval_high"].is_number());
         assert!(alternative["robustness_score"].is_number());
-        assert!(alternative["probability_quality"].is_string());
-        assert!(
-            selected_total
-                >= alternative["score_summary"]["total_score"]
-                    .as_f64()
-                    .expect("alternative total score")
-        );
+        if rank <= 3 {
+            assert_eq!(alternative["probability_quality"], "full");
+            assert!(alternative["display_probability"].is_number());
+            assert!(alternative["probability_interval_low"].is_number());
+            assert!(alternative["probability_interval_high"].is_number());
+            assert!(
+                selected_total
+                    >= alternative["score_summary"]["total_score"]
+                        .as_f64()
+                        .expect("alternative total score")
+            );
+        } else {
+            saw_retained_non_finalist = true;
+            assert_eq!(alternative["probability_quality"], "not_estimated");
+            assert!(alternative["display_probability"].is_null());
+            assert!(alternative["probability_interval_low"].is_null());
+            assert!(alternative["probability_interval_high"].is_null());
+        }
     }
+    assert!(saw_retained_non_finalist);
     let calendar_response = app
         .clone()
         .oneshot(get_request("/calendar/current"))
