@@ -6,9 +6,10 @@ use serde::{Deserialize, Serialize};
 use ubu_planning_core::{
     AffectDirection, AffectLegitimizationMode, AffectObservation, AffectObservationValue,
     AffectProfile, AffectTolerance, CandidateRole, DurationModel, FeasibilitySummary,
-    LegitimizationReport, LegitimizationResult, PlanningMode, PlanningRequest, RepairContext,
-    RepairScope, ScoreSummary, ScoringPolicy, SemiLegitimizationResult, SemiLegitimizationSummary,
-    StaticAnchor, TaskGraph, TaskSpec, TimeWindow, PLANNING_SCHEMA_VERSION,
+    LegitimizationReport, LegitimizationResult, PlanningMode, PlanningRequest, ProbabilityQuality,
+    RepairContext, RepairScope, ScoreSummary, ScoringPolicy, SemiLegitimizationResult,
+    SemiLegitimizationSummary, StaticAnchor, TaskGraph, TaskSpec, TimeWindow, DEFAULT_N_ROLLOUTS,
+    DEFAULT_ROLLOUT_TOP_K, MAX_N_ROLLOUTS, MAX_ROLLOUT_TOP_K, PLANNING_SCHEMA_VERSION,
 };
 use utoipa::ToSchema;
 
@@ -35,6 +36,12 @@ pub struct PlanningRequestBody {
     pub mode: PlanningModeBody,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rng_seed: Option<u64>,
+    #[serde(default)]
+    pub compute_budget: ComputeBudgetBody,
+    /// Reject rollout factorization failures instead of degrading with a diagnostic.
+    #[serde(default)]
+    #[schema(default = false)]
+    pub strict_validation: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_window: Option<TimeWindowBody>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -53,6 +60,36 @@ pub struct PlanningRequestBody {
     pub scoring_policy: ScoringPolicyBody,
     #[serde(default)]
     pub tasks: Vec<TaskSpecBody>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct ComputeBudgetBody {
+    /// Rollout samples per finalist. Zero explicitly skips estimation.
+    #[serde(default = "default_n_rollouts")]
+    #[schema(default = 1000, maximum = 5000)]
+    pub n_rollouts: usize,
+    /// Number of ranked finalists evaluated by rollout.
+    #[serde(default = "default_rollout_top_k")]
+    #[schema(default = 3, maximum = 8)]
+    pub top_k: usize,
+}
+
+impl Default for ComputeBudgetBody {
+    fn default() -> Self {
+        Self {
+            n_rollouts: default_n_rollouts(),
+            top_k: default_rollout_top_k(),
+        }
+    }
+}
+
+fn default_n_rollouts() -> usize {
+    DEFAULT_N_ROLLOUTS
+}
+
+fn default_rollout_top_k() -> usize {
+    DEFAULT_ROLLOUT_TOP_K
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -254,6 +291,24 @@ pub struct PlanCandidateBody {
     pub score_summary: ScoreSummaryBody,
     pub feasibility_summary: FeasibilitySummaryBody,
     pub semi_legitimization_summary: SemiLegitimizationSummaryBody,
+    /// Rollout feasibility estimate. Null when probability_quality is not_estimated.
+    pub display_probability: Option<f64>,
+    /// Lower bound of the rollout Wilson interval.
+    pub probability_interval_low: Option<f64>,
+    /// Upper bound of the rollout Wilson interval.
+    pub probability_interval_high: Option<f64>,
+    /// P10 rollout outcome used by the rollout-grounded composite.
+    pub robustness_score: f64,
+    pub probability_quality: ProbabilityQualityBody,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProbabilityQualityBody {
+    Estimated,
+    DegradedNumericJitter,
+    DegradedIndependence,
+    NotEstimated,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -396,6 +451,9 @@ impl From<PlanningRequestBody> for PlanningRequest {
             request_id: value.request_id,
             mode: planning_mode(value.mode),
             rng_seed: value.rng_seed.unwrap_or_default(),
+            n_rollouts: value.compute_budget.n_rollouts.min(MAX_N_ROLLOUTS),
+            top_k: value.compute_budget.top_k.min(MAX_ROLLOUT_TOP_K),
+            strict_validation: value.strict_validation,
             time_window: value.time_window.map(|window| TimeWindow {
                 start: window.start,
                 end: window.end,
@@ -410,6 +468,15 @@ impl From<PlanningRequestBody> for PlanningRequest {
             scoring_policy: scoring_policy(value.scoring_policy),
             prior_plan: None,
         }
+    }
+}
+
+pub fn probability_quality_body(quality: ProbabilityQuality) -> ProbabilityQualityBody {
+    match quality {
+        ProbabilityQuality::Estimated => ProbabilityQualityBody::Estimated,
+        ProbabilityQuality::DegradedNumericJitter => ProbabilityQualityBody::DegradedNumericJitter,
+        ProbabilityQuality::DegradedIndependence => ProbabilityQualityBody::DegradedIndependence,
+        ProbabilityQuality::NotEstimated => ProbabilityQualityBody::NotEstimated,
     }
 }
 

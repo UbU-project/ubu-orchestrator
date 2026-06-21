@@ -1047,6 +1047,7 @@
         "type": "object",
         "required": [
           "steps",
+          "probability_quality",
           "alternatives"
         ],
         "properties": {
@@ -1055,6 +1056,13 @@
             "items": {
               "$ref": "#/components/schemas/PlanCandidateBody"
             }
+          },
+          "display_probability": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
           },
           "legitimization": {
             "oneOf": [
@@ -1071,6 +1079,30 @@
               "string",
               "null"
             ]
+          },
+          "probability_interval_high": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "probability_interval_low": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "probability_quality": {
+            "$ref": "#/components/schemas/ProbabilityQualityBody"
+          },
+          "robustness_score": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
           },
           "selected_candidate": {
             "oneOf": [
@@ -1098,6 +1130,25 @@
           "most_schedule_diverse",
           "other"
         ]
+      },
+      "ComputeBudgetBody": {
+        "type": "object",
+        "properties": {
+          "n_rollouts": {
+            "type": "integer",
+            "description": "Rollout samples per finalist. Zero explicitly skips estimation.",
+            "default": 1000,
+            "maximum": 5000,
+            "minimum": 0
+          },
+          "top_k": {
+            "type": "integer",
+            "description": "Number of ranked finalists evaluated by rollout.",
+            "default": 3,
+            "maximum": 8,
+            "minimum": 0
+          }
+        }
       },
       "DiagnosticBody": {
         "type": "object",
@@ -1714,7 +1765,9 @@
           "steps",
           "score_summary",
           "feasibility_summary",
-          "semi_legitimization_summary"
+          "semi_legitimization_summary",
+          "robustness_score",
+          "probability_quality"
         ],
         "properties": {
           "candidate_id": {
@@ -1723,12 +1776,44 @@
           "candidate_role": {
             "$ref": "#/components/schemas/CandidateRoleBody"
           },
+          "display_probability": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Rollout feasibility estimate. Null when probability_quality is not_estimated."
+          },
           "feasibility_summary": {
             "$ref": "#/components/schemas/FeasibilitySummaryBody"
+          },
+          "probability_interval_high": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Upper bound of the rollout Wilson interval."
+          },
+          "probability_interval_low": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Lower bound of the rollout Wilson interval."
+          },
+          "probability_quality": {
+            "$ref": "#/components/schemas/ProbabilityQualityBody"
           },
           "rank": {
             "type": "integer",
             "minimum": 0
+          },
+          "robustness_score": {
+            "type": "number",
+            "format": "double",
+            "description": "P10 rollout outcome used by the rollout-grounded composite."
           },
           "score_summary": {
             "$ref": "#/components/schemas/ScoreSummaryBody"
@@ -1783,6 +1868,9 @@
               "null"
             ]
           },
+          "compute_budget": {
+            "$ref": "#/components/schemas/ComputeBudgetBody"
+          },
           "mode": {
             "$ref": "#/components/schemas/PlanningModeBody"
           },
@@ -1816,6 +1904,11 @@
           "scoring_policy": {
             "$ref": "#/components/schemas/ScoringPolicyBody",
             "description": "C-1 trade-off weights. Omitted policies use equal weights; the orchestrator\nforwards the effective values and never learns or mutates them."
+          },
+          "strict_validation": {
+            "type": "boolean",
+            "description": "Reject rollout factorization failures instead of degrading with a diagnostic.",
+            "default": false
           },
           "task_graph": {
             "oneOf": [
@@ -1942,6 +2035,15 @@
             ]
           }
         }
+      },
+      "ProbabilityQualityBody": {
+        "type": "string",
+        "enum": [
+          "estimated",
+          "degraded_numeric_jitter",
+          "degraded_independence",
+          "not_estimated"
+        ]
       },
       "ProjectionAcceptExternalRequest": {
         "type": "object",

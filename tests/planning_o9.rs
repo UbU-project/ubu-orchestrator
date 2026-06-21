@@ -47,6 +47,9 @@ async fn store_backed_request_uses_calendar_window_and_topological_order() {
     );
     assert_eq!(request.mode, PlanningModeBody::FreshGeneration);
     assert!(request.rng_seed.is_some());
+    assert_eq!(request.compute_budget.n_rollouts, 1_000);
+    assert_eq!(request.compute_budget.top_k, 3);
+    assert!(!request.strict_validation);
     assert_eq!(request.scoring_policy.utility_weight, 1.0);
     assert_eq!(request.scoring_policy.robustness_weight, 1.0);
     assert_eq!(request.scoring_policy.affect_margin_weight, 1.0);
@@ -57,6 +60,9 @@ async fn store_backed_request_uses_calendar_window_and_topological_order() {
     assert_eq!(kernel_request.scoring_policy.robustness_weight, 1.0);
     assert_eq!(kernel_request.scoring_policy.affect_margin_weight, 1.0);
     assert_eq!(kernel_request.scoring_policy.schedule_diversity_weight, 1.0);
+    assert_eq!(kernel_request.n_rollouts, 1_000);
+    assert_eq!(kernel_request.top_k, 3);
+    assert!(!kernel_request.strict_validation);
 }
 
 #[tokio::test]
@@ -90,6 +96,11 @@ async fn ranked_candidates_are_persisted_and_calendar_selects_rank_one() {
 
     assert_eq!(generated["schema_version"], PLANNING_SCHEMA_VERSION);
     assert_eq!(generated["selected_candidate"]["rank"], 1);
+    assert!(generated["selected_candidate"]["display_probability"].is_number());
+    assert!(generated["selected_candidate"]["probability_interval_low"].is_number());
+    assert!(generated["selected_candidate"]["probability_interval_high"].is_number());
+    assert!(generated["selected_candidate"]["robustness_score"].is_number());
+    assert!(generated["selected_candidate"]["probability_quality"].is_string());
     assert!(!generated["alternatives"]
         .as_array()
         .expect("alternatives")
@@ -107,6 +118,11 @@ async fn ranked_candidates_are_persisted_and_calendar_selects_rank_one() {
         assert!(alternative["candidate_role"].is_string());
         assert!(alternative["score_summary"]["total_score"].is_number());
         assert!(alternative["semi_legitimization_summary"]["result"].is_string());
+        assert!(alternative["display_probability"].is_number());
+        assert!(alternative["probability_interval_low"].is_number());
+        assert!(alternative["probability_interval_high"].is_number());
+        assert!(alternative["robustness_score"].is_number());
+        assert!(alternative["probability_quality"].is_string());
         assert!(
             selected_total
                 >= alternative["score_summary"]["total_score"]
@@ -114,8 +130,6 @@ async fn ranked_candidates_are_persisted_and_calendar_selects_rank_one() {
                     .expect("alternative total score")
         );
     }
-    assert!(!generated.to_string().contains("probability"));
-
     let calendar_response = app
         .clone()
         .oneshot(get_request("/calendar/current"))
@@ -129,7 +143,26 @@ async fn ranked_candidates_are_persisted_and_calendar_selects_rank_one() {
     );
     assert_eq!(calendar["alternatives"], generated["alternatives"]);
     assert_eq!(calendar["steps"], calendar["selected_candidate"]["steps"]);
-    assert!(!calendar.to_string().contains("probability"));
+    assert_eq!(
+        calendar["display_probability"],
+        calendar["selected_candidate"]["display_probability"]
+    );
+    assert_eq!(
+        calendar["probability_interval_low"],
+        calendar["selected_candidate"]["probability_interval_low"]
+    );
+    assert_eq!(
+        calendar["probability_interval_high"],
+        calendar["selected_candidate"]["probability_interval_high"]
+    );
+    assert_eq!(
+        calendar["robustness_score"],
+        calendar["selected_candidate"]["robustness_score"]
+    );
+    assert_eq!(
+        calendar["probability_quality"],
+        calendar["selected_candidate"]["probability_quality"]
+    );
 
     let next_action_response = app
         .oneshot(get_request(&format!(
@@ -143,6 +176,55 @@ async fn ranked_candidates_are_persisted_and_calendar_selects_rank_one() {
         next_action["recommendation"]["task_id"],
         calendar["selected_candidate"]["steps"][0]["task_id"]
     );
+}
+
+#[tokio::test]
+async fn zero_rollouts_surface_not_estimated_without_fabricated_probability() {
+    let state = test_state().await;
+    admit_task(&state, "Interactive task", json!({"duration_minutes": 10})).await;
+    let app = ubu_orchestrator::build_router(state);
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            "/planning/generate",
+            json!({
+                "schema_version": PLANNING_SCHEMA_VERSION,
+                "request": {
+                    "schema_version": PLANNING_SCHEMA_VERSION,
+                    "request_id": "interactive-rollout-skip",
+                    "compute_budget": {"n_rollouts": 0, "top_k": 3},
+                    "time_window": {"start": 0, "end": 100},
+                    "tasks": [{
+                        "id": "interactive-task",
+                        "duration": 10,
+                        "window": {"start": 0, "end": 100}
+                    }]
+                }
+            }),
+        ))
+        .await
+        .expect("generate response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let generated = json_body(response).await;
+    assert_eq!(
+        generated["selected_candidate"]["probability_quality"],
+        "not_estimated"
+    );
+    assert!(generated["selected_candidate"]["display_probability"].is_null());
+    assert!(generated["selected_candidate"]["probability_interval_low"].is_null());
+    assert!(generated["selected_candidate"]["probability_interval_high"].is_null());
+
+    let calendar = json_body(
+        app.oneshot(get_request("/calendar/current"))
+            .await
+            .expect("calendar response"),
+    )
+    .await;
+    assert_eq!(calendar["probability_quality"], "not_estimated");
+    assert!(calendar["display_probability"].is_null());
+    assert!(calendar["probability_interval_low"].is_null());
+    assert!(calendar["probability_interval_high"].is_null());
 }
 
 #[tokio::test]

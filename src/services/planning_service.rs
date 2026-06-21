@@ -14,13 +14,14 @@ use ubu_store::queries;
 use crate::adapters::planner_adapter::{CpuPlannerAdapter, PlannerAdapter};
 use crate::api::calendar::CalendarResponse;
 use crate::api::planning::{
-    candidate_role_body, feasibility_summary_body, legitimization_report_body, score_summary_body,
-    semi_legitimization_summary_body, AffectDirectionBody, AffectLegitimizationModeBody,
-    AffectObservationBody, AffectObservationValueBody, AffectProfileBody, AffectToleranceBody,
+    candidate_role_body, feasibility_summary_body, legitimization_report_body,
+    probability_quality_body, score_summary_body, semi_legitimization_summary_body,
+    AffectDirectionBody, AffectLegitimizationModeBody, AffectObservationBody,
+    AffectObservationValueBody, AffectProfileBody, AffectToleranceBody, ComputeBudgetBody,
     DiagnosticBody, GeneratePlanningRequest, LegitimizationReportBody, PlanBody, PlanCandidateBody,
-    PlanningModeBody, PlanningRequestBody, PlanningResponseBody, RepairContextBody,
-    RepairScopeBody, ScheduledTaskBody, ScoringPolicyBody, StaticAnchorBody, TaskGraphBody,
-    TaskGraphEdgeBody, TaskSpecBody, TimeWindowBody,
+    PlanningModeBody, PlanningRequestBody, PlanningResponseBody, ProbabilityQualityBody,
+    RepairContextBody, RepairScopeBody, ScheduledTaskBody, ScoringPolicyBody, StaticAnchorBody,
+    TaskGraphBody, TaskGraphEdgeBody, TaskSpecBody, TimeWindowBody,
 };
 use crate::errors::{AppError, Result};
 use crate::state::AppState;
@@ -127,6 +128,11 @@ pub async fn current_calendar(state: AppState) -> Result<CalendarResponse> {
         return Ok(CalendarResponse {
             plan_id: None,
             steps: Vec::new(),
+            display_probability: None,
+            probability_interval_low: None,
+            probability_interval_high: None,
+            robustness_score: None,
+            probability_quality: ProbabilityQualityBody::NotEstimated,
             legitimization: None,
             selected_candidate: None,
             alternatives: Vec::new(),
@@ -138,9 +144,18 @@ pub async fn current_calendar(state: AppState) -> Result<CalendarResponse> {
         .map_err(|e| AppError::Internal(e.to_string()))?;
     let plan = canonical_plan_from_payload(&payload_json)?;
 
+    let selected = plan.selected_candidate.as_ref();
     Ok(CalendarResponse {
         plan_id: Some(plan.id),
         steps: plan.steps,
+        display_probability: selected.and_then(|candidate| candidate.display_probability),
+        probability_interval_low: selected.and_then(|candidate| candidate.probability_interval_low),
+        probability_interval_high: selected
+            .and_then(|candidate| candidate.probability_interval_high),
+        robustness_score: selected.map(|candidate| candidate.robustness_score),
+        probability_quality: selected
+            .map(|candidate| candidate.probability_quality)
+            .unwrap_or(ProbabilityQualityBody::NotEstimated),
         legitimization: plan.legitimization,
         selected_candidate: plan.selected_candidate,
         alternatives: plan.alternatives,
@@ -382,6 +397,8 @@ async fn build_request_from_store_with_context(
         request_id,
         mode,
         rng_seed: Some(rng_seed),
+        compute_budget: ComputeBudgetBody::default(),
+        strict_validation: false,
         time_window: Some(time_window),
         task_graph: Some(task_graph),
         repair_context,
@@ -519,6 +536,13 @@ fn kernel_candidate_body(
         feasibility_summary: feasibility_summary_body(candidate.feasibility_summary.clone()),
         semi_legitimization_summary: semi_legitimization_summary_body(
             candidate.semi_legitimization_summary.clone(),
+        ),
+        display_probability: candidate.probability_summary.display_probability,
+        probability_interval_low: candidate.probability_summary.probability_interval_low,
+        probability_interval_high: candidate.probability_summary.probability_interval_high,
+        robustness_score: candidate.score_summary.robustness_score,
+        probability_quality: probability_quality_body(
+            candidate.probability_summary.probability_quality,
         ),
     }
 }
