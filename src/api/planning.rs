@@ -5,11 +5,12 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use ubu_planning_core::{
     AffectDirection, AffectLegitimizationMode, AffectObservation, AffectObservationValue,
-    AffectProfile, AffectTolerance, CandidateRole, DurationModel, FeasibilitySummary,
-    LegitimizationReport, LegitimizationResult, PlanningMode, PlanningRequest, ProbabilityQuality,
-    RepairContext, RepairScope, ScoreSummary, ScoringPolicy, SemiLegitimizationResult,
-    SemiLegitimizationSummary, StaticAnchor, TaskGraph, TaskSpec, TimeWindow, DEFAULT_N_ROLLOUTS,
-    DEFAULT_ROLLOUT_TOP_K, MAX_N_ROLLOUTS, MAX_ROLLOUT_TOP_K, PLANNING_SCHEMA_VERSION,
+    AffectProfile, AffectTolerance, CandidateRole, CorrelationGroup, DurationModel,
+    FeasibilitySummary, LegitimizationReport, LegitimizationResult, PlanningMode, PlanningRequest,
+    ProbabilityQuality, RepairContext, RepairScope, ScoreSummary, ScoringPolicy,
+    SemiLegitimizationResult, SemiLegitimizationSummary, StaticAnchor, TaskGraph, TaskSpec,
+    TimeWindow, DEFAULT_N_ROLLOUTS, DEFAULT_ROLLOUT_TOP_K, MAX_N_ROLLOUTS, MAX_ROLLOUT_TOP_K,
+    PLANNING_SCHEMA_VERSION,
 };
 use utoipa::ToSchema;
 
@@ -181,13 +182,39 @@ pub enum RepairScopeBody {
 #[serde(rename_all = "snake_case")]
 pub struct TaskSpecBody {
     pub id: String,
+    /// Legacy fixed duration used when `duration_estimate` is omitted.
     pub duration: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_estimate: Option<DurationEstimateBody>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub correlation_groups: Vec<CorrelationGroupBody>,
     #[serde(default)]
     pub depends_on: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<TimeWindowBody>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub static_anchor: Option<StaticAnchorBody>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum DurationEstimateBody {
+    Fixed {
+        seconds: u64,
+    },
+    ShiftedLognormalP95 {
+        min_seconds: u64,
+        mode_seconds: u64,
+        p95_seconds: u64,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CorrelationGroupBody {
+    pub group: String,
+    #[schema(minimum = 0.0, maximum = 1.0)]
+    pub strength: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -421,10 +448,19 @@ impl From<PlanningRequestBody> for PlanningRequest {
             .into_iter()
             .map(|task| TaskSpec {
                 id: task.id,
-                duration: DurationModel::Fixed {
-                    seconds: task.duration,
-                },
-                correlation_groups: Vec::new(),
+                duration: task.duration_estimate.map(duration_model).unwrap_or(
+                    DurationModel::Fixed {
+                        seconds: task.duration,
+                    },
+                ),
+                correlation_groups: task
+                    .correlation_groups
+                    .into_iter()
+                    .map(|group| CorrelationGroup {
+                        group: group.group,
+                        strength: group.strength,
+                    })
+                    .collect(),
                 value: 1.0,
                 priority: 1.0,
                 depends_on: task.depends_on,
@@ -468,6 +504,21 @@ impl From<PlanningRequestBody> for PlanningRequest {
             scoring_policy: scoring_policy(value.scoring_policy),
             prior_plan: None,
         }
+    }
+}
+
+fn duration_model(duration: DurationEstimateBody) -> DurationModel {
+    match duration {
+        DurationEstimateBody::Fixed { seconds } => DurationModel::Fixed { seconds },
+        DurationEstimateBody::ShiftedLognormalP95 {
+            min_seconds,
+            mode_seconds,
+            p95_seconds,
+        } => DurationModel::ShiftedLognormalP95 {
+            min_seconds,
+            mode_seconds,
+            p95_seconds,
+        },
     }
 }
 

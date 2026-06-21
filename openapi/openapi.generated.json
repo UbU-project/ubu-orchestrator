@@ -1150,6 +1150,25 @@
           }
         }
       },
+      "CorrelationGroupBody": {
+        "type": "object",
+        "required": [
+          "group",
+          "strength"
+        ],
+        "properties": {
+          "group": {
+            "type": "string"
+          },
+          "strength": {
+            "type": "number",
+            "format": "double",
+            "maximum": 1,
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
       "DiagnosticBody": {
         "type": "object",
         "required": [
@@ -1164,6 +1183,62 @@
             "type": "string"
           }
         }
+      },
+      "DurationEstimateBody": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "seconds",
+              "type"
+            ],
+            "properties": {
+              "seconds": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "fixed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "min_seconds",
+              "mode_seconds",
+              "p95_seconds",
+              "type"
+            ],
+            "properties": {
+              "min_seconds": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "mode_seconds": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "p95_seconds": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "shifted_lognormal_p95"
+                ]
+              }
+            }
+          }
+        ]
       },
       "FeasibilitySummaryBody": {
         "type": "object",
@@ -2881,6 +2956,12 @@
           "duration"
         ],
         "properties": {
+          "correlation_groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CorrelationGroupBody"
+            }
+          },
           "depends_on": {
             "type": "array",
             "items": {
@@ -2890,7 +2971,18 @@
           "duration": {
             "type": "integer",
             "format": "int64",
+            "description": "Legacy fixed duration used when `duration_estimate` is omitted.",
             "minimum": 0
+          },
+          "duration_estimate": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DurationEstimateBody"
+              }
+            ]
           },
           "id": {
             "type": "string"

@@ -14,7 +14,7 @@ use ubu_orchestrator::api::recalculation::RECALCULATION_SCHEMA_VERSION;
 use ubu_orchestrator::config::ServerConfig;
 use ubu_orchestrator::services::planning_service;
 use ubu_orchestrator::state::AppState;
-use ubu_planning_core::{PlanningRequest, PLANNING_SCHEMA_VERSION};
+use ubu_planning_core::{DurationModel, PlanningRequest, PLANNING_SCHEMA_VERSION};
 use ubu_store::models::calendar_record::NewCalendarRecord;
 use ubu_store::models::log_record::NewLogRecord;
 use ubu_store::models::object_record::NewObjectRecord;
@@ -56,7 +56,7 @@ async fn store_backed_request_uses_calendar_window_and_topological_order() {
             .as_ref()
             .expect("task graph")
             .topological_order,
-        vec![first, second]
+        vec![first.clone(), second]
     );
     assert_eq!(request.mode, PlanningModeBody::FreshGeneration);
     assert!(request.rng_seed.is_some());
@@ -76,6 +76,70 @@ async fn store_backed_request_uses_calendar_window_and_topological_order() {
     assert_eq!(kernel_request.n_rollouts, 1_000);
     assert_eq!(kernel_request.top_k, 3);
     assert!(!kernel_request.strict_validation);
+    let first_task = kernel_request
+        .task_graph
+        .tasks
+        .iter()
+        .find(|task| task.id == first)
+        .expect("first task");
+    assert_eq!(first_task.duration, DurationModel::Fixed { seconds: 15 });
+    assert!(first_task.correlation_groups.is_empty());
+}
+
+#[tokio::test]
+async fn store_backed_request_forwards_duration_estimate_and_correlations() {
+    let state = test_state().await;
+    admit_task(
+        &state,
+        "Stochastic task",
+        json!({
+            "duration_estimate": {
+                "type": "shifted_lognormal_p95",
+                "min_seconds": 300,
+                "mode_seconds": 900,
+                "p95_seconds": 3600
+            },
+            "correlation_groups": [{
+                "group": "shared-test-environment",
+                "strength": 0.75
+            }]
+        }),
+    )
+    .await;
+
+    let request = planning_service::build_request_from_store(&state)
+        .await
+        .expect("request");
+    let kernel_request = PlanningRequest::from(request);
+    let task = &kernel_request.task_graph.tasks[0];
+    assert_eq!(
+        task.duration,
+        DurationModel::ShiftedLognormalP95 {
+            min_seconds: 300,
+            mode_seconds: 900,
+            p95_seconds: 3600,
+        }
+    );
+    assert_eq!(task.correlation_groups.len(), 1);
+    assert_eq!(task.correlation_groups[0].group, "shared-test-environment");
+    assert_eq!(task.correlation_groups[0].strength, 0.75);
+}
+
+#[tokio::test]
+async fn store_backed_request_defaults_missing_model_to_fixed_independent() {
+    let state = test_state().await;
+    admit_task(&state, "Default duration task", json!({})).await;
+
+    let request = planning_service::build_request_from_store(&state)
+        .await
+        .expect("request");
+    assert!(request.tasks[0].duration_estimate.is_none());
+    assert!(request.tasks[0].correlation_groups.is_empty());
+
+    let kernel_request = PlanningRequest::from(request);
+    let task = &kernel_request.task_graph.tasks[0];
+    assert_eq!(task.duration, DurationModel::Fixed { seconds: 30 });
+    assert!(task.correlation_groups.is_empty());
 }
 
 #[tokio::test]
@@ -515,6 +579,85 @@ async fn planning_generate_rejects_unknown_schema_version() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let body = json_body(response).await;
     assert_eq!(body["diagnostics"][0]["code"], "unknown_schema_version");
+}
+
+#[tokio::test]
+async fn planning_generate_rejects_invalid_duration_estimate_with_diagnostic() {
+    let state = test_state().await;
+    let app = ubu_orchestrator::build_router(state);
+    let response = app
+        .oneshot(json_request(
+            "/planning/generate",
+            json!({
+                "schema_version": PLANNING_SCHEMA_VERSION,
+                "request": {
+                    "schema_version": PLANNING_SCHEMA_VERSION,
+                    "request_id": "invalid-duration-estimate",
+                    "tasks": [{
+                        "id": "task-1",
+                        "duration": 30,
+                        "duration_estimate": {
+                            "type": "shifted_lognormal_p95",
+                            "min_seconds": 900,
+                            "mode_seconds": 300,
+                            "p95_seconds": 3600
+                        }
+                    }]
+                }
+            }),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(response).await;
+    assert_eq!(body["diagnostics"][0]["code"], "invalid_duration_estimate");
+    assert!(body["diagnostics"][0]["message"]
+        .as_str()
+        .expect("diagnostic message")
+        .contains("min_seconds < mode_seconds < p95_seconds"));
+}
+
+#[tokio::test]
+async fn planning_generate_carries_stochastic_duration_to_kernel() {
+    let state = test_state().await;
+    let app = ubu_orchestrator::build_router(state);
+    let response = app
+        .oneshot(json_request(
+            "/planning/generate",
+            json!({
+                "schema_version": PLANNING_SCHEMA_VERSION,
+                "request": {
+                    "schema_version": PLANNING_SCHEMA_VERSION,
+                    "request_id": "stochastic-duration-end-to-end",
+                    "compute_budget": {"n_rollouts": 0, "top_k": 1},
+                    "time_window": {"start": 0, "end": 10_000},
+                    "tasks": [{
+                        "id": "task-1",
+                        "duration": 30,
+                        "duration_estimate": {
+                            "type": "shifted_lognormal_p95",
+                            "min_seconds": 300,
+                            "mode_seconds": 900,
+                            "p95_seconds": 3600
+                        },
+                        "correlation_groups": [{
+                            "group": "shared-test-environment",
+                            "strength": 0.75
+                        }]
+                    }]
+                }
+            }),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert_eq!(body["schema_version"], PLANNING_SCHEMA_VERSION);
+    let step = &body["plan"]["steps"][0];
+    assert_eq!(
+        step["end"].as_u64().expect("end") - step["start"].as_u64().expect("start"),
+        900
+    );
 }
 
 async fn test_state() -> AppState {

@@ -5,10 +5,11 @@ use sqlx::Row;
 use ubu_core::id_registry::ObjectType;
 use ubu_core::{UbuId, UbuTimestamp};
 use ubu_planning_core::{
-    Plan as KernelPlan, PlanCandidate, PlanStatus, PlanningRequest, RepairRequest, ScheduledTask,
-    TimeWindow, PLANNING_SCHEMA_VERSION,
+    CorrelationGroup, DurationModel, Plan as KernelPlan, PlanCandidate, PlanStatus,
+    PlanningRequest, RepairRequest, ScheduledTask, TaskSpec, TimeWindow, PLANNING_SCHEMA_VERSION,
 };
 use ubu_store::models::plan_record::NewPlanRecord;
+use ubu_store::models::task_record::{TaskCorrelationGroup, TaskDurationEstimate};
 use ubu_store::queries;
 
 use crate::adapters::planner_adapter::{CpuPlannerAdapter, PlannerAdapter};
@@ -18,14 +19,16 @@ use crate::api::planning::{
     probability_quality_body, score_summary_body, semi_legitimization_summary_body,
     AffectDirectionBody, AffectLegitimizationModeBody, AffectObservationBody,
     AffectObservationValueBody, AffectProfileBody, AffectToleranceBody, ComputeBudgetBody,
-    DiagnosticBody, GeneratePlanningRequest, LegitimizationReportBody, PlanBody, PlanCandidateBody,
-    PlanningModeBody, PlanningRequestBody, PlanningResponseBody, ProbabilityQualityBody,
-    RepairContextBody, RepairScopeBody, ScheduledTaskBody, ScoringPolicyBody, StaticAnchorBody,
-    TaskGraphBody, TaskGraphEdgeBody, TaskSpecBody, TimeWindowBody,
+    CorrelationGroupBody, DiagnosticBody, DurationEstimateBody, GeneratePlanningRequest,
+    LegitimizationReportBody, PlanBody, PlanCandidateBody, PlanningModeBody, PlanningRequestBody,
+    PlanningResponseBody, ProbabilityQualityBody, RepairContextBody, RepairScopeBody,
+    ScheduledTaskBody, ScoringPolicyBody, StaticAnchorBody, TaskGraphBody, TaskGraphEdgeBody,
+    TaskSpecBody, TimeWindowBody,
 };
 use crate::errors::{AppError, Result};
 use crate::state::AppState;
 
+/// Fixed planning duration used when a stored Task has no duration estimate.
 const DEFAULT_TASK_DURATION_MINUTES: u64 = 30;
 const DEFAULT_AFFECT_SCALE: f64 = 1.5;
 const DEFAULT_AFFECT_THRESHOLD: f64 = 0.5;
@@ -43,6 +46,7 @@ pub async fn generate(
         None => build_request_from_store(&state).await?,
     };
 
+    validate_task_models(&planning_request)?;
     let kernel_request = PlanningRequest::from(planning_request.clone());
     let adapter = CpuPlannerAdapter;
     let response = adapter.plan(kernel_request.clone());
@@ -352,6 +356,8 @@ async fn build_request_from_store_with_context(
         task_bodies.push(TaskSpecBody {
             id: task.id.clone(),
             duration: duration_minutes(&task.payload),
+            duration_estimate: task_duration_estimate(&task.payload)?,
+            correlation_groups: task_correlation_groups(&task.payload)?,
             depends_on: dependencies,
             window: None,
             static_anchor: None,
@@ -719,6 +725,107 @@ fn duration_minutes(payload: &Value) -> u64 {
         .and_then(Value::as_u64)
         .map(|seconds| seconds.div_ceil(60).max(1))
         .unwrap_or(DEFAULT_TASK_DURATION_MINUTES)
+}
+
+fn task_duration_estimate(payload: &Value) -> Result<Option<DurationEstimateBody>> {
+    payload
+        .get("duration_estimate")
+        .cloned()
+        .map(serde_json::from_value::<TaskDurationEstimate>)
+        .transpose()
+        .map(|estimate| estimate.map(duration_estimate_body))
+        .map_err(|error| {
+            AppError::Internal(format!(
+                "failed to deserialize task duration_estimate: {error}"
+            ))
+        })
+}
+
+fn duration_estimate_body(estimate: TaskDurationEstimate) -> DurationEstimateBody {
+    match estimate {
+        TaskDurationEstimate::Fixed { seconds } => DurationEstimateBody::Fixed { seconds },
+        TaskDurationEstimate::ShiftedLognormalP95 {
+            min_seconds,
+            mode_seconds,
+            p95_seconds,
+        } => DurationEstimateBody::ShiftedLognormalP95 {
+            min_seconds,
+            mode_seconds,
+            p95_seconds,
+        },
+    }
+}
+
+fn task_correlation_groups(payload: &Value) -> Result<Vec<CorrelationGroupBody>> {
+    payload
+        .get("correlation_groups")
+        .cloned()
+        .map(serde_json::from_value::<Vec<TaskCorrelationGroup>>)
+        .transpose()
+        .map(|groups| {
+            groups
+                .unwrap_or_default()
+                .into_iter()
+                .map(|group| CorrelationGroupBody {
+                    group: group.group,
+                    strength: group.strength,
+                })
+                .collect()
+        })
+        .map_err(|error| {
+            AppError::Internal(format!(
+                "failed to deserialize task correlation_groups: {error}"
+            ))
+        })
+}
+
+fn validate_task_models(request: &PlanningRequestBody) -> Result<()> {
+    for task in &request.tasks {
+        let duration = match &task.duration_estimate {
+            Some(DurationEstimateBody::Fixed { seconds }) => {
+                DurationModel::Fixed { seconds: *seconds }
+            }
+            Some(DurationEstimateBody::ShiftedLognormalP95 {
+                min_seconds,
+                mode_seconds,
+                p95_seconds,
+            }) => DurationModel::ShiftedLognormalP95 {
+                min_seconds: *min_seconds,
+                mode_seconds: *mode_seconds,
+                p95_seconds: *p95_seconds,
+            },
+            None => DurationModel::Fixed {
+                seconds: task.duration,
+            },
+        };
+        if let Err(message) = TaskSpec::new(task.id.clone(), duration.clone()) {
+            return Err(AppError::bad_request_diagnostic(
+                "invalid_duration_estimate",
+                message,
+            ));
+        }
+        let kernel_task = TaskSpec {
+            id: task.id.clone(),
+            duration,
+            correlation_groups: task
+                .correlation_groups
+                .iter()
+                .map(|group| CorrelationGroup {
+                    group: group.group.clone(),
+                    strength: group.strength,
+                })
+                .collect(),
+            value: 1.0,
+            priority: 1.0,
+            depends_on: task.depends_on.clone(),
+            window: None,
+            static_anchor: None,
+        };
+        kernel_task.validate_contract().map_err(|message| {
+            AppError::bad_request_diagnostic("invalid_correlation_groups", message)
+        })?;
+    }
+    Ok(())
 }
 
 struct AffectResolution {
