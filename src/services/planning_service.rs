@@ -8,6 +8,7 @@ use ubu_planning_core::{
     CorrelationGroup, DurationModel, Plan as KernelPlan, PlanCandidate, PlanStatus,
     PlanningRequest, RepairRequest, ScheduledTask, TaskSpec, TimeWindow, PLANNING_SCHEMA_VERSION,
 };
+use ubu_store::models::log_record::NewLogRecord;
 use ubu_store::models::plan_record::NewPlanRecord;
 use ubu_store::models::task_record::{TaskCorrelationGroup, TaskDurationEstimate};
 use ubu_store::queries;
@@ -26,6 +27,7 @@ use crate::api::planning::{
     TaskSpecBody, TimeWindowBody,
 };
 use crate::errors::{AppError, Result};
+use crate::reports::planning_analysis::{self, PlanningAnalysisInput};
 use crate::state::AppState;
 
 /// Fixed planning duration used when a stored Task has no duration estimate.
@@ -53,56 +55,97 @@ pub async fn generate(
     let mut diagnostics = diagnostics_from_kernel(response.diagnostics);
     let mut candidates = response.plan_candidates;
     let selected_index = candidates.iter().position(|candidate| candidate.rank == 1);
-    let (plan, selected_candidate, alternatives, legitimization) = match selected_index {
-        Some(selected_index) => {
-            let selected = candidates.remove(selected_index);
-            let full_legitimization = ubu_planning_core::legitimization::full_legitimize(
-                &selected.schedule,
-                kernel_request.affect_profile.as_ref(),
-                kernel_request.affect_observation.as_ref(),
-            );
-            let legitimization = Some(legitimization_report_body(
-                full_legitimization.report,
-                planning_request.affect_warning.clone(),
-            ));
-            let titles = task_titles(state.inner().store.pool()).await?;
-            let selected_candidate = kernel_candidate_body(&selected, &titles, &planning_request);
-            let alternatives = candidates
-                .iter()
-                .map(|candidate| kernel_candidate_body(candidate, &titles, &planning_request))
-                .collect::<Vec<_>>();
-            let stored = persist_kernel_plan(
-                &state,
-                &planning_request.request_id,
-                &selected.schedule,
-                &planning_request,
-                PersistPlanMetadata {
-                    legitimization: legitimization.clone(),
-                    selected_candidate: Some(selected_candidate.clone()),
-                    alternatives: alternatives.clone(),
-                    supersedes_plan_id: None,
-                },
-                Vec::new(),
-            )
-            .await?;
-            (
-                Some(stored),
-                Some(selected_candidate),
-                alternatives,
-                legitimization,
-            )
-        }
-        None => {
-            if !candidates.is_empty() {
-                diagnostics.push(DiagnosticBody {
-                    code: "missing_rank_one_candidate".to_owned(),
-                    message: "planning kernel returned candidates without a rank-1 selection"
-                        .to_owned(),
-                });
+    let canonical_plan_id = UbuId::new(ObjectType::Plan).to_string();
+    let (plan, selected_candidate, alternatives, legitimization, risk_report, plan_quality) =
+        match selected_index {
+            Some(selected_index) => {
+                let selected = candidates.remove(selected_index);
+                let full_legitimization = ubu_planning_core::legitimization::full_legitimize(
+                    &selected.schedule,
+                    kernel_request.affect_profile.as_ref(),
+                    kernel_request.affect_observation.as_ref(),
+                );
+                let legitimization = Some(legitimization_report_body(
+                    full_legitimization.report,
+                    planning_request.affect_warning.clone(),
+                ));
+                let titles = task_titles(state.inner().store.pool()).await?;
+                let selected_candidate =
+                    kernel_candidate_body(&selected, &titles, &planning_request);
+                let alternatives = candidates
+                    .iter()
+                    .map(|candidate| kernel_candidate_body(candidate, &titles, &planning_request))
+                    .collect::<Vec<_>>();
+                let (risk_report, plan_quality) = planning_analysis::analyze(
+                    state.inner().store.pool(),
+                    PlanningAnalysisInput {
+                        plan_ref: &canonical_plan_id,
+                        selected_candidate: Some(&selected_candidate),
+                        legitimization: legitimization.as_ref(),
+                        diagnostics: &diagnostics,
+                        request: &planning_request,
+                    },
+                )
+                .await?;
+                let stored = persist_kernel_plan(
+                    &state,
+                    &canonical_plan_id,
+                    &planning_request.request_id,
+                    &selected.schedule,
+                    &planning_request,
+                    PersistPlanMetadata {
+                        legitimization: legitimization.clone(),
+                        selected_candidate: Some(selected_candidate.clone()),
+                        alternatives: alternatives.clone(),
+                        supersedes_plan_id: None,
+                        risk_report: Some(risk_report.clone()),
+                        human_complete_plan_quality: Some(plan_quality.clone()),
+                    },
+                    Vec::new(),
+                )
+                .await?;
+                if risk_report.findings.iter().any(|finding| finding.blocking) {
+                    raise_blocking_recalculation(&state, &stored.id, &risk_report).await?;
+                }
+                (
+                    Some(stored),
+                    Some(selected_candidate),
+                    alternatives,
+                    legitimization,
+                    Some(risk_report),
+                    Some(plan_quality),
+                )
             }
-            (None, None, Vec::new(), None)
-        }
-    };
+            None => {
+                if !candidates.is_empty() {
+                    diagnostics.push(DiagnosticBody {
+                        code: "missing_rank_one_candidate".to_owned(),
+                        message: "planning kernel returned candidates without a rank-1 selection"
+                            .to_owned(),
+                    });
+                }
+                let (risk_report, _plan_quality) = planning_analysis::analyze(
+                    state.inner().store.pool(),
+                    PlanningAnalysisInput {
+                        plan_ref: &planning_request.request_id,
+                        selected_candidate: None,
+                        legitimization: None,
+                        diagnostics: &diagnostics,
+                        request: &planning_request,
+                    },
+                )
+                .await?;
+                if risk_report.findings.iter().any(|finding| finding.blocking) {
+                    raise_blocking_recalculation(
+                        &state,
+                        &planning_request.request_id,
+                        &risk_report,
+                    )
+                    .await?;
+                }
+                (None, None, Vec::new(), None, Some(risk_report), None)
+            }
+        };
 
     Ok(PlanningResponseBody {
         schema_version: response.schema_version,
@@ -112,6 +155,8 @@ pub async fn generate(
         alternatives,
         legitimization,
         diagnostics,
+        risk_report,
+        human_complete_plan_quality: plan_quality,
     })
 }
 
@@ -140,6 +185,9 @@ pub async fn current_calendar(state: AppState) -> Result<CalendarResponse> {
             legitimization: None,
             selected_candidate: None,
             alternatives: Vec::new(),
+            stale: false,
+            risk_report: None,
+            human_complete_plan_quality: None,
         });
     };
 
@@ -149,6 +197,10 @@ pub async fn current_calendar(state: AppState) -> Result<CalendarResponse> {
     let plan = canonical_plan_from_payload(&payload_json)?;
 
     let selected = plan.selected_candidate.as_ref();
+    let stale = plan
+        .risk_report
+        .as_ref()
+        .is_some_and(|report| report.findings.iter().any(|finding| finding.blocking));
     Ok(CalendarResponse {
         plan_id: Some(plan.id),
         steps: plan.steps,
@@ -163,6 +215,9 @@ pub async fn current_calendar(state: AppState) -> Result<CalendarResponse> {
         legitimization: plan.legitimization,
         selected_candidate: plan.selected_candidate,
         alternatives: plan.alternatives,
+        stale,
+        risk_report: plan.risk_report,
+        human_complete_plan_quality: plan.human_complete_plan_quality,
     })
 }
 
@@ -219,8 +274,10 @@ pub async fn persist_repair_plan(
     prior_plan: &PlanBody,
     frozen_steps: Vec<ScheduledTaskBody>,
 ) -> Result<PlanBody> {
+    let plan_id = UbuId::new(ObjectType::Plan).to_string();
     persist_kernel_plan(
         state,
+        &plan_id,
         &request.request_id,
         repaired_plan,
         request,
@@ -229,6 +286,8 @@ pub async fn persist_repair_plan(
             selected_candidate: None,
             alternatives: Vec::new(),
             supersedes_plan_id: Some(prior_plan.id.clone()),
+            risk_report: None,
+            human_complete_plan_quality: None,
         },
         frozen_steps,
     )
@@ -302,6 +361,8 @@ pub fn kernel_plan_body(plan: KernelPlan) -> PlanBody {
         legitimization: None,
         selected_candidate: None,
         alternatives: Vec::new(),
+        risk_report: None,
+        human_complete_plan_quality: None,
     }
 }
 
@@ -418,13 +479,13 @@ async fn build_request_from_store_with_context(
 
 async fn persist_kernel_plan(
     state: &AppState,
+    plan_id: &str,
     request_id: &str,
     kernel_plan: &KernelPlan,
     request: &PlanningRequestBody,
     metadata: PersistPlanMetadata,
     frozen_steps: Vec<ScheduledTaskBody>,
 ) -> Result<PlanBody> {
-    let plan_id = UbuId::new(ObjectType::Plan).to_string();
     let now = UbuTimestamp::now_utc().to_string();
     let titles = task_titles(state.inner().store.pool()).await?;
     let mut steps = frozen_steps;
@@ -448,7 +509,7 @@ async fn persist_kernel_plan(
     }
 
     let plan = PlanBody {
-        id: plan_id.clone(),
+        id: plan_id.to_owned(),
         status: "admitted".to_owned(),
         steps,
         created_at: now.clone(),
@@ -456,6 +517,8 @@ async fn persist_kernel_plan(
         legitimization: metadata.legitimization,
         selected_candidate: metadata.selected_candidate,
         alternatives: metadata.alternatives,
+        risk_report: metadata.risk_report,
+        human_complete_plan_quality: metadata.human_complete_plan_quality,
     };
     validate_canonical_plan(&plan)?;
 
@@ -463,7 +526,7 @@ async fn persist_kernel_plan(
     queries::store_plan(
         pool,
         NewPlanRecord {
-            id: plan_id,
+            id: plan_id.to_owned(),
             request_id: request_id.to_owned(),
             status: "admitted".to_owned(),
             payload: serde_json::to_value(&plan).map_err(|e| AppError::Internal(e.to_string()))?,
@@ -481,6 +544,46 @@ struct PersistPlanMetadata {
     selected_candidate: Option<PlanCandidateBody>,
     alternatives: Vec<PlanCandidateBody>,
     supersedes_plan_id: Option<String>,
+    risk_report: Option<crate::api::reports::RiskReportResponse>,
+    human_complete_plan_quality: Option<crate::api::reports::HumanCompletePlanQualityResponse>,
+}
+
+async fn raise_blocking_recalculation(
+    state: &AppState,
+    plan_ref: &str,
+    report: &crate::api::reports::RiskReportResponse,
+) -> Result<()> {
+    let now = UbuTimestamp::now_utc().to_string();
+    let categories = report
+        .findings
+        .iter()
+        .filter(|finding| finding.blocking)
+        .map(|finding| format!("{:?}", finding.category).to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    queries::append_log_entry(
+        state.inner().store.pool(),
+        NewLogRecord {
+            id: UbuId::new(ObjectType::LogEntry).to_string(),
+            event_type: "recalculation_requested".to_owned(),
+            object_refs: json!([]),
+            payload: json!({
+                "triggered_at": now,
+                "trigger_type": "worker_request",
+                "note": format!(
+                    "blocking derived planning risk for {plan_ref}: {}",
+                    categories.join(", ")
+                )
+            }),
+            provenance: json!({
+                "created_at": now,
+                "authority_source": "system"
+            }),
+            created_at: now,
+        },
+    )
+    .await
+    .map_err(AppError::from)?;
+    Ok(())
 }
 
 fn scheduled_task_body(

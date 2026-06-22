@@ -1,34 +1,23 @@
 use sqlx::Row;
 
-use crate::api::reports::{HumanCompleteReportResponse, RiskReportResponse, TaskStatusCount};
+use crate::api::reports::{
+    HumanCompleteReportResponse, RiskLevel, RiskReportResponse, TaskStatusCount,
+};
 use crate::api::user_action::TaskLifecycleStatus;
 use crate::errors::{AppError, Result};
 use crate::state::AppState;
 
 pub async fn risk(state: AppState) -> Result<RiskReportResponse> {
-    let pool = state.inner().store.pool();
-
-    let active_tasks = ubu_store::queries::query_active_tasks(pool)
-        .await
-        .map_err(AppError::from)?;
-
-    let plan_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM plans")
-        .fetch_one(pool)
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-
-    let mut risks = Vec::new();
-    if active_tasks.is_empty() {
-        risks.push("no_github_candidates_imported".to_owned());
-    }
-    if plan_count == 0 {
-        risks.push("no_plan_admitted".to_owned());
-    }
-
-    Ok(RiskReportResponse {
-        risks,
-        task_statuses: task_status_counts(pool).await?,
-    })
+    Ok(
+        crate::services::planning_service::latest_admitted_plan(&state)
+            .await?
+            .and_then(|plan| plan.risk_report)
+            .unwrap_or_else(|| RiskReportResponse {
+                generated_at: ubu_core::UbuTimestamp::now_utc().to_string(),
+                level: RiskLevel::Low,
+                findings: Vec::new(),
+            }),
+    )
 }
 
 pub async fn human_complete(state: AppState) -> Result<HumanCompleteReportResponse> {

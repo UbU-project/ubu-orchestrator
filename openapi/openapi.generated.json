@@ -1048,7 +1048,8 @@
         "required": [
           "steps",
           "probability_quality",
-          "alternatives"
+          "alternatives",
+          "stale"
         ],
         "properties": {
           "alternatives": {
@@ -1063,6 +1064,16 @@
               "null"
             ],
             "format": "double"
+          },
+          "human_complete_plan_quality": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/HumanCompletePlanQualityResponse"
+              }
+            ]
           },
           "legitimization": {
             "oneOf": [
@@ -1097,6 +1108,16 @@
           "probability_quality": {
             "$ref": "#/components/schemas/ProbabilityQualityBody"
           },
+          "risk_report": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RiskReportResponse"
+              }
+            ]
+          },
           "robustness_score": {
             "type": [
               "number",
@@ -1114,6 +1135,9 @@
               }
             ]
           },
+          "stale": {
+            "type": "boolean"
+          },
           "steps": {
             "type": "array",
             "items": {
@@ -1129,6 +1153,14 @@
           "most_robust",
           "most_schedule_diverse",
           "other"
+        ]
+      },
+      "CheckpointCoverage": {
+        "type": "string",
+        "enum": [
+          "adequate",
+          "sparse",
+          "absent"
         ]
       },
       "ComputeBudgetBody": {
@@ -1240,6 +1272,18 @@
           }
         ]
       },
+      "FailurePattern": {
+        "type": "string",
+        "enum": [
+          "none",
+          "wrong_estimates",
+          "missing_dependencies",
+          "stale_affect",
+          "interruption",
+          "overload",
+          "changed_objective"
+        ]
+      },
       "FeasibilitySummaryBody": {
         "type": "object",
         "required": [
@@ -1341,6 +1385,61 @@
           },
           "version": {
             "type": "string"
+          }
+        }
+      },
+      "HumanCompletePlanQualityResponse": {
+        "type": "object",
+        "required": [
+          "generated_at",
+          "plan_ref",
+          "feedback_latency",
+          "checkpoint_coverage",
+          "affect_margin",
+          "failure_pattern",
+          "stretch_pressure",
+          "post_plan_state_delta",
+          "revision_suggestions"
+        ],
+        "properties": {
+          "affect_margin": {
+            "type": "number",
+            "format": "double"
+          },
+          "checkpoint_coverage": {
+            "$ref": "#/components/schemas/CheckpointCoverage"
+          },
+          "failure_pattern": {
+            "$ref": "#/components/schemas/FailurePattern"
+          },
+          "feedback_latency": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "generated_at": {
+            "type": "string"
+          },
+          "plan_ref": {
+            "type": "string"
+          },
+          "post_plan_state_delta": {
+            "$ref": "#/components/schemas/PostPlanStateDelta"
+          },
+          "revision_suggestions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "stretch_pressure": {
+            "$ref": "#/components/schemas/StretchPressure"
+          },
+          "violated_dimensions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -1700,6 +1799,16 @@
               "$ref": "#/components/schemas/NextActionDiagnostic"
             }
           },
+          "human_complete_plan_quality": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/HumanCompletePlanQualityResponse"
+              }
+            ]
+          },
           "recommendation": {
             "oneOf": [
               {
@@ -1707,6 +1816,16 @@
               },
               {
                 "$ref": "#/components/schemas/NextActionRecommendation"
+              }
+            ]
+          },
+          "risk_report": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RiskReportResponse"
               }
             ]
           },
@@ -1791,6 +1910,16 @@
           "created_at": {
             "type": "string"
           },
+          "human_complete_plan_quality": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/HumanCompletePlanQualityResponse"
+              }
+            ]
+          },
           "id": {
             "type": "string"
           },
@@ -1801,6 +1930,16 @@
               },
               {
                 "$ref": "#/components/schemas/LegitimizationReportBody"
+              }
+            ]
+          },
+          "risk_report": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RiskReportResponse"
               }
             ]
           },
@@ -2033,6 +2172,16 @@
               "$ref": "#/components/schemas/DiagnosticBody"
             }
           },
+          "human_complete_plan_quality": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/HumanCompletePlanQualityResponse"
+              }
+            ]
+          },
           "legitimization": {
             "oneOf": [
               {
@@ -2055,6 +2204,16 @@
           },
           "request_id": {
             "type": "string"
+          },
+          "risk_report": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RiskReportResponse"
+              }
+            ]
           },
           "schema_version": {
             "type": "string"
@@ -2110,6 +2269,15 @@
             ]
           }
         }
+      },
+      "PostPlanStateDelta": {
+        "type": "string",
+        "enum": [
+          "better",
+          "neutral",
+          "depleted",
+          "at_risk"
+        ]
       },
       "ProbabilityQualityBody": {
         "type": "string",
@@ -2700,24 +2868,76 @@
           "full_window"
         ]
       },
+      "RiskCategory": {
+        "type": "string",
+        "enum": [
+          "deadline_risk",
+          "dependency_fragility",
+          "worker_bottleneck",
+          "stale_affect",
+          "affect_margin",
+          "destructive_pressure",
+          "post_plan_depletion",
+          "low_coverage",
+          "skeleton_failure"
+        ]
+      },
+      "RiskFinding": {
+        "type": "object",
+        "required": [
+          "category",
+          "severity",
+          "blocking",
+          "detail"
+        ],
+        "properties": {
+          "blocking": {
+            "type": "boolean"
+          },
+          "category": {
+            "$ref": "#/components/schemas/RiskCategory"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/RiskLevel"
+          },
+          "subject_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "RiskLevel": {
+        "type": "string",
+        "enum": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
       "RiskReportResponse": {
         "type": "object",
         "required": [
-          "risks",
-          "task_statuses"
+          "generated_at",
+          "level",
+          "findings"
         ],
         "properties": {
-          "risks": {
+          "findings": {
             "type": "array",
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/RiskFinding"
             }
           },
-          "task_statuses": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/TaskStatusCount"
-            }
+          "generated_at": {
+            "type": "string"
+          },
+          "level": {
+            "$ref": "#/components/schemas/RiskLevel"
           }
         }
       },
@@ -2894,6 +3114,14 @@
             "minimum": 0
           }
         }
+      },
+      "StretchPressure": {
+        "type": "string",
+        "enum": [
+          "comfort",
+          "sustainable_stretch",
+          "destructive_pressure"
+        ]
       },
       "TaskActionKind": {
         "type": "string",

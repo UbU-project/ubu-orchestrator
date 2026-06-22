@@ -3,6 +3,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use crate::api::reports::{HumanCompletePlanQualityResponse, RiskReportResponse};
 use crate::api::user_action::TaskLifecycleStatus;
 use crate::errors::Result;
 use crate::services::next_action_service;
@@ -22,6 +23,10 @@ pub struct NextActionResponse {
     pub schema_version: String,
     pub recommendation: Option<NextActionRecommendation>,
     pub diagnostics: Vec<NextActionDiagnostic>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub risk_report: Option<RiskReportResponse>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub human_complete_plan_quality: Option<HumanCompletePlanQualityResponse>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

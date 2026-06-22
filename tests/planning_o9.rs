@@ -469,8 +469,15 @@ async fn generate_persists_canonical_timed_plan_and_current_calendar_serves_step
         .and_then(Value::as_str)
         .expect("affect warning")
         .contains("missing affect observation"));
+    assert!(payload["risk_report"]["findings"].is_array());
+    assert_eq!(
+        payload["human_complete_plan_quality"]["plan_ref"],
+        payload["id"]
+    );
+    assert!(payload["human_complete_plan_quality"]["feedback_latency"].is_u64());
 
     let calendar_response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/calendar/current")
@@ -486,6 +493,60 @@ async fn generate_persists_canonical_timed_plan_and_current_calendar_serves_step
     assert!(body["legitimization"]["dimensions"]["energy"]
         .get("satisfaction")
         .is_some());
+    assert!(body["risk_report"]["findings"].is_array());
+    assert!(body["human_complete_plan_quality"]["revision_suggestions"].is_array());
+
+    let next_action = app
+        .oneshot(get_request(&format!(
+            "/next-action?schema_version={NEXT_ACTION_SCHEMA_VERSION}"
+        )))
+        .await
+        .expect("next-action response");
+    let next_action = json_body(next_action).await;
+    assert!(next_action["risk_report"]["findings"].is_array());
+    assert!(next_action["human_complete_plan_quality"]["plan_ref"].is_string());
+}
+
+#[tokio::test]
+async fn blocking_deadline_risk_marks_calendar_stale_and_raises_recalculation() {
+    let state = test_state().await;
+    let task_id = admit_task(
+        &state,
+        "Impossible deadline",
+        json!({"duration_minutes": 10, "due_at": 0}),
+    )
+    .await;
+    let app = ubu_orchestrator::build_router(state.clone());
+
+    let response = app
+        .clone()
+        .oneshot(json_request("/planning/generate", json!({})))
+        .await
+        .expect("generate response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert!(body["risk_report"]["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .any(|finding| finding["category"] == "deadline_risk"
+            && finding["blocking"] == true
+            && finding["subject_ref"] == task_id));
+
+    let calendar = app
+        .oneshot(get_request("/calendar/current"))
+        .await
+        .expect("calendar response");
+    let calendar = json_body(calendar).await;
+    assert_eq!(calendar["stale"], true);
+
+    let trigger_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM logs WHERE event_type = 'recalculation_requested'",
+    )
+    .fetch_one(state.inner().store.pool())
+    .await
+    .expect("trigger count");
+    assert_eq!(trigger_count, 1);
 }
 
 #[tokio::test]

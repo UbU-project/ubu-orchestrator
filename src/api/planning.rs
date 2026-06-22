@@ -14,6 +14,7 @@ use ubu_planning_core::{
 };
 use utoipa::ToSchema;
 
+use crate::api::reports::{HumanCompletePlanQualityResponse, RiskReportResponse};
 use crate::errors::Result;
 use crate::services::planning_service;
 use crate::state::AppState;
@@ -289,6 +290,10 @@ pub struct PlanningResponseBody {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub legitimization: Option<LegitimizationReportBody>,
     pub diagnostics: Vec<DiagnosticBody>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub risk_report: Option<RiskReportResponse>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub human_complete_plan_quality: Option<HumanCompletePlanQualityResponse>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -306,6 +311,10 @@ pub struct PlanBody {
     pub selected_candidate: Option<PlanCandidateBody>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub alternatives: Vec<PlanCandidateBody>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub risk_report: Option<RiskReportResponse>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub human_complete_plan_quality: Option<HumanCompletePlanQualityResponse>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

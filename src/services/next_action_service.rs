@@ -39,12 +39,15 @@ pub async fn get_next_action(
 
     let tasks = load_tasks(pool).await?;
     if tasks.is_empty() {
-        return Ok(diagnostic_response(NextActionDiagnostic {
-            code: NextActionDiagnosticCode::NoAdmittedTasks,
-            message: "no admitted Tasks are available for readiness selection".to_owned(),
-            blocked_task_count: 0,
-            sampled_task_ids: Vec::new(),
-        }));
+        return Ok(surface_reports(
+            diagnostic_response(NextActionDiagnostic {
+                code: NextActionDiagnosticCode::NoAdmittedTasks,
+                message: "no admitted Tasks are available for readiness selection".to_owned(),
+                blocked_task_count: 0,
+                sampled_task_ids: Vec::new(),
+            }),
+            current_calendar.as_ref(),
+        ));
     }
 
     let active_tasks: Vec<_> = tasks
@@ -52,12 +55,15 @@ pub async fn get_next_action(
         .filter(|task| task.record.status == "active")
         .collect();
     if active_tasks.is_empty() {
-        return Ok(diagnostic_response(NextActionDiagnostic {
-            code: NextActionDiagnosticCode::NoActiveTasks,
-            message: "admitted Tasks exist, but none are active".to_owned(),
-            blocked_task_count: 0,
-            sampled_task_ids: Vec::new(),
-        }));
+        return Ok(surface_reports(
+            diagnostic_response(NextActionDiagnostic {
+                code: NextActionDiagnosticCode::NoActiveTasks,
+                message: "admitted Tasks exist, but none are active".to_owned(),
+                blocked_task_count: 0,
+                sampled_task_ids: Vec::new(),
+            }),
+            current_calendar.as_ref(),
+        ));
     }
 
     let completed_ids: HashSet<String> = tasks
@@ -81,25 +87,28 @@ pub async fn get_next_action(
                 .then_with(|| left.end.cmp(&right.end))
                 .then_with(|| left.task_id.cmp(&right.task_id))
         }) else {
-            return Ok(diagnostic_response(NextActionDiagnostic {
-                code: NextActionDiagnosticCode::NoReadyTask,
-                message: "the current legitimized Calendar has no Task placements".to_owned(),
-                blocked_task_count: 0,
-                sampled_task_ids: Vec::new(),
-            }));
+            return Ok(surface_reports(
+                diagnostic_response(NextActionDiagnostic {
+                    code: NextActionDiagnosticCode::NoReadyTask,
+                    message: "the current legitimized Calendar has no Task placements".to_owned(),
+                    blocked_task_count: 0,
+                    sampled_task_ids: Vec::new(),
+                }),
+                current_calendar.as_ref(),
+            ));
         };
 
         let Some(task) = active_tasks
             .iter()
             .find(|task| task.record.id == first_placement.task_id)
         else {
-            return Ok(diagnostic_response(NextActionDiagnostic {
+            return Ok(surface_reports(diagnostic_response(NextActionDiagnostic {
                 code: NextActionDiagnosticCode::NoReadyTask,
                 message: "the first placement in the current legitimized Calendar is not an active admitted Task"
                     .to_owned(),
                 blocked_task_count: 1,
                 sampled_task_ids: vec![first_placement.task_id.clone()],
-            }));
+            }), current_calendar.as_ref()));
         };
 
         return recommendation_response(
@@ -112,7 +121,8 @@ pub async fn get_next_action(
             },
             plan.legitimization.as_ref().and_then(calendar_warning),
         )
-        .await;
+        .await
+        .map(|response| surface_reports(response, current_calendar.as_ref()));
     }
 
     candidates.sort_by(|(left, _), (right, _)| {
@@ -139,7 +149,8 @@ pub async fn get_next_action(
             },
             None,
         )
-        .await;
+        .await
+        .map(|response| surface_reports(response, current_calendar.as_ref()));
     }
 
     let blocked_task_count = candidates.len();
@@ -171,12 +182,15 @@ pub async fn get_next_action(
         )
     };
 
-    Ok(diagnostic_response(NextActionDiagnostic {
-        code,
-        message: message.to_owned(),
-        blocked_task_count,
-        sampled_task_ids,
-    }))
+    Ok(surface_reports(
+        diagnostic_response(NextActionDiagnostic {
+            code,
+            message: message.to_owned(),
+            blocked_task_count,
+            sampled_task_ids,
+        }),
+        current_calendar.as_ref(),
+    ))
 }
 
 fn failed_legitimization_response(plan: &PlanBody) -> NextActionResponse {
@@ -186,13 +200,13 @@ fn failed_legitimization_response(plan: &PlanBody) -> NextActionResponse {
         .map(|step| step.task_id.clone())
         .take(3)
         .collect();
-    diagnostic_response(NextActionDiagnostic {
+    surface_reports(diagnostic_response(NextActionDiagnostic {
         code: NextActionDiagnosticCode::NoReadyTask,
         message: "the current Calendar failed affect legitimization under enforce mode; no Task can be recommended"
             .to_owned(),
         blocked_task_count: plan.steps.len(),
         sampled_task_ids,
-    })
+    }), Some(plan))
 }
 
 async fn recommendation_response(
@@ -224,6 +238,8 @@ async fn recommendation_response(
             explanation,
         }),
         diagnostics: Vec::new(),
+        risk_report: None,
+        human_complete_plan_quality: None,
     })
 }
 
@@ -268,7 +284,19 @@ fn diagnostic_response(diagnostic: NextActionDiagnostic) -> NextActionResponse {
         schema_version: NEXT_ACTION_SCHEMA_VERSION.to_owned(),
         recommendation: None,
         diagnostics: vec![diagnostic],
+        risk_report: None,
+        human_complete_plan_quality: None,
     }
+}
+
+fn surface_reports(
+    mut response: NextActionResponse,
+    plan: Option<&PlanBody>,
+) -> NextActionResponse {
+    response.risk_report = plan.and_then(|plan| plan.risk_report.clone());
+    response.human_complete_plan_quality =
+        plan.and_then(|plan| plan.human_complete_plan_quality.clone());
+    response
 }
 
 #[derive(Debug)]

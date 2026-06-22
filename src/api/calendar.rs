@@ -6,6 +6,7 @@ use utoipa::ToSchema;
 use crate::api::planning::{
     LegitimizationReportBody, PlanCandidateBody, ProbabilityQualityBody, ScheduledTaskBody,
 };
+use crate::api::reports::{HumanCompletePlanQualityResponse, RiskReportResponse};
 use crate::errors::Result;
 use crate::services::planning_service;
 use crate::state::AppState;
@@ -25,6 +26,11 @@ pub struct CalendarResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selected_candidate: Option<PlanCandidateBody>,
     pub alternatives: Vec<PlanCandidateBody>,
+    pub stale: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub risk_report: Option<RiskReportResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub human_complete_plan_quality: Option<HumanCompletePlanQualityResponse>,
 }
 
 #[utoipa::path(
