@@ -2,6 +2,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde_json::{json, Value};
 use sqlx::Row;
+use ubu_core::core::{
+    evaluate_universe_precondition, UniversePrecondition, UniversePreconditionError, UniverseState,
+};
 use ubu_core::id_registry::ObjectType;
 use ubu_core::{UbuId, UbuTimestamp};
 use ubu_planning_core::{
@@ -19,12 +22,13 @@ use crate::api::planning::{
     candidate_role_body, feasibility_summary_body, legitimization_report_body,
     probability_quality_body, score_summary_body, semi_legitimization_summary_body,
     AffectDirectionBody, AffectLegitimizationModeBody, AffectObservationBody,
-    AffectObservationValueBody, AffectProfileBody, AffectToleranceBody, ComputeBudgetBody,
-    CorrelationGroupBody, DiagnosticBody, DurationEstimateBody, GeneratePlanningRequest,
-    LegitimizationReportBody, PlanBody, PlanCandidateBody, PlanningModeBody, PlanningRequestBody,
-    PlanningResponseBody, ProbabilityQualityBody, RepairContextBody, RepairScopeBody,
-    ScheduledTaskBody, ScoringPolicyBody, StaticAnchorBody, TaskGraphBody, TaskGraphEdgeBody,
-    TaskSpecBody, TimeWindowBody,
+    AffectObservationValueBody, AffectProfileBody, AffectToleranceBody, BlockedTaskBody,
+    ComputeBudgetBody, CorrelationGroupBody, DiagnosticBody, DurationEstimateBody,
+    GeneratePlanningRequest, InvalidTaskBody, LegitimizationReportBody, PlanBody,
+    PlanCandidateBody, PlanningModeBody, PlanningRequestBody, PlanningResponseBody,
+    ProbabilityQualityBody, RepairContextBody, RepairScopeBody, ScheduledTaskBody,
+    ScoringPolicyBody, StaticAnchorBody, TaskGraphBody, TaskGraphEdgeBody, TaskSpecBody,
+    TimeWindowBody,
 };
 use crate::errors::{AppError, Result};
 use crate::reports::planning_analysis::{self, PlanningAnalysisInput};
@@ -40,12 +44,28 @@ pub async fn generate(
     request: GeneratePlanningRequest,
 ) -> Result<PlanningResponseBody> {
     validate_optional_schema_version(request.schema_version.as_deref())?;
-    let planning_request = match request.request {
+    let StorePlanningRequest {
+        request: planning_request,
+        blocked_tasks,
+        invalid_tasks,
+    } = match request.request {
         Some(body) => {
             validate_optional_schema_version(body.schema_version.as_deref())?;
-            body
+            StorePlanningRequest {
+                request: body,
+                blocked_tasks: Vec::new(),
+                invalid_tasks: Vec::new(),
+            }
         }
-        None => build_request_from_store(&state).await?,
+        None => {
+            build_request_from_store_with_context(
+                &state,
+                PlanningModeBody::FreshGeneration,
+                None,
+                &[],
+            )
+            .await?
+        }
     };
 
     validate_task_models(&planning_request)?;
@@ -53,6 +73,7 @@ pub async fn generate(
     let adapter = CpuPlannerAdapter;
     let response = adapter.plan(kernel_request.clone());
     let mut diagnostics = diagnostics_from_kernel(response.diagnostics);
+    diagnostics.extend(precondition_diagnostics(&blocked_tasks, &invalid_tasks));
     let mut candidates = response.plan_candidates;
     let selected_index = candidates.iter().position(|candidate| candidate.rank == 1);
     let canonical_plan_id = UbuId::new(ObjectType::Plan).to_string();
@@ -155,6 +176,8 @@ pub async fn generate(
         alternatives,
         legitimization,
         diagnostics,
+        blocked_tasks,
+        invalid_tasks,
         risk_report,
         human_complete_plan_quality: plan_quality,
     })
@@ -222,7 +245,11 @@ pub async fn current_calendar(state: AppState) -> Result<CalendarResponse> {
 }
 
 pub async fn build_request_from_store(state: &AppState) -> Result<PlanningRequestBody> {
-    build_request_from_store_with_context(state, PlanningModeBody::FreshGeneration, None, &[]).await
+    Ok(
+        build_request_from_store_with_context(state, PlanningModeBody::FreshGeneration, None, &[])
+            .await?
+            .request,
+    )
 }
 
 pub async fn build_repair_request_from_store(
@@ -232,7 +259,7 @@ pub async fn build_repair_request_from_store(
     observed_divergence_refs: Vec<String>,
     frozen_task_ids: &[String],
 ) -> Result<PlanningRequestBody> {
-    build_request_from_store_with_context(
+    Ok(build_request_from_store_with_context(
         state,
         PlanningModeBody::Repair,
         Some(RepairContextBody {
@@ -243,7 +270,8 @@ pub async fn build_repair_request_from_store(
         }),
         frozen_task_ids,
     )
-    .await
+    .await?
+    .request)
 }
 
 pub async fn latest_admitted_plan(state: &AppState) -> Result<Option<PlanBody>> {
@@ -381,7 +409,7 @@ async fn build_request_from_store_with_context(
     mode: PlanningModeBody,
     repair_context: Option<RepairContextBody>,
     excluded_task_ids: &[String],
-) -> Result<PlanningRequestBody> {
+) -> Result<StorePlanningRequest> {
     let pool = state.inner().store.pool();
     let tasks = queries::query_active_tasks(pool)
         .await
@@ -406,6 +434,12 @@ async fn build_request_from_store_with_context(
             "import GitHub candidates before generating a plan".to_owned(),
         ));
     }
+
+    let TaskPreconditionPartition {
+        eligible: task_rows,
+        blocked: blocked_tasks,
+        invalid: invalid_tasks,
+    } = partition_tasks_by_preconditions(pool, task_rows).await?;
 
     let planned_task_ids: HashSet<String> = task_rows.iter().map(|task| task.id.clone()).collect();
     let mut task_bodies = Vec::with_capacity(task_rows.len());
@@ -459,21 +493,25 @@ async fn build_request_from_store_with_context(
     let affect_profile = build_affect_profile(pool).await?;
     let affect_resolution = resolve_affect_observation(pool, &affect_profile, &time_window).await?;
 
-    Ok(PlanningRequestBody {
-        schema_version: Some(PLANNING_SCHEMA_VERSION.to_owned()),
-        request_id,
-        mode,
-        rng_seed: Some(rng_seed),
-        compute_budget: ComputeBudgetBody::default(),
-        strict_validation: false,
-        time_window: Some(time_window),
-        task_graph: Some(task_graph),
-        repair_context,
-        affect_profile: Some(affect_resolution.profile),
-        affect_observation: Some(affect_resolution.observation),
-        affect_warning: affect_resolution.warning,
-        scoring_policy: ScoringPolicyBody::default(),
-        tasks: task_bodies,
+    Ok(StorePlanningRequest {
+        request: PlanningRequestBody {
+            schema_version: Some(PLANNING_SCHEMA_VERSION.to_owned()),
+            request_id,
+            mode,
+            rng_seed: Some(rng_seed),
+            compute_budget: ComputeBudgetBody::default(),
+            strict_validation: false,
+            time_window: Some(time_window),
+            task_graph: Some(task_graph),
+            repair_context,
+            affect_profile: Some(affect_resolution.profile),
+            affect_observation: Some(affect_resolution.observation),
+            affect_warning: affect_resolution.warning,
+            scoring_policy: ScoringPolicyBody::default(),
+            tasks: task_bodies,
+        },
+        blocked_tasks,
+        invalid_tasks,
     })
 }
 
@@ -1353,9 +1391,129 @@ fn diagnostics_from_kernel(diagnostics: Vec<ubu_planning_core::Diagnostic>) -> V
         .collect()
 }
 
+fn precondition_diagnostics(
+    blocked_tasks: &[BlockedTaskBody],
+    invalid_tasks: &[InvalidTaskBody],
+) -> Vec<DiagnosticBody> {
+    let mut diagnostics = Vec::with_capacity(blocked_tasks.len() + invalid_tasks.len());
+    diagnostics.extend(blocked_tasks.iter().map(|task| DiagnosticBody {
+        code: "task_precondition_blocked".to_owned(),
+        message: format!(
+            "Task `{}` was excluded from planning because its UniverseState precondition evaluated false",
+            task.task_id
+        ),
+    }));
+    diagnostics.extend(invalid_tasks.iter().map(|task| DiagnosticBody {
+        code: "task_precondition_invalid".to_owned(),
+        message: format!(
+            "Task `{}` was excluded from planning because its UniverseState precondition is invalid: {}",
+            task.task_id, task.error
+        ),
+    }));
+    diagnostics
+}
+
+#[derive(Debug)]
+struct StorePlanningRequest {
+    request: PlanningRequestBody,
+    blocked_tasks: Vec<BlockedTaskBody>,
+    invalid_tasks: Vec<InvalidTaskBody>,
+}
+
+#[derive(Debug)]
 struct TaskRow {
     id: String,
     payload: Value,
+}
+
+#[derive(Debug)]
+struct TaskPreconditionPartition {
+    eligible: Vec<TaskRow>,
+    blocked: Vec<BlockedTaskBody>,
+    invalid: Vec<InvalidTaskBody>,
+}
+
+async fn partition_tasks_by_preconditions(
+    pool: &sqlx::SqlitePool,
+    tasks: Vec<TaskRow>,
+) -> Result<TaskPreconditionPartition> {
+    let universe_state = current_universe_state(pool).await?;
+    let mut eligible = Vec::with_capacity(tasks.len());
+    let mut blocked = Vec::new();
+    let mut invalid = Vec::new();
+
+    for task in tasks {
+        let Some(raw_precondition) = task.payload.get("preconditions").cloned() else {
+            eligible.push(task);
+            continue;
+        };
+
+        let precondition =
+            match serde_json::from_value::<UniversePrecondition>(raw_precondition.clone()) {
+                Ok(precondition) => precondition,
+                Err(error) => {
+                    invalid.push(InvalidTaskBody {
+                        task_id: task.id,
+                        precondition: raw_precondition,
+                        error: error.to_string(),
+                    });
+                    continue;
+                }
+            };
+
+        match evaluate_universe_precondition(&universe_state, &precondition) {
+            Ok(true) => eligible.push(task),
+            Ok(false) => blocked.push(BlockedTaskBody {
+                task_id: task.id,
+                precondition: precondition_value(&precondition),
+            }),
+            Err(error) => invalid.push(InvalidTaskBody {
+                task_id: task.id,
+                precondition: precondition_value(&precondition),
+                error: precondition_error_message(error),
+            }),
+        }
+    }
+
+    Ok(TaskPreconditionPartition {
+        eligible,
+        blocked,
+        invalid,
+    })
+}
+
+async fn current_universe_state(pool: &sqlx::SqlitePool) -> Result<UniverseState> {
+    let row = sqlx::query(
+        "SELECT payload_json FROM objects
+        WHERE object_type = ?
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT 1",
+    )
+    .bind(ObjectType::UniverseState.as_str())
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    let Some(row) = row else {
+        return Ok(UniverseState::new(
+            UbuTimestamp::now_utc(),
+            "empty UniverseState synthesized by orchestrator",
+        ));
+    };
+
+    let payload_json: String = row
+        .try_get("payload_json")
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    serde_json::from_str(&payload_json)
+        .map_err(|e| AppError::Internal(format!("failed to deserialize UniverseState: {e}")))
+}
+
+fn precondition_value(precondition: &UniversePrecondition) -> Value {
+    serde_json::to_value(precondition).unwrap_or_else(|_| json!({}))
+}
+
+fn precondition_error_message(error: UniversePreconditionError) -> String {
+    error.to_string()
 }
 
 impl From<TimeWindowBody> for TimeWindow {

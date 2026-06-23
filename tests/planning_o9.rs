@@ -126,6 +126,118 @@ async fn store_backed_request_forwards_duration_estimate_and_correlations() {
 }
 
 #[tokio::test]
+async fn store_backed_request_filters_precondition_blocked_and_invalid_tasks() {
+    let state = test_state().await;
+    admit_universe_state(
+        &state,
+        json!({
+            "ticket.status": "ready"
+        }),
+    )
+    .await;
+
+    let no_precondition =
+        admit_task(&state, "No precondition", json!({"duration_minutes": 10})).await;
+    let satisfied = admit_task(
+        &state,
+        "Satisfied",
+        json!({
+            "duration_minutes": 10,
+            "preconditions": {
+                "target": "facts.ticket.status",
+                "predicate": "equals",
+                "expected": "ready"
+            }
+        }),
+    )
+    .await;
+    let blocked = admit_task(
+        &state,
+        "Blocked",
+        json!({
+            "duration_minutes": 10,
+            "preconditions": {
+                "target": "facts.ticket.status",
+                "predicate": "equals",
+                "expected": "done"
+            }
+        }),
+    )
+    .await;
+    let invalid = admit_task(
+        &state,
+        "Invalid",
+        json!({
+            "duration_minutes": 10,
+            "preconditions": {
+                "target": "not_a_collection.ticket.status",
+                "predicate": "equals",
+                "expected": "ready"
+            }
+        }),
+    )
+    .await;
+    let unknown_absent = admit_task(
+        &state,
+        "Unknown absent",
+        json!({
+            "duration_minutes": 10,
+            "preconditions": {
+                "target": "facts.ticket.owner",
+                "predicate": "absent"
+            }
+        }),
+    )
+    .await;
+
+    let request = planning_service::build_request_from_store(&state)
+        .await
+        .expect("request");
+    let planned_task_ids = request
+        .tasks
+        .iter()
+        .map(|task| task.id.clone())
+        .collect::<Vec<_>>();
+
+    assert!(planned_task_ids.contains(&no_precondition));
+    assert!(planned_task_ids.contains(&satisfied));
+    assert!(planned_task_ids.contains(&unknown_absent));
+    assert!(!planned_task_ids.contains(&blocked));
+    assert!(!planned_task_ids.contains(&invalid));
+
+    let app = ubu_orchestrator::build_router(state);
+    let response = app
+        .oneshot(json_request(
+            "/planning/generate",
+            json!({"schema_version": PLANNING_SCHEMA_VERSION}),
+        ))
+        .await
+        .expect("generate response");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = json_body(response).await;
+    assert_eq!(body["blocked_tasks"][0]["task_id"], blocked);
+    assert_eq!(
+        body["blocked_tasks"][0]["precondition"]["target"],
+        "facts.ticket.status"
+    );
+    assert_eq!(body["invalid_tasks"][0]["task_id"], invalid);
+    assert!(body["invalid_tasks"][0]["error"]
+        .as_str()
+        .expect("invalid error")
+        .contains("malformed precondition"));
+
+    let diagnostic_codes = body["diagnostics"]
+        .as_array()
+        .expect("diagnostics")
+        .iter()
+        .filter_map(|diagnostic| diagnostic["code"].as_str())
+        .collect::<Vec<_>>();
+    assert!(diagnostic_codes.contains(&"task_precondition_blocked"));
+    assert!(diagnostic_codes.contains(&"task_precondition_invalid"));
+}
+
+#[tokio::test]
 async fn store_backed_request_defaults_missing_model_to_fixed_independent() {
     let state = test_state().await;
     admit_task(&state, "Default duration task", json!({})).await;
@@ -763,6 +875,32 @@ async fn admit_task(state: &AppState, title: &str, extra: Value) -> String {
     )
     .await
     .expect("task admitted");
+    id
+}
+
+async fn admit_universe_state(state: &AppState, facts: Value) -> String {
+    let id = UbuId::new(ObjectType::UniverseState).to_string();
+    let now = UbuTimestamp::now_utc().to_string();
+    queries::admit_object(
+        state.inner().store.pool(),
+        NewObjectRecord {
+            id: id.clone(),
+            object_type: ObjectType::UniverseState.as_str().to_owned(),
+            version: 1,
+            status: "active".to_owned(),
+            compartment_label: "test".to_owned(),
+            payload: json!({
+                "id": id,
+                "captured_at": now,
+                "facts": facts,
+                "source_summary": "test UniverseState"
+            }),
+            created_at: now.clone(),
+            updated_at: now,
+        },
+    )
+    .await
+    .expect("UniverseState admitted");
     id
 }
 

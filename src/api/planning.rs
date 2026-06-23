@@ -290,10 +290,29 @@ pub struct PlanningResponseBody {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub legitimization: Option<LegitimizationReportBody>,
     pub diagnostics: Vec<DiagnosticBody>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked_tasks: Vec<BlockedTaskBody>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub invalid_tasks: Vec<InvalidTaskBody>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub risk_report: Option<RiskReportResponse>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub human_complete_plan_quality: Option<HumanCompletePlanQualityResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct BlockedTaskBody {
+    pub task_id: String,
+    pub precondition: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct InvalidTaskBody {
+    pub task_id: String,
+    pub precondition: serde_json::Value,
+    pub error: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

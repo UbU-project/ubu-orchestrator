@@ -2288,7 +2288,7 @@ dependencies = [
 [[package]]
 name = "ubu_core"
 version = "0.1.0"
-source = "git+https://github.com/UbU-project/ubu-core?rev=77640fef718c16b987e3e4a26766f279ad62836a#77640fef718c16b987e3e4a26766f279ad62836a"
+source = "git+https://github.com/UbU-project/ubu-core?rev=22445a2e0702291b845e325257f4fb151ba648cf#22445a2e0702291b845e325257f4fb151ba648cf"
 dependencies = [
  "regex",
  "serde",
@@ -2326,7 +2326,7 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
- "ubu_core 0.1.0 (git+https://github.com/UbU-project/ubu-core?rev=77640fef718c16b987e3e4a26766f279ad62836a)",
+ "ubu_core 0.1.0 (git+https://github.com/UbU-project/ubu-core?rev=22445a2e0702291b845e325257f4fb151ba648cf)",
  "ubu_github_adapter",
  "ubu_planning_core",
  "ubu_planning_cpu",

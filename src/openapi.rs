@@ -61,6 +61,8 @@ use utoipa::OpenApi;
         crate::api::planning::CorrelationGroupBody,
         crate::api::planning::StaticAnchorBody,
         crate::api::planning::PlanningResponseBody,
+        crate::api::planning::BlockedTaskBody,
+        crate::api::planning::InvalidTaskBody,
         crate::api::planning::PlanBody,
         crate::api::planning::PlanCandidateBody,
         crate::api::planning::ProbabilityQualityBody,

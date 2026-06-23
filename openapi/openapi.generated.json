@@ -874,6 +874,19 @@
           "system"
         ]
       },
+      "BlockedTaskBody": {
+        "type": "object",
+        "required": [
+          "task_id",
+          "precondition"
+        ],
+        "properties": {
+          "precondition": {},
+          "task_id": {
+            "type": "string"
+          }
+        }
+      },
       "BootstrapAnswerRequest": {
         "type": "object",
         "required": [
@@ -1548,6 +1561,23 @@
           }
         }
       },
+      "InvalidTaskBody": {
+        "type": "object",
+        "required": [
+          "task_id",
+          "precondition",
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "precondition": {},
+          "task_id": {
+            "type": "string"
+          }
+        }
+      },
       "LegitimizationReportBody": {
         "type": "object",
         "required": [
@@ -2166,6 +2196,12 @@
               "$ref": "#/components/schemas/PlanCandidateBody"
             }
           },
+          "blocked_tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BlockedTaskBody"
+            }
+          },
           "diagnostics": {
             "type": "array",
             "items": {
@@ -2181,6 +2217,12 @@
                 "$ref": "#/components/schemas/HumanCompletePlanQualityResponse"
               }
             ]
+          },
+          "invalid_tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InvalidTaskBody"
+            }
           },
           "legitimization": {
             "oneOf": [
