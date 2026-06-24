@@ -3,7 +3,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use serde_json::{json, Value};
 use sqlx::Row;
 use ubu_core::core::{
-    evaluate_universe_precondition, UniversePrecondition, UniversePreconditionError, UniverseState,
+    evaluate_universe_precondition, validate_precondition_for_mode, InstanceMode,
+    UniversePrecondition, UniversePreconditionError, UniverseState,
 };
 use ubu_core::id_registry::ObjectType;
 use ubu_core::{UbuId, UbuTimestamp};
@@ -439,7 +440,8 @@ async fn build_request_from_store_with_context(
         eligible: task_rows,
         blocked: blocked_tasks,
         invalid: invalid_tasks,
-    } = partition_tasks_by_preconditions(pool, task_rows).await?;
+    } = partition_tasks_by_preconditions(pool, task_rows, crate::instance_mode::MVP_INSTANCE_MODE)
+        .await?;
 
     let planned_task_ids: HashSet<String> = task_rows.iter().map(|task| task.id.clone()).collect();
     let mut task_bodies = Vec::with_capacity(task_rows.len());
@@ -1436,6 +1438,7 @@ struct TaskPreconditionPartition {
 async fn partition_tasks_by_preconditions(
     pool: &sqlx::SqlitePool,
     tasks: Vec<TaskRow>,
+    mode: InstanceMode,
 ) -> Result<TaskPreconditionPartition> {
     let universe_state = current_universe_state(pool).await?;
     let mut eligible = Vec::with_capacity(tasks.len());
@@ -1461,6 +1464,17 @@ async fn partition_tasks_by_preconditions(
                 }
             };
 
+        // An intrinsic-affect precondition under a mode that does not model
+        // intrinsic affect (organization/worker) is invalid, not merely blocked.
+        if let Err(error) = validate_precondition_for_mode(mode, &precondition) {
+            invalid.push(InvalidTaskBody {
+                task_id: task.id,
+                precondition: precondition_value(&precondition),
+                error: error.to_string(),
+            });
+            continue;
+        }
+
         match evaluate_universe_precondition(&universe_state, &precondition) {
             Ok(true) => eligible.push(task),
             Ok(false) => blocked.push(BlockedTaskBody {
@@ -1482,7 +1496,25 @@ async fn partition_tasks_by_preconditions(
     })
 }
 
+/// Read the current (latest) `UniverseState`, synthesizing an empty one when
+/// none has been recorded yet. Used by the precondition path, which evaluates
+/// against an empty universe when nothing has been captured.
 async fn current_universe_state(pool: &sqlx::SqlitePool) -> Result<UniverseState> {
+    Ok(read_current_universe_state(pool).await?.unwrap_or_else(|| {
+        UniverseState::new(
+            UbuTimestamp::now_utc(),
+            "empty UniverseState synthesized by orchestrator",
+        )
+    }))
+}
+
+/// Read the current (latest) persisted `UniverseState`, or `None` when none has
+/// been recorded yet. Shared with the effects path (Wiring-B), which must
+/// distinguish "no current version" from an empty synthesized state because the
+/// store's `persist_universe_state` updates an existing current version in place.
+pub(crate) async fn read_current_universe_state(
+    pool: &sqlx::SqlitePool,
+) -> Result<Option<UniverseState>> {
     let row = sqlx::query(
         "SELECT payload_json FROM objects
         WHERE object_type = ?
@@ -1495,16 +1527,14 @@ async fn current_universe_state(pool: &sqlx::SqlitePool) -> Result<UniverseState
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
     let Some(row) = row else {
-        return Ok(UniverseState::new(
-            UbuTimestamp::now_utc(),
-            "empty UniverseState synthesized by orchestrator",
-        ));
+        return Ok(None);
     };
 
     let payload_json: String = row
         .try_get("payload_json")
         .map_err(|e| AppError::Internal(e.to_string()))?;
     serde_json::from_str(&payload_json)
+        .map(Some)
         .map_err(|e| AppError::Internal(format!("failed to deserialize UniverseState: {e}")))
 }
 
@@ -1552,5 +1582,55 @@ pub fn repair_kernel_request(request: &PlanningRequestBody) -> RepairRequest {
         repair_context: planning_request.repair_context,
         affect_profile: planning_request.affect_profile,
         affect_observation: planning_request.affect_observation,
+    }
+}
+
+#[cfg(test)]
+mod precondition_mode_tests {
+    use super::*;
+    use ubu_store::UbuStore;
+
+    fn intrinsic_affect_precondition_task() -> TaskRow {
+        TaskRow {
+            id: UbuId::new(ObjectType::Task).to_string(),
+            payload: json!({
+                "preconditions": {
+                    "target": "numeric_values.affect.energy",
+                    "predicate": "equals",
+                    "expected": 1.0
+                }
+            }),
+        }
+    }
+
+    #[tokio::test]
+    async fn organization_mode_marks_intrinsic_affect_precondition_invalid() {
+        let store = UbuStore::in_memory().await.expect("store");
+        let partition = partition_tasks_by_preconditions(
+            store.pool(),
+            vec![intrinsic_affect_precondition_task()],
+            InstanceMode::OrganizationMode,
+        )
+        .await
+        .expect("partition");
+        assert_eq!(partition.invalid.len(), 1);
+        assert!(partition.eligible.is_empty());
+        assert!(partition.blocked.is_empty());
+    }
+
+    #[tokio::test]
+    async fn user_mode_permits_intrinsic_affect_precondition() {
+        // user_mode permits intrinsic affect; against an empty universe the
+        // precondition evaluates false, so the task is blocked, not invalid.
+        let store = UbuStore::in_memory().await.expect("store");
+        let partition = partition_tasks_by_preconditions(
+            store.pool(),
+            vec![intrinsic_affect_precondition_task()],
+            InstanceMode::UserMode,
+        )
+        .await
+        .expect("partition");
+        assert!(partition.invalid.is_empty());
+        assert_eq!(partition.blocked.len(), 1);
     }
 }

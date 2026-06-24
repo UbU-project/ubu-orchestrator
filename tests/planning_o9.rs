@@ -893,7 +893,11 @@ async fn admit_universe_state(state: &AppState, facts: Value) -> String {
                 "id": id,
                 "captured_at": now,
                 "facts": facts,
-                "source_summary": "test UniverseState"
+                "source_summary": "test UniverseState",
+                "provenance": {
+                    "created_at": now,
+                    "authority_source": "user"
+                }
             }),
             created_at: now.clone(),
             updated_at: now,

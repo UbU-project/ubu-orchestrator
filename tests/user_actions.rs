@@ -4,6 +4,7 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use sqlx::Row;
 use tower::ServiceExt;
+use ubu_core::core::UniverseState;
 use ubu_core::id_registry::ObjectType;
 use ubu_core::{UbuId, UbuTimestamp};
 use ubu_orchestrator::api::user_action::TASK_ACTION_SCHEMA_VERSION;
@@ -130,10 +131,184 @@ async fn record_action_requires_known_schema_version() {
     assert_eq!(body["diagnostics"][0]["code"], "missing_schema_version");
 }
 
+#[tokio::test]
+async fn complete_applies_task_effects_to_universe_state() {
+    let state = test_state().await;
+    let universe_id = admit_universe_state(&state).await;
+    // success_probability is low on purpose: it is planning metadata and must
+    // not gate application at completion.
+    let task_id = admit_task_with_effects(
+        &state,
+        "Effectful task",
+        json!({
+            "success_probability": 0.01,
+            "mutations": [
+                {
+                    "operation": "set_fact",
+                    "target": "facts.task_outcome",
+                    "payload": "done"
+                },
+                {
+                    "operation": "increment_numeric",
+                    "target": "numeric_values.tasks_completed",
+                    "payload": 1.0
+                }
+            ]
+        }),
+    )
+    .await;
+    let app = ubu_orchestrator::build_router(state.clone());
+
+    let response = app
+        .oneshot(json_request(
+            &format!("/task/{task_id}/action"),
+            json!({ "schema_version": TASK_ACTION_SCHEMA_VERSION, "action": "complete" }),
+        ))
+        .await
+        .expect("action response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert_eq!(body["transition_applied"], true);
+    assert!(
+        body["diagnostics"].as_array().expect("diagnostics").is_empty(),
+        "effect application should not surface diagnostics: {:?}",
+        body["diagnostics"]
+    );
+
+    let row = sqlx::query("SELECT version, payload_json FROM objects WHERE id = ?")
+        .bind(&universe_id)
+        .fetch_one(state.inner().store.pool())
+        .await
+        .expect("universe row");
+    let version: i64 = row.try_get("version").expect("version");
+    let payload_json: String = row.try_get("payload_json").expect("payload");
+    let payload: Value = serde_json::from_str(&payload_json).expect("payload json");
+    assert_eq!(version, 2, "persisted as a new current version");
+    assert_eq!(payload["facts"]["task_outcome"], "done");
+    assert_eq!(payload["numeric_values"]["tasks_completed"], 1.0);
+    assert_eq!(
+        payload["provenance"]["authority_source"], "user",
+        "completing authority carried on the persisted container"
+    );
+}
+
+#[tokio::test]
+async fn complete_without_effects_leaves_universe_state_unchanged() {
+    let state = test_state().await;
+    let universe_id = admit_universe_state(&state).await;
+    let task_id = admit_task(&state, "Effect-free task").await;
+    let app = ubu_orchestrator::build_router(state.clone());
+
+    app.oneshot(json_request(
+        &format!("/task/{task_id}/action"),
+        json!({ "schema_version": TASK_ACTION_SCHEMA_VERSION, "action": "complete" }),
+    ))
+    .await
+    .expect("action response");
+
+    let version: i64 = sqlx::query("SELECT version FROM objects WHERE id = ?")
+        .bind(&universe_id)
+        .fetch_one(state.inner().store.pool())
+        .await
+        .expect("universe row")
+        .try_get("version")
+        .expect("version");
+    assert_eq!(version, 1, "UniverseState untouched when the Task has no effects");
+}
+
+#[tokio::test]
+async fn complete_with_effects_but_no_universe_state_surfaces_diagnostic() {
+    let state = test_state().await;
+    let task_id = admit_task_with_effects(
+        &state,
+        "Effect without universe",
+        json!({
+            "mutations": [
+                { "operation": "set_fact", "target": "facts.task_outcome", "payload": "done" }
+            ]
+        }),
+    )
+    .await;
+    let app = ubu_orchestrator::build_router(state.clone());
+
+    let response = app
+        .oneshot(json_request(
+            &format!("/task/{task_id}/action"),
+            json!({ "schema_version": TASK_ACTION_SCHEMA_VERSION, "action": "complete" }),
+        ))
+        .await
+        .expect("action response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert_eq!(body["transition_applied"], true);
+    assert_eq!(
+        body["diagnostics"][0]["code"],
+        "task_effect_universe_state_absent"
+    );
+}
+
 async fn test_state() -> AppState {
     AppState::in_memory(ServerConfig::from_env())
         .await
         .expect("state")
+}
+
+async fn admit_universe_state(state: &AppState) -> String {
+    let universe = UniverseState::new(UbuTimestamp::now_utc(), "test universe state");
+    let id = universe.id.to_string();
+    let now = UbuTimestamp::now_utc().to_string();
+    let mut payload = serde_json::to_value(&universe).expect("universe serializes");
+    payload["schema_version"] = json!("core/universe-state/0.1");
+    payload["provenance"] = json!({
+        "created_at": now.clone(),
+        "authority_source": "user"
+    });
+    queries::admit_object(
+        state.inner().store.pool(),
+        NewObjectRecord {
+            id: id.clone(),
+            object_type: ObjectType::UniverseState.as_str().to_owned(),
+            version: 1,
+            status: "active".to_owned(),
+            compartment_label: "default".to_owned(),
+            payload,
+            created_at: now.clone(),
+            updated_at: now,
+        },
+    )
+    .await
+    .expect("universe state admitted");
+    id
+}
+
+async fn admit_task_with_effects(state: &AppState, title: &str, effects: Value) -> String {
+    let id = UbuId::new(ObjectType::Task).to_string();
+    let now = UbuTimestamp::now_utc().to_string();
+    queries::admit_object(
+        state.inner().store.pool(),
+        NewObjectRecord {
+            id: id.clone(),
+            object_type: ObjectType::Task.as_str().to_owned(),
+            version: 1,
+            status: "active".to_owned(),
+            compartment_label: "test".to_owned(),
+            payload: json!({
+                "id": id.clone(),
+                "title": title,
+                "status": "active",
+                "effects": effects,
+                "provenance": {
+                    "created_at": now.clone(),
+                    "authority_source": "user"
+                }
+            }),
+            created_at: now.clone(),
+            updated_at: now,
+        },
+    )
+    .await
+    .expect("task admitted");
+    id
 }
 
 async fn admit_task(state: &AppState, title: &str) -> String {

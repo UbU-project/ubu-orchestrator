@@ -2288,7 +2288,7 @@ dependencies = [
 [[package]]
 name = "ubu_core"
 version = "0.1.0"
-source = "git+https://github.com/UbU-project/ubu-core?rev=22445a2e0702291b845e325257f4fb151ba648cf#22445a2e0702291b845e325257f4fb151ba648cf"
+source = "git+https://github.com/UbU-project/ubu-core?rev=2444b76e8eed75040e5a5791d1dce2579f0fe006#2444b76e8eed75040e5a5791d1dce2579f0fe006"
 dependencies = [
  "regex",
  "serde",
@@ -2326,7 +2326,7 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
- "ubu_core 0.1.0 (git+https://github.com/UbU-project/ubu-core?rev=22445a2e0702291b845e325257f4fb151ba648cf)",
+ "ubu_core 0.1.0 (git+https://github.com/UbU-project/ubu-core?rev=2444b76e8eed75040e5a5791d1dce2579f0fe006)",
  "ubu_github_adapter",
  "ubu_planning_core",
  "ubu_planning_cpu",
@@ -2357,7 +2357,7 @@ dependencies = [
 [[package]]
 name = "ubu_store"
 version = "0.1.0"
-source = "git+https://github.com/UbU-project/ubu-store?rev=12e2d563a6ebe941645a5544cbbdd40d2f2375fe#12e2d563a6ebe941645a5544cbbdd40d2f2375fe"
+source = "git+https://github.com/UbU-project/ubu-store?rev=2132c22fc05b163fdb3d8963a07a704b4b42c62f#2132c22fc05b163fdb3d8963a07a704b4b42c62f"
 dependencies = [
  "serde",
  "serde_json",
@@ -2365,7 +2365,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
- "ubu_core 0.1.0 (git+https://github.com/UbU-project/ubu-core?rev=139ce98a2dce40f8e73f472344d5cc4a8eb59db1)",
+ "ubu_core 0.1.0 (git+https://github.com/UbU-project/ubu-core?rev=2444b76e8eed75040e5a5791d1dce2579f0fe006)",
 ]
 
 [[package]]

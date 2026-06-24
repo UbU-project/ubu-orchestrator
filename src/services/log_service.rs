@@ -1,16 +1,18 @@
 use serde_json::json;
+use ubu_core::core::{apply_universe_mutations, validate_mutations_for_mode, InstanceMode, TaskEffect};
 use ubu_core::id_registry::ObjectType;
 use ubu_core::{AuthoritySource, UbuId, UbuTimestamp};
 use ubu_store::models::log_record::NewLogRecord;
 use ubu_store::queries;
 
 use crate::api::user_action::{
-    LogEntryResponse, RecordedTaskActionKind, RecordedTaskActionRequest,
+    ActionDiagnostic, LogEntryResponse, RecordedTaskActionKind, RecordedTaskActionRequest,
     RecordedTaskActionResponse, TaskActionKind, TaskLifecycleStatus, UserActionRequest,
     TASK_ACTION_SCHEMA_VERSION,
 };
 use crate::errors::{AppError, Result};
-use crate::services::recalculation_service;
+use crate::instance_mode::MVP_INSTANCE_MODE;
+use crate::services::{planning_service, recalculation_service};
 use crate::state::AppState;
 
 pub async fn record_task_action(
@@ -23,8 +25,14 @@ pub async fn record_task_action(
     let pool = state.inner().store.pool();
     let mut task = load_task(pool, &task_id).await?;
     let authority_source = authority_for_recorded_action(request.action);
+    let mut diagnostics = Vec::new();
     let transition_applied = if matches!(request.action, RecordedTaskActionKind::Complete) {
         apply_completed_transition(pool, &mut task).await?;
+        // A completed Task applies its effects to UniverseState; the effect
+        // applies because the Task completed, so success_probability is ignored.
+        diagnostics.extend(
+            apply_completed_effects(pool, &task, authority_source, MVP_INSTANCE_MODE).await?,
+        );
         true
     } else {
         false
@@ -66,7 +74,6 @@ pub async fn record_task_action(
     .await
     .map_err(AppError::from)?;
 
-    let mut diagnostics = Vec::new();
     if matches!(request.action, RecordedTaskActionKind::Snooze) {
         // TODO(O6-snooze-readiness): Snooze records a defer decision only;
         // snooze-aware readiness is intentionally deferred out of this slice.
@@ -210,6 +217,71 @@ async fn apply_completed_transition(
     Ok(())
 }
 
+/// Apply a completed Task's effects to the current `UniverseState` (§10.2).
+///
+/// The effect applies because the Task completed, so `success_probability` is
+/// planning metadata only and never gates application here. Effects mutations
+/// are validated against the instance mode (Wiring-B) and applied with the pure
+/// `ubu-core` applicator (C9); the result is persisted as a new current version
+/// through the store's `persist_universe_state` (ST7) under the completing
+/// action's authority. No SQL is written against UniverseState. Mode or
+/// application failures surface as diagnostics without partially persisting.
+///
+/// Only completed transitions reach this path; a Task that transitions to
+/// `failed` applies nothing.
+async fn apply_completed_effects(
+    pool: &sqlx::SqlitePool,
+    task: &TaskForTransition,
+    authority_source: AuthoritySource,
+    mode: InstanceMode,
+) -> Result<Vec<ActionDiagnostic>> {
+    let Some(effects_value) = task.payload.get("effects") else {
+        return Ok(Vec::new());
+    };
+    let effect: TaskEffect = serde_json::from_value(effects_value.clone())
+        .map_err(|e| AppError::Internal(format!("failed to deserialize task effects: {e}")))?;
+
+    // `success_probability` is intentionally ignored: completion, not the
+    // predicted probability, is what makes the effect apply.
+    if effect.mutations.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Mode validation: an intrinsic-affect mutation target under a mode that
+    // does not model intrinsic affect makes the effect invalid (surfaced
+    // distinctly); `user_mode` always permits.
+    if let Err(error) = validate_mutations_for_mode(mode, &effect.mutations) {
+        return Ok(vec![ActionDiagnostic {
+            code: "task_effect_mode_invalid".to_owned(),
+            message: error.to_string(),
+        }]);
+    }
+
+    let Some(current_state) = planning_service::read_current_universe_state(pool).await? else {
+        return Ok(vec![ActionDiagnostic {
+            code: "task_effect_universe_state_absent".to_owned(),
+            message: "no current UniverseState exists; completed Task effects were not applied"
+                .to_owned(),
+        }]);
+    };
+
+    let next_state = match apply_universe_mutations(&current_state, &effect.mutations) {
+        Ok(next_state) => next_state,
+        Err(error) => {
+            return Ok(vec![ActionDiagnostic {
+                code: "task_effect_application_failed".to_owned(),
+                message: error.to_string(),
+            }]);
+        }
+    };
+
+    queries::persist_universe_state(pool, &next_state, authority_source)
+        .await
+        .map_err(AppError::from)?;
+
+    Ok(Vec::new())
+}
+
 fn validate_schema_version(schema_version: Option<&str>) -> Result<()> {
     match schema_version {
         Some(TASK_ACTION_SCHEMA_VERSION) => Ok(()),
@@ -262,5 +334,64 @@ fn task_status_from_wire(status: &str) -> Result<TaskLifecycleStatus> {
         other => Err(AppError::Internal(format!(
             "stored Task has unsupported lifecycle status `{other}`"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod effect_mode_tests {
+    use super::*;
+    use ubu_store::UbuStore;
+
+    fn completed_task_with_effects(effects: serde_json::Value) -> TaskForTransition {
+        TaskForTransition {
+            id: UbuId::new(ObjectType::Task).to_string(),
+            status: "completed".to_owned(),
+            payload: json!({ "effects": effects }),
+        }
+    }
+
+    fn intrinsic_affect_effect() -> serde_json::Value {
+        json!({
+            "mutations": [
+                {
+                    "operation": "increment_numeric",
+                    "target": "numeric_values.affect.energy",
+                    "payload": 1.0
+                }
+            ]
+        })
+    }
+
+    #[tokio::test]
+    async fn organization_mode_rejects_intrinsic_affect_effect() {
+        let store = UbuStore::in_memory().await.expect("store");
+        let task = completed_task_with_effects(intrinsic_affect_effect());
+        let diagnostics = apply_completed_effects(
+            store.pool(),
+            &task,
+            AuthoritySource::User,
+            InstanceMode::OrganizationMode,
+        )
+        .await
+        .expect("effects evaluated");
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, "task_effect_mode_invalid");
+    }
+
+    #[tokio::test]
+    async fn user_mode_permits_intrinsic_affect_effect() {
+        // user_mode models intrinsic affect, so the mode check passes; with no
+        // current UniverseState the effect simply has nowhere to persist.
+        let store = UbuStore::in_memory().await.expect("store");
+        let task = completed_task_with_effects(intrinsic_affect_effect());
+        let diagnostics = apply_completed_effects(
+            store.pool(),
+            &task,
+            AuthoritySource::User,
+            InstanceMode::UserMode,
+        )
+        .await
+        .expect("effects evaluated");
+        assert_eq!(diagnostics[0].code, "task_effect_universe_state_absent");
     }
 }

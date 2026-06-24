@@ -2,6 +2,7 @@ pub mod adapters;
 pub mod api;
 pub mod config;
 pub mod errors;
+pub mod instance_mode;
 pub mod openapi;
 pub mod reports;
 pub mod router;
