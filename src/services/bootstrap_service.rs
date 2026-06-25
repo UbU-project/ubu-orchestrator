@@ -1,5 +1,6 @@
 use serde_json::{json, Value};
 use sqlx::Row;
+use ubu_core::core::UniverseState;
 use ubu_core::id_registry::ObjectType;
 use ubu_core::{AuthoritySource, UbuId, UbuTimestamp};
 use ubu_store::models::object_record::NewObjectRecord;
@@ -47,20 +48,22 @@ pub async fn seed(state: AppState, request: BootstrapSeedRequest) -> Result<Boot
     let preference_ids = admit_preferences(pool, &request).await?;
 
     let imported_tasks = import_service::import_live(
-        state,
+        state.clone(),
         ImportLiveRequest {
-            owner: request.selected_repo.owner,
-            repo: request.selected_repo.repo,
+            owner: request.selected_repo.owner.clone(),
+            repo: request.selected_repo.repo.clone(),
             session_token: None,
             objective_id: Some(objective_id.clone()),
         },
     )
     .await?;
+    let universe_state_id = admit_universe_state(pool, &request).await?;
 
     Ok(BootstrapSeedResponse {
         schema_version: BOOTSTRAP_SCHEMA_VERSION.to_owned(),
         objective_ids: vec![objective_id],
         preference_ids,
+        universe_state_id,
         imported_tasks,
         diagnostics: vec![BootstrapDiagnostic {
             code: "bootstrap_seeded".to_owned(),
@@ -217,6 +220,67 @@ async fn admit_preferences(
     }
 
     Ok(admitted)
+}
+
+async fn admit_universe_state(
+    pool: &sqlx::SqlitePool,
+    request: &BootstrapSeedRequest,
+) -> Result<String> {
+    let captured_at = UbuTimestamp::now_utc();
+    let created_at = captured_at.to_string();
+    let mut universe_state =
+        UniverseState::new(captured_at, "initial UniverseState from bootstrap answers");
+    let universe_state_id = universe_state.id.to_string();
+    let repo = format!(
+        "{}/{}",
+        request.selected_repo.owner, request.selected_repo.repo
+    );
+
+    universe_state.facts.insert(
+        "facts.operator.work_style".to_owned(),
+        json!(work_style_value(request.answers.work_style)),
+    );
+    universe_state.facts.insert(
+        "facts.operator.attention_preference".to_owned(),
+        json!(attention_preference_value(
+            request.answers.attention_preference
+        )),
+    );
+    universe_state
+        .facts
+        .insert("facts.project.repository".to_owned(), json!(repo));
+    universe_state.facts.insert(
+        "facts.project.objective".to_owned(),
+        json!(request.answers.primary_objective.trim()),
+    );
+    universe_state.numeric_values.insert(
+        "numeric_values.operator.planning_horizon_days".to_owned(),
+        f64::from(request.answers.planning_horizon_days),
+    );
+
+    let mut payload =
+        serde_json::to_value(&universe_state).map_err(|e| AppError::Internal(e.to_string()))?;
+    payload["schema_version"] = json!("core/universe-state/0.1");
+    payload["set_memberships"] = json!({});
+    payload["event_markers"] = json!({});
+    payload["provenance"] = bootstrap_provenance(&created_at);
+
+    let record = NewObjectRecord {
+        id: universe_state_id.clone(),
+        object_type: ObjectType::UniverseState.as_str().to_owned(),
+        version: 1,
+        status: "active".to_owned(),
+        compartment_label: "bootstrap".to_owned(),
+        payload,
+        created_at: created_at.clone(),
+        updated_at: created_at,
+    };
+
+    queries::admit_object(pool, record)
+        .await
+        .map_err(AppError::from)?;
+
+    Ok(universe_state_id)
 }
 
 async fn admit_preference(pool: &sqlx::SqlitePool, name: &str, value: Value) -> Result<String> {

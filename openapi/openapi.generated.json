@@ -996,6 +996,7 @@
           "schema_version",
           "objective_ids",
           "preference_ids",
+          "universe_state_id",
           "imported_tasks",
           "diagnostics"
         ],
@@ -1022,6 +1023,9 @@
             }
           },
           "schema_version": {
+            "type": "string"
+          },
+          "universe_state_id": {
             "type": "string"
           }
         }

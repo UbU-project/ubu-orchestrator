@@ -39,17 +39,27 @@ async fn seed_admits_bootstrap_state_and_imports_selected_repo_tasks() {
     assert_eq!(body["schema_version"], BOOTSTRAP_SCHEMA_VERSION);
     assert_eq!(body["objective_ids"].as_array().unwrap().len(), 1);
     assert_eq!(body["preference_ids"].as_array().unwrap().len(), 3);
+    let universe_state_id = body["universe_state_id"]
+        .as_str()
+        .expect("universe_state_id");
+    assert!(
+        universe_state_id.starts_with("ustate_"),
+        "UniverseState id uses the canonical prefix"
+    );
     assert_eq!(body["imported_tasks"]["admitted_to_store"], 1);
 
-    let rows = sqlx::query("SELECT object_type, payload_json FROM objects ORDER BY object_type")
-        .fetch_all(state.inner().store.pool())
-        .await
-        .expect("objects query");
+    let rows =
+        sqlx::query("SELECT id, object_type, payload_json FROM objects ORDER BY object_type")
+            .fetch_all(state.inner().store.pool())
+            .await
+            .expect("objects query");
 
     let mut objective_count = 0;
     let mut preference_count = 0;
     let mut task_count = 0;
+    let mut universe_state_count = 0;
     for row in rows {
+        let id: String = row.try_get("id").expect("id");
         let object_type: String = row.try_get("object_type").expect("object_type");
         let payload_json: String = row.try_get("payload_json").expect("payload_json");
         let payload: Value = serde_json::from_str(&payload_json).expect("payload");
@@ -77,6 +87,31 @@ async fn seed_admits_bootstrap_state_and_imports_selected_repo_tasks() {
                     "UbU-project/ubu-orchestrator"
                 );
             }
+            "UniverseState" => {
+                universe_state_count += 1;
+                assert_eq!(id, universe_state_id);
+                assert_eq!(payload["id"], universe_state_id);
+                assert_eq!(payload["schema_version"], "core/universe-state/0.1");
+                assert_eq!(payload["provenance"]["authority_source"], "user");
+                assert_eq!(payload["provenance"]["source"]["source_kind"], "bootstrap");
+                assert_eq!(
+                    payload["facts"],
+                    json!({
+                        "facts.operator.work_style": "focused",
+                        "facts.operator.attention_preference": "deep_work",
+                        "facts.project.repository": "UbU-project/ubu-orchestrator",
+                        "facts.project.objective": "Keep the orchestrator useful"
+                    })
+                );
+                assert_eq!(
+                    payload["numeric_values"],
+                    json!({
+                        "numeric_values.operator.planning_horizon_days": 7.0
+                    })
+                );
+                assert_eq!(payload["set_memberships"], json!({}));
+                assert_eq!(payload["event_markers"], json!({}));
+            }
             _ => {}
         }
     }
@@ -84,6 +119,7 @@ async fn seed_admits_bootstrap_state_and_imports_selected_repo_tasks() {
     assert_eq!(objective_count, 1);
     assert_eq!(preference_count, 3);
     assert_eq!(task_count, 1);
+    assert_eq!(universe_state_count, 1);
 }
 
 #[tokio::test]
@@ -120,13 +156,14 @@ async fn seed_rejects_second_run_without_duplicating_bootstrap_objects() {
     assert_eq!(body["diagnostics"][0]["code"], "bootstrap_already_seeded");
 
     let row = sqlx::query(
-        "SELECT COUNT(*) AS count FROM objects WHERE object_type IN ('Objective', 'Preference')",
+        "SELECT COUNT(*) AS count FROM objects
+        WHERE object_type IN ('Objective', 'Preference', 'UniverseState')",
     )
     .fetch_one(state.inner().store.pool())
     .await
     .expect("count query");
     let count: i64 = row.try_get("count").expect("count");
-    assert_eq!(count, 4);
+    assert_eq!(count, 5);
 }
 
 #[tokio::test]
