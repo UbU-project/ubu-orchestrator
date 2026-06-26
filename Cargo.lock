@@ -2301,7 +2301,7 @@ dependencies = [
 [[package]]
 name = "ubu_github_adapter"
 version = "0.1.0"
-source = "git+https://github.com/UbU-project/ubu-github-adapter?rev=d71a169a889a4c0343b9c1970a2afe8db3c60a17#d71a169a889a4c0343b9c1970a2afe8db3c60a17"
+source = "git+https://github.com/UbU-project/ubu-github-adapter?rev=3658e7a473b01bfae0f44f10a07915328766c690#3658e7a473b01bfae0f44f10a07915328766c690"
 dependencies = [
  "octocrab",
  "serde",
@@ -2309,7 +2309,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
- "ubu_core 0.1.0 (git+https://github.com/UbU-project/ubu-core?rev=139ce98a2dce40f8e73f472344d5cc4a8eb59db1)",
+ "ubu_core 0.1.0 (git+https://github.com/UbU-project/ubu-core?rev=2444b76e8eed75040e5a5791d1dce2579f0fe006)",
 ]
 
 [[package]]

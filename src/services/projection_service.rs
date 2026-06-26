@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -14,6 +15,9 @@ use ubu_core::{
     AuthoritySource, Legitimization, ObjectRef, PolicySummary, Provenance, SourceRef, UbuId,
     UbuTimestamp,
 };
+use ubu_github_adapter::auth::GitHubAuth;
+use ubu_github_adapter::client::{GitHubClient, RecordingGitHubApi};
+use ubu_github_adapter::errors::AdapterError;
 use ubu_github_adapter::markers::is_managed_label;
 use ubu_github_adapter::projection::labels::{
     apply_managed_label, managed_label_preflight, remove_managed_label,
@@ -22,6 +26,10 @@ use ubu_github_adapter::projection::operations::{
     GitHubProjectionOperation, GitHubProjectionOperationKind, GitHubProjectionPayload,
     GitHubProjectionTarget,
 };
+use ubu_github_adapter::projection::{
+    apply_managed_label_write, read_managed_label_observation, GitHubLabelWrite,
+};
+use ubu_github_adapter::sources::GitHubRepositorySource;
 use ubu_store::models::log_record::NewLogRecord;
 use ubu_store::models::object_record::NewObjectRecord;
 use ubu_store::models::projection_record::{NewProjectionPreviewRecord, NewProjectionResultRecord};
@@ -36,6 +44,7 @@ use crate::api::projection::{
     PROJECTION_EXTERNAL_ACCEPT_SCHEMA_VERSION, PROJECTION_PREVIEW_SCHEMA_VERSION,
     PROJECTION_RECONCILIATION_SCHEMA_VERSION, PROJECTION_RESULT_SCHEMA_VERSION,
 };
+use crate::config::ProjectionExportMode;
 use crate::errors::{AppError, Result};
 use crate::state::AppState;
 
@@ -160,10 +169,37 @@ pub async fn approve(
         .policy_summary
         .clone()
         .unwrap_or_else(|| stored.policy_summary.clone());
+    let Some(github_client) = projection_github_client(&state).await? else {
+        let operation_results = stored
+            .github_operations
+            .iter()
+            .map(|operation| OperationResult {
+                operation_id: operation.operation_id.clone(),
+                status: OperationResultStatus::Failed,
+                message: Some(
+                    "live GitHub projection export has no desktop session token".to_owned(),
+                ),
+            })
+            .collect::<Vec<_>>();
+        let diagnostics = vec![ProjectionDiagnostic {
+            code: "missing_github_session_token".to_owned(),
+            message: "live GitHub projection export requires an in-memory desktop session token"
+                .to_owned(),
+            operation_id: None,
+        }];
+        let result = ProjectionResult {
+            preview_id: stored.preview.id.clone(),
+            applied_at: UbuTimestamp::now_utc(),
+            status: ProjectionResultStatus::Failed,
+            operation_results,
+        };
+        persist_result(pool, &result, diagnostics.clone()).await?;
+        return result_response(&result, diagnostics);
+    };
 
     let mut operation_results = Vec::new();
     let mut diagnostics = Vec::new();
-    for operation in &stored.github_operations {
+    for (index, operation) in stored.github_operations.iter().enumerate() {
         let core_operation = preview_operation(&stored.preview, operation)?;
         let adjudication = gate_export_operation(
             core_operation,
@@ -192,19 +228,58 @@ pub async fn approve(
                     });
                     continue;
                 };
-                match apply_mock_managed_label_write(pool, &stored.preview.id, operation, permit)
-                    .await
-                {
+                if let Err(message) = assert_operation_payload_managed(operation) {
+                    operation_results.push(OperationResult {
+                        operation_id: operation.operation_id.clone(),
+                        status: OperationResultStatus::Failed,
+                        message: Some(message),
+                    });
+                    continue;
+                }
+                if let Err(error) = ensure_permit_matches(operation, permit) {
+                    operation_results.push(OperationResult {
+                        operation_id: operation.operation_id.clone(),
+                        status: OperationResultStatus::Failed,
+                        message: Some(error.to_string()),
+                    });
+                    continue;
+                }
+                match apply_managed_label_operation(&github_client, operation, permit).await {
                     Ok(message) => operation_results.push(OperationResult {
                         operation_id: operation.operation_id.clone(),
                         status: OperationResultStatus::Applied,
                         message: Some(message),
                     }),
-                    Err(error) => operation_results.push(OperationResult {
-                        operation_id: operation.operation_id.clone(),
-                        status: OperationResultStatus::Failed,
-                        message: Some(error.to_string()),
-                    }),
+                    Err(error) => {
+                        let message = error.to_string();
+                        operation_results.push(OperationResult {
+                            operation_id: operation.operation_id.clone(),
+                            status: OperationResultStatus::Failed,
+                            message: Some(message.clone()),
+                        });
+                        if error.is_rate_limit_or_transport_failure() {
+                            diagnostics.push(ProjectionDiagnostic {
+                                code: "github_projection_transport_aborted".to_owned(),
+                                message:
+                                    "GitHub projection batch stopped after a rate-limit or transport failure"
+                                        .to_owned(),
+                                operation_id: Some(operation.operation_id.clone()),
+                            });
+                            operation_results.extend(
+                                stored.github_operations[index + 1..]
+                                    .iter()
+                                    .map(|remaining| OperationResult {
+                                        operation_id: remaining.operation_id.clone(),
+                                        status: OperationResultStatus::Skipped,
+                                        message: Some(
+                                            "not applied because an earlier GitHub write hit a rate-limit or transport failure"
+                                                .to_owned(),
+                                        ),
+                                    }),
+                            );
+                            break;
+                        }
+                    }
                 }
             }
             Legitimization::NeedsReview | Legitimization::Rejected => {
@@ -246,7 +321,18 @@ pub async fn reconcile(
     let last_result = load_last_applied_result(pool).await?;
     let preview = load_preview(pool, &last_result.preview_id).await?;
     let preview_batch = batch_from_stored(&preview);
-    let observed = request.observed_labels.into_iter().collect::<BTreeSet<_>>();
+    let observed = match state.inner().config.github_projection_export_mode() {
+        ProjectionExportMode::Live => {
+            let Some(github_client) = projection_github_client(&state).await? else {
+                return Err(AppError::bad_request_diagnostic(
+                    "missing_github_session_token",
+                    "live GitHub projection reconciliation requires an in-memory desktop session token",
+                ));
+            };
+            read_live_managed_labels(&github_client, &preview_batch).await?
+        }
+        ProjectionExportMode::Mock => request.observed_labels.into_iter().collect::<BTreeSet<_>>(),
+    };
     let conflicts = reconciliation_conflicts(&preview_batch, &last_result.result, &observed);
     let status = if conflicts.is_empty() {
         "matched"
@@ -769,13 +855,119 @@ async fn append_boundary_log(
     Ok(())
 }
 
-async fn apply_mock_managed_label_write(
-    pool: &sqlx::SqlitePool,
-    preview_id: &UbuId,
+async fn projection_github_client(state: &AppState) -> Result<Option<GitHubClient>> {
+    match state.inner().config.github_projection_export_mode() {
+        ProjectionExportMode::Mock => Ok(Some(GitHubClient::recording(Arc::new(
+            RecordingGitHubApi::new(),
+        )))),
+        ProjectionExportMode::Live => {
+            let token = state.inner().desktop_session_token.lock().await.clone();
+            let Some(token) = token else {
+                return Ok(None);
+            };
+            let auth = GitHubAuth::from_session_token(token.expose_for_adapter().to_owned())
+                .map_err(adapter_app_error)?;
+            GitHubClient::from_auth(auth)
+                .map(Some)
+                .map_err(adapter_app_error)
+        }
+    }
+}
+
+async fn apply_managed_label_operation(
+    client: &GitHubClient,
     operation: &GitHubProjectionOperation,
     permit: &ExportPermit,
-) -> Result<String> {
-    ensure_operation_payload_managed(operation)?;
+) -> std::result::Result<String, AdapterError> {
+    match (&operation.kind, &operation.payload) {
+        (
+            GitHubProjectionOperationKind::ManagedLabelPreflight,
+            GitHubProjectionPayload::ManagedLabelPreflight(payload),
+        ) => {
+            for label in &payload.missing_labels {
+                let color = if label == "ubu" { "5319e7" } else { "0e8a16" };
+                client
+                    .api()
+                    .create_label(
+                        &operation.target.owner,
+                        &operation.target.repo,
+                        label,
+                        color,
+                        "UbU managed label",
+                    )
+                    .await?;
+            }
+            Ok("managed labels ensured".to_owned())
+        }
+        (GitHubProjectionOperationKind::ApplyLabel, GitHubProjectionPayload::Label { label }) => {
+            let issue_number = issue_number(operation)?;
+            let payload = GitHubLabelWrite {
+                repository: repository_source(&operation.target),
+                issue_number,
+                labels: vec![label.clone()],
+            };
+            let result =
+                apply_managed_label_write(client, &payload, permit.authority_source()).await?;
+            Ok(format!(
+                "managed labels applied: {}",
+                result.applied_labels.join(", ")
+            ))
+        }
+        (GitHubProjectionOperationKind::RemoveLabel, GitHubProjectionPayload::Label { label }) => {
+            let issue_number = issue_number(operation)?;
+            client
+                .api()
+                .remove_label_from_issue(
+                    &operation.target.owner,
+                    &operation.target.repo,
+                    issue_number,
+                    label,
+                )
+                .await?;
+            Ok(format!("managed label removed: {label}"))
+        }
+        _ => Err(AdapterError::ForbiddenProjectionOperation {
+            reason: format!(
+                "operation {} has mismatched payload",
+                operation.operation_id
+            ),
+        }),
+    }
+}
+
+async fn read_live_managed_labels(
+    client: &GitHubClient,
+    preview: &ProjectionPreviewBatch,
+) -> Result<BTreeSet<String>> {
+    let Some(target) = preview
+        .github_operations
+        .iter()
+        .map(|operation| &operation.target)
+        .find(|target| target.issue_number.is_some())
+    else {
+        return Err(AppError::bad_request_diagnostic(
+            "missing_projection_issue_target",
+            "live GitHub projection reconciliation requires an issue target",
+        ));
+    };
+
+    let issue_number = target.issue_number.ok_or_else(|| {
+        AppError::bad_request_diagnostic(
+            "missing_projection_issue_target",
+            "live GitHub projection reconciliation requires an issue target",
+        )
+    })?;
+    let observation =
+        read_managed_label_observation(client, &repository_source(target), issue_number)
+            .await
+            .map_err(adapter_app_error)?;
+    Ok(observation.labels.into_iter().collect())
+}
+
+fn ensure_permit_matches(
+    operation: &GitHubProjectionOperation,
+    permit: &ExportPermit,
+) -> Result<()> {
     if permit.operation_id() != operation.operation_id {
         return Err(AppError::Internal(format!(
             "core export permit for `{}` cannot authorize operation `{}`",
@@ -783,51 +975,55 @@ async fn apply_mock_managed_label_write(
             operation.operation_id
         )));
     }
-    let now = UbuTimestamp::now_utc().to_string();
-    let authority_source = authority_source_wire(permit.authority_source())?;
-    let payload = json!({
-        "schema_version": PROJECTION_RESULT_SCHEMA_VERSION,
-        "operation": operation,
-        "authority_source": authority_source,
-    });
-    sqlx::query(
-        "INSERT INTO projection_worker_writes
-        (id, preview_id, operation_id, authority_source, payload_json, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)",
-    )
-    .bind(UbuId::new(ObjectType::AutomationWorker).to_string())
-    .bind(preview_id.to_string())
-    .bind(&operation.operation_id)
-    .bind(authority_source)
-    .bind(serde_json::to_string(&payload).map_err(|e| AppError::Internal(e.to_string()))?)
-    .bind(now)
-    .execute(pool)
-    .await
-    .map_err(|e| AppError::Internal(e.to_string()))?;
-    Ok("managed-label operation written by automation_worker mock adapter".to_owned())
+    Ok(())
 }
 
-fn ensure_operation_payload_managed(operation: &GitHubProjectionOperation) -> Result<()> {
+fn assert_operation_payload_managed(
+    operation: &GitHubProjectionOperation,
+) -> std::result::Result<(), String> {
     match &operation.payload {
         GitHubProjectionPayload::ManagedLabelPreflight(payload) => {
             for label in &payload.missing_labels {
                 if !is_managed_label(label) {
-                    return Err(AppError::bad_request_diagnostic(
-                        "unmanaged_projection_label",
-                        format!("managed-label preflight contains unmanaged label `{label}`"),
+                    return Err(format!(
+                        "managed-label preflight contains unmanaged label `{label}`"
                     ));
                 }
             }
         }
         GitHubProjectionPayload::Label { label } if is_managed_label(label) => {}
         _ => {
-            return Err(AppError::bad_request_diagnostic(
-                "unsupported_projection_operation",
-                "only managed-label writes are allowed in O7",
-            ));
+            return Err("only managed-label writes are allowed in O19".to_owned());
         }
     }
     Ok(())
+}
+
+fn issue_number(operation: &GitHubProjectionOperation) -> std::result::Result<u64, AdapterError> {
+    operation
+        .target
+        .issue_number
+        .ok_or_else(|| AdapterError::UnsupportedProjectionTarget {
+            source_kind: "github_repository".to_owned(),
+        })
+}
+
+fn repository_source(target: &GitHubProjectionTarget) -> GitHubRepositorySource {
+    GitHubRepositorySource {
+        owner: target.owner.clone(),
+        name: target.repo.clone(),
+        default_branch: "main".to_owned(),
+        html_url: format!("https://github.com/{}/{}", target.owner, target.repo),
+        api_id: 0,
+    }
+}
+
+fn adapter_app_error(error: AdapterError) -> AppError {
+    if error.is_rate_limit_or_transport_failure() {
+        AppError::Upstream(error.to_string())
+    } else {
+        AppError::Internal(error.to_string())
+    }
 }
 
 fn denial_reason(policy_summary: &PolicySummary) -> String {

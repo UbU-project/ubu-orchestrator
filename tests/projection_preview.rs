@@ -7,12 +7,12 @@ use ubu_orchestrator::api::projection::{
     PROJECTION_APPROVAL_SCHEMA_VERSION, PROJECTION_EXTERNAL_ACCEPT_SCHEMA_VERSION,
     PROJECTION_PREVIEW_SCHEMA_VERSION, PROJECTION_RECONCILIATION_SCHEMA_VERSION,
 };
-use ubu_orchestrator::config::ServerConfig;
+use ubu_orchestrator::config::{ProjectionExportMode, ServerConfig};
 use ubu_orchestrator::state::AppState;
 
 #[tokio::test]
 async fn projection_preview_is_deterministic_label_only_and_schema_checked() {
-    let state = AppState::in_memory(ServerConfig::from_env())
+    let state = AppState::in_memory(mock_projection_config())
         .await
         .expect("state");
     let app = ubu_orchestrator::build_router(state);
@@ -63,7 +63,7 @@ async fn projection_preview_is_deterministic_label_only_and_schema_checked() {
 
 #[tokio::test]
 async fn rejected_projection_is_logged_and_not_written() {
-    let state = AppState::in_memory(ServerConfig::from_env())
+    let state = AppState::in_memory(mock_projection_config())
         .await
         .expect("state");
     let pool = state.inner().store.pool().clone();
@@ -102,7 +102,7 @@ async fn rejected_projection_is_logged_and_not_written() {
 
 #[tokio::test]
 async fn reconciliation_surfaces_conflict_and_accepts_external_change() {
-    let state = AppState::in_memory(ServerConfig::from_env())
+    let state = AppState::in_memory(mock_projection_config())
         .await
         .expect("state");
     let pool = state.inner().store.pool().clone();
@@ -130,7 +130,7 @@ async fn reconciliation_surfaces_conflict_and_accepts_external_change() {
         result["operation_results"][0]["authority_source"],
         "automation_worker"
     );
-    assert_eq!(worker_write_count(&pool).await, 1);
+    assert_eq!(worker_write_count(&pool).await, 0);
     assert_eq!(boundary_log_count(&pool).await, 1);
     let payload = boundary_log_payload(&pool).await;
     assert_eq!(payload["adjudication_result"], "accepted");
@@ -182,6 +182,43 @@ async fn reconciliation_surfaces_conflict_and_accepts_external_change() {
         .as_str()
         .expect("admitted id")
         .starts_with("xevent_"));
+}
+
+#[tokio::test]
+async fn live_projection_without_session_token_fails_without_writes() {
+    let state = AppState::in_memory(live_projection_config())
+        .await
+        .expect("state");
+    let pool = state.inner().store.pool().clone();
+    let app = ubu_orchestrator::build_router(state);
+
+    let preview = create_preview(&app, false).await;
+    let preview_id = preview["preview_id"].as_str().expect("preview id");
+    let approve = format!(
+        r#"{{
+            "schema_version":"{PROJECTION_APPROVAL_SCHEMA_VERSION}",
+            "preview_id":"{preview_id}",
+            "approved":true,
+            "authority_source":"user"
+        }}"#
+    );
+    let result = response_json(
+        app.oneshot(json_request("/projection/approve", &approve))
+            .await
+            .expect("approval"),
+    )
+    .await;
+
+    assert_eq!(result["status"], "failed");
+    assert_eq!(
+        result["diagnostics"][0]["code"],
+        "missing_github_session_token"
+    );
+    assert!(result["operation_results"][0]["message"]
+        .as_str()
+        .expect("operation message")
+        .contains("no desktop session token"));
+    assert_eq!(worker_write_count(&pool).await, 0);
 }
 
 async fn create_preview(app: &axum::Router, no_external_export: bool) -> Value {
@@ -249,4 +286,12 @@ fn json_request(uri: &str, body: &str) -> Request<Body> {
         .header("content-type", "application/json")
         .body(Body::from(body.to_owned()))
         .expect("request")
+}
+
+fn mock_projection_config() -> ServerConfig {
+    ServerConfig::from_env().with_github_projection_export_mode(ProjectionExportMode::Mock)
+}
+
+fn live_projection_config() -> ServerConfig {
+    ServerConfig::from_env().with_github_projection_export_mode(ProjectionExportMode::Live)
 }
