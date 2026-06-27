@@ -1,0 +1,22 @@
+{
+  "repository": {
+    "owner": "UbU-project",
+    "name": "ubu-orchestrator",
+    "default_branch": "main",
+    "html_url": "https://github.com/UbU-project/ubu-orchestrator",
+    "api_id": 1001
+  },
+  "issues": [
+    {
+      "repository": "UbU-project/ubu-orchestrator",
+      "id": 2001,
+      "number": 7,
+      "title": "Import GitHub issues",
+      "body": "Normalize issue state into UbU candidates.",
+      "state": "open",
+      "html_url": "https://github.com/UbU-project/ubu-orchestrator/issues/7",
+      "updated_at": "2026-06-10T14:30:00Z",
+      "labels": ["adapter"]
+    }
+  ]
+}

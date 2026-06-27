@@ -23,10 +23,6 @@ fn default_fixture_path() -> String {
 pub struct ImportLiveRequest {
     pub owner: String,
     pub repo: String,
-    /// Desktop session mode accepts a pasted token for this process only.
-    /// Developer mode uses `GITHUB_TOKEN` from the environment instead.
-    #[serde(default)]
-    pub session_token: Option<String>,
     #[serde(default)]
     pub objective_id: Option<String>,
 }

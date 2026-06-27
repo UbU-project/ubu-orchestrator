@@ -20,7 +20,7 @@ utoipa = { version = "5", features = ["axum_extras"] }
 
 ubu_core = { git = "https://github.com/UbU-project/ubu-core", rev = "2444b76e8eed75040e5a5791d1dce2579f0fe006" }
 ubu_store = { git = "https://github.com/UbU-project/ubu-store", rev = "2132c22fc05b163fdb3d8963a07a704b4b42c62f" }
-ubu_github_adapter = { git = "https://github.com/UbU-project/ubu-github-adapter", rev = "3658e7a473b01bfae0f44f10a07915328766c690" }
+ubu_github_adapter = { git = "https://github.com/UbU-project/ubu-github-adapter", rev = "4dce0887f0929584654e032992ed10fe5281a5cc" }
 ubu_planning_core = { git = "https://github.com/UbU-project/ubu-planning-kernel", rev = "62c6d7a2f71078d141f7a4b9c91bd78193ee3314", package = "ubu_planning_core" }
 ubu_planning_cpu = { git = "https://github.com/UbU-project/ubu-planning-kernel", rev = "62c6d7a2f71078d141f7a4b9c91bd78193ee3314", package = "ubu_planning_cpu" }
 

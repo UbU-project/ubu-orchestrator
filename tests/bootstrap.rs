@@ -6,7 +6,7 @@ use sqlx::Row;
 use tower::ServiceExt;
 use ubu_orchestrator::api::bootstrap::BOOTSTRAP_SCHEMA_VERSION;
 use ubu_orchestrator::api::desktop::DESKTOP_SESSION_SCHEMA_VERSION;
-use ubu_orchestrator::config::ServerConfig;
+use ubu_orchestrator::config::{GithubIngestMode, ServerConfig};
 use ubu_orchestrator::state::AppState;
 
 #[tokio::test]
@@ -46,7 +46,8 @@ async fn seed_admits_bootstrap_state_and_imports_selected_repo_tasks() {
         universe_state_id.starts_with("ustate_"),
         "UniverseState id uses the canonical prefix"
     );
-    assert_eq!(body["imported_tasks"]["admitted_to_store"], 1);
+    assert_eq!(body["imported_tasks"]["imported"], 1);
+    assert_eq!(body["imported_tasks"]["admitted_to_store"], 2);
 
     let rows =
         sqlx::query("SELECT id, object_type, payload_json FROM objects ORDER BY object_type")
@@ -80,11 +81,11 @@ async fn seed_admits_bootstrap_state_and_imports_selected_repo_tasks() {
                 assert_eq!(payload["provenance"]["authority_source"], "system");
                 assert_eq!(
                     payload["provenance"]["source"]["source_kind"],
-                    "github_repository"
+                    "github_issue"
                 );
                 assert_eq!(
                     payload["provenance"]["source"]["source_id"],
-                    "UbU-project/ubu-orchestrator"
+                    "UbU-project/ubu-orchestrator#7"
                 );
             }
             "UniverseState" => {
@@ -120,6 +121,15 @@ async fn seed_admits_bootstrap_state_and_imports_selected_repo_tasks() {
     assert_eq!(preference_count, 3);
     assert_eq!(task_count, 1);
     assert_eq!(universe_state_count, 1);
+
+    let external_reference_count: i64 =
+        sqlx::query("SELECT COUNT(*) AS count FROM external_references")
+            .fetch_one(state.inner().store.pool())
+            .await
+            .expect("external reference count query")
+            .try_get("count")
+            .expect("count");
+    assert_eq!(external_reference_count, 1);
 }
 
 #[tokio::test]
@@ -195,20 +205,19 @@ async fn seed_requires_known_schema_version() {
 }
 
 #[tokio::test]
-async fn seed_without_token_does_not_admit_partial_bootstrap_state() {
+async fn live_seed_without_token_does_not_admit_partial_bootstrap_state() {
     if std::env::var("GITHUB_TOKEN").is_ok() {
         return;
     }
 
-    let state = AppState::in_memory(ServerConfig::from_env())
-        .await
-        .expect("state");
+    let state = AppState::in_memory(
+        ServerConfig::from_env().with_github_ingest_mode(GithubIngestMode::Live),
+    )
+    .await
+    .expect("state");
     let app = ubu_orchestrator::build_router(state.clone());
 
-    let response = app
-        .oneshot(seed_request())
-        .await
-        .expect("seed response");
+    let response = app.oneshot(seed_request()).await.expect("seed response");
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let body = json_body(response).await;

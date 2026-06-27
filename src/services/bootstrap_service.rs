@@ -12,6 +12,7 @@ use crate::api::bootstrap::{
     BOOTSTRAP_SCHEMA_VERSION,
 };
 use crate::api::github::ImportLiveRequest;
+use crate::config::GithubIngestMode;
 use crate::errors::{AppError, Result};
 use crate::services::import_service;
 use crate::state::AppState;
@@ -52,7 +53,6 @@ pub async fn seed(state: AppState, request: BootstrapSeedRequest) -> Result<Boot
         ImportLiveRequest {
             owner: request.selected_repo.owner.clone(),
             repo: request.selected_repo.repo.clone(),
-            session_token: None,
             objective_id: Some(objective_id.clone()),
         },
     )
@@ -73,6 +73,10 @@ pub async fn seed(state: AppState, request: BootstrapSeedRequest) -> Result<Boot
 }
 
 async fn ensure_github_token_available(state: &AppState) -> Result<()> {
+    if state.inner().config.github_ingest_mode() == GithubIngestMode::Mock {
+        return Ok(());
+    }
+
     let has_token = state.inner().config.developer_github_token().is_some()
         || state.inner().desktop_session_token.lock().await.is_some();
     if has_token {

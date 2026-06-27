@@ -1512,13 +1512,6 @@
           },
           "repo": {
             "type": "string"
-          },
-          "session_token": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Desktop session mode accepts a pasted token for this process only.\nDeveloper mode uses `GITHUB_TOKEN` from the environment instead."
           }
         }
       },

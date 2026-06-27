@@ -2301,7 +2301,7 @@ dependencies = [
 [[package]]
 name = "ubu_github_adapter"
 version = "0.1.0"
-source = "git+https://github.com/UbU-project/ubu-github-adapter?rev=3658e7a473b01bfae0f44f10a07915328766c690#3658e7a473b01bfae0f44f10a07915328766c690"
+source = "git+https://github.com/UbU-project/ubu-github-adapter?rev=4dce0887f0929584654e032992ed10fe5281a5cc#4dce0887f0929584654e032992ed10fe5281a5cc"
 dependencies = [
  "octocrab",
  "serde",
