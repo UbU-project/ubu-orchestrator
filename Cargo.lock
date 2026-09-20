@@ -2301,6 +2301,19 @@ dependencies = [
 [[package]]
 name = "ubu_core"
 version = "0.1.0"
+source = "git+https://github.com/UbU-project/ubu-core?rev=cf162b2#cf162b281201ea3a8bf70f6121b55f6452e4df56"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "time",
+ "uuid",
+]
+
+[[package]]
+name = "ubu_core"
+version = "0.1.0"
 source = "git+https://github.com/UbU-project/ubu-core?rev=db37776#db37776f7d364f3a3c8efd694aa34e253334c3a9"
 dependencies = [
  "regex",
@@ -2339,7 +2352,7 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
- "ubu_core 0.1.0 (git+https://github.com/UbU-project/ubu-core?rev=db37776)",
+ "ubu_core 0.1.0 (git+https://github.com/UbU-project/ubu-core?rev=cf162b2)",
  "ubu_github_adapter",
  "ubu_planning_core",
  "ubu_planning_cpu",
