@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use ubu_core::{
     AuthoritySource, CausalityIssuer, DeviceRegistration, EnvelopeRequest, LocalIssuer,
-    MutationEnvelope, UbuId, UbuTimestamp, VersionRef,
+    IdempotencyKey, MutationEnvelope, UbuId, UbuTimestamp, VersionRef,
 };
 use ubu_store::UbuStore;
 
@@ -92,6 +92,32 @@ impl AppState {
             observed_policy_versions: None,
             execution_context: None,
         })?)
+    }
+
+    /// Assemble candidate-storage provenance with a caller-supplied deterministic
+    /// key. Advisory retries must reuse the candidate's own idempotency key.
+    pub fn envelope_with_key(
+        &self,
+        observed: BTreeMap<UbuId, VersionRef>,
+        authority: AuthoritySource,
+        effective_time: UbuTimestamp,
+        idempotency_key: IdempotencyKey,
+    ) -> crate::errors::Result<MutationEnvelope> {
+        let now = UbuTimestamp::now_utc();
+        let envelope = MutationEnvelope {
+            idempotency_key,
+            observed_versions: observed,
+            origin_device_id: self.inner.device_registration.device_id.clone(),
+            actor_identity_id: self.actor_identity_id().clone(),
+            authority_source: authority,
+            created_time: now,
+            effective_time,
+            recorded_time: now,
+            observed_policy_versions: None,
+            execution_context: None,
+        };
+        envelope.validate()?;
+        Ok(envelope)
     }
 
     pub fn actor_identity_id(&self) -> &UbuId {
