@@ -1,3 +1,4 @@
+pub mod advisory;
 pub mod bootstrap;
 pub mod calendar;
 pub mod desktop;

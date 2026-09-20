@@ -18,6 +18,8 @@ command bridge.
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(api::health::health))
+        .route("/advisory/queue", get(api::advisory::queue))
+        .route("/advisory/candidate/:candidate_id", get(api::advisory::candidate))
         .route("/bootstrap/start", post(api::bootstrap::start))
         .route("/bootstrap/answer", post(api::bootstrap::answer))
         .route("/bootstrap/seed", post(api::bootstrap::seed))

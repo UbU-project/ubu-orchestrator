@@ -4,6 +4,8 @@ use utoipa::OpenApi;
 #[derive(OpenApi)]
 #[openapi(
     paths(
+        crate::api::advisory::queue,
+        crate::api::advisory::candidate,
         crate::api::health::health,
         crate::api::bootstrap::start,
         crate::api::bootstrap::answer,
@@ -29,6 +31,8 @@ use utoipa::OpenApi;
         crate::api::reports::human_complete
     ),
     components(schemas(
+        crate::api::advisory::AdvisoryCandidateResponse,
+        crate::api::advisory::AdvisoryQueueResponse,
         crate::api::health::HealthResponse,
         crate::api::bootstrap::BootstrapStartResponse,
         crate::api::bootstrap::BootstrapAnswerRequest,
