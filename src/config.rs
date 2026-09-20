@@ -145,3 +145,26 @@ impl ServerConfig {
         })
     }
 }
+
+#[cfg(test)]
+mod registration_path_tests {
+    use super::*;
+
+    #[test]
+    fn registration_defaults_beside_database_and_explicit_path_wins() {
+        let mut config = ServerConfig::from_env();
+        // Keep this test independent of the test runner's environment.
+        config.device_registration_path = None;
+        for (database, expected) in [
+            ("ubu-orchestrator.db", "ubu-device-registration.json"),
+            ("/tmp/ubu/state.db", "/tmp/ubu/ubu-device-registration.json"),
+            ("sqlite:///tmp/ubu/state.db?mode=rwc", "/tmp/ubu/ubu-device-registration.json"),
+            ("sqlite:/tmp/ubu/state.db", "/tmp/ubu/ubu-device-registration.json"),
+        ] {
+            assert_eq!(config.clone().with_db_path(database).device_registration_path(), PathBuf::from(expected));
+        }
+        assert_eq!(config.with_db_path("/tmp/different/state.db")
+            .with_device_registration_path("operator/device.json").device_registration_path(),
+            PathBuf::from("operator/device.json"));
+    }
+}
