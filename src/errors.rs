@@ -58,6 +58,10 @@ impl fmt::Display for StartupError {
 impl std::error::Error for StartupError {}
 
 impl StartupError {
+    pub fn registration_file(path: &std::path::Path, action: &str, error: impl fmt::Display) -> Self {
+        Self(format!("failed to {action} Device registration file `{}`: {error}", path.display()))
+    }
+
     pub fn store_open(e: ubu_store::StoreError) -> Self {
         Self(format!("failed to open store: {e}"))
     }

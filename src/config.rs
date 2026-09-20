@@ -1,6 +1,7 @@
 use std::env;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::{Path, PathBuf};
 
 #[derive(Clone)]
 pub struct SecretToken(String);
@@ -34,6 +35,8 @@ pub struct ServerConfig {
     github_projection_export_mode: ProjectionExportMode,
     /// SQLite database path. Configure with `UBU_DB_PATH`; defaults to `ubu-orchestrator.db`.
     db_path: String,
+    /// Operator-owned registration file, outside mutable database state.
+    device_registration_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -83,6 +86,7 @@ impl ServerConfig {
                 env::var("UBU_GITHUB_PROJECTION_EXPORT_MODE").ok(),
             ),
             db_path: env::var("UBU_DB_PATH").unwrap_or_else(|_| "ubu-orchestrator.db".to_owned()),
+            device_registration_path: env::var_os("UBU_DEVICE_REGISTRATION").map(PathBuf::from),
         }
     }
 
@@ -114,5 +118,30 @@ impl ServerConfig {
 
     pub fn db_path(&self) -> &str {
         &self.db_path
+    }
+    pub fn with_db_path(mut self, path: impl Into<String>) -> Self {
+        self.db_path = path.into();
+        self
+    }
+
+    pub fn with_device_registration_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.device_registration_path = Some(path.into());
+        self
+    }
+
+    pub fn device_registration_path(&self) -> PathBuf {
+        self.device_registration_path.clone().unwrap_or_else(|| {
+            // Accept the plain DB path and the usual SQLite URL spellings.
+            let path = self
+                .db_path
+                .strip_prefix("sqlite://")
+                .or_else(|| self.db_path.strip_prefix("sqlite:"))
+                .unwrap_or(&self.db_path);
+            let path = path.split('?').next().unwrap_or(path);
+            Path::new(path)
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("ubu-device-registration.json")
+        })
     }
 }
