@@ -4,7 +4,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::Path;
 
-use ubu_core::{
+use ubu_core_legacy::{
     DeviceId, DeviceKind, DeviceRegistration, ObjectType, SyncState, TrustState, UbuId,
     UbuTimestamp, ZoneId,
 };

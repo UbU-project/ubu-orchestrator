@@ -1,8 +1,8 @@
 use serde_json::{json, Value};
 use sqlx::Row;
-use ubu_core::core::UniverseState;
-use ubu_core::id_registry::ObjectType;
-use ubu_core::{AuthoritySource, UbuId, UbuTimestamp, VersionRef};
+use ubu_core_legacy::core::UniverseState;
+use ubu_core_legacy::id_registry::ObjectType;
+use ubu_core_legacy::{AuthoritySource, UbuId, UbuTimestamp, VersionRef};
 use ubu_store::models::object_record::NewObjectRecord;
 use ubu_store::queries;
 

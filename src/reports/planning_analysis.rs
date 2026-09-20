@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 use sqlx::Row;
-use ubu_core::id_registry::ObjectType;
-use ubu_core::UbuTimestamp;
+use ubu_core_legacy::id_registry::ObjectType;
+use ubu_core_legacy::UbuTimestamp;
 
 use crate::api::planning::{
     DiagnosticBody, LegitimizationReportBody, PlanCandidateBody, PlanningRequestBody,

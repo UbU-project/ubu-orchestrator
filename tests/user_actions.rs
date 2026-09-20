@@ -4,9 +4,9 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use sqlx::Row;
 use tower::ServiceExt;
-use ubu_core::core::UniverseState;
-use ubu_core::id_registry::ObjectType;
-use ubu_core::{UbuId, UbuTimestamp};
+use ubu_core_legacy::core::UniverseState;
+use ubu_core_legacy::id_registry::ObjectType;
+use ubu_core_legacy::{UbuId, UbuTimestamp};
 use ubu_orchestrator::api::user_action::TASK_ACTION_SCHEMA_VERSION;
 use ubu_orchestrator::config::ServerConfig;
 use ubu_orchestrator::state::AppState;
@@ -264,8 +264,8 @@ async fn admit_universe_state(state: &AppState) -> String {
         "authority_source": "user"
     });
     let envelope = state.envelope_for(
-        [(UbuId::parse(&id).unwrap(), ubu_core::VersionRef::Absent)].into_iter().collect(),
-        ubu_core::AuthoritySource::User, UbuTimestamp::parse(&now).unwrap(),
+        [(UbuId::parse(&id).unwrap(), ubu_core_legacy::VersionRef::Absent)].into_iter().collect(),
+        ubu_core_legacy::AuthoritySource::User, UbuTimestamp::parse(&now).unwrap(),
     ).unwrap();
     queries::admit_object(
         state.inner().store.pool(),
@@ -290,8 +290,8 @@ async fn admit_task_with_effects(state: &AppState, title: &str, effects: Value) 
     let id = UbuId::new(ObjectType::Task).to_string();
     let now = UbuTimestamp::now_utc().to_string();
     let envelope = state.envelope_for(
-        [(UbuId::parse(&id).unwrap(), ubu_core::VersionRef::Absent)].into_iter().collect(),
-        ubu_core::AuthoritySource::User, UbuTimestamp::parse(&now).unwrap(),
+        [(UbuId::parse(&id).unwrap(), ubu_core_legacy::VersionRef::Absent)].into_iter().collect(),
+        ubu_core_legacy::AuthoritySource::User, UbuTimestamp::parse(&now).unwrap(),
     ).unwrap();
     queries::admit_object(
         state.inner().store.pool(),
@@ -325,8 +325,8 @@ async fn admit_task(state: &AppState, title: &str) -> String {
     let id = UbuId::new(ObjectType::Task).to_string();
     let now = UbuTimestamp::now_utc().to_string();
     let envelope = state.envelope_for(
-        [(UbuId::parse(&id).unwrap(), ubu_core::VersionRef::Absent)].into_iter().collect(),
-        ubu_core::AuthoritySource::User, UbuTimestamp::parse(&now).unwrap(),
+        [(UbuId::parse(&id).unwrap(), ubu_core_legacy::VersionRef::Absent)].into_iter().collect(),
+        ubu_core_legacy::AuthoritySource::User, UbuTimestamp::parse(&now).unwrap(),
     ).unwrap();
     queries::admit_object(
         state.inner().store.pool(),

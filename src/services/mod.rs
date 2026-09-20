@@ -1,3 +1,4 @@
+pub mod advisory_service;
 pub mod bootstrap_service;
 pub mod desktop_session_service;
 pub mod import_service;

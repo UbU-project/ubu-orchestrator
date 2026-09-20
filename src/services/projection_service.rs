@@ -4,14 +4,14 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::Row;
-use ubu_core::core::CompartmentBoundaryDecidedPayload;
-use ubu_core::id_registry::ObjectType;
-use ubu_core::projection::{
+use ubu_core_legacy::core::CompartmentBoundaryDecidedPayload;
+use ubu_core_legacy::id_registry::ObjectType;
+use ubu_core_legacy::projection::{
     ExportGateDecision, ExportPermit, ExportProjectionContext, Legitimizer, OperationResult,
     OperationResultStatus, ProjectionApproval, ProjectionOperation, ProjectionOperationKind,
     ProjectionPreview, ProjectionResult, ProjectionResultStatus,
 };
-use ubu_core::{
+use ubu_core_legacy::{
     AuthoritySource, Legitimization, ObjectRef, PolicySummary, Provenance, SourceRef, UbuId,
     UbuTimestamp, VersionRef,
 };

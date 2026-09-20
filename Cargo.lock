@@ -2353,6 +2353,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ubu_core 0.1.0 (git+https://github.com/UbU-project/ubu-core?rev=cf162b2)",
+ "ubu_core 0.1.0 (git+https://github.com/UbU-project/ubu-core?rev=db37776)",
  "ubu_github_adapter",
  "ubu_planning_core",
  "ubu_planning_cpu",

@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use ubu_core::{DeviceId, TrustState};
+use ubu_core_legacy::{DeviceId, TrustState};
 use ubu_orchestrator::config::ServerConfig;
 use ubu_orchestrator::device_registration::{load_or_register, new_registration};
 use ubu_orchestrator::state::AppState;
@@ -45,7 +45,7 @@ async fn first_start_persists_registration_and_restart_or_database_reset_restore
     );
     let original = fs::read(&path).unwrap();
     assert_eq!(
-        serde_json::from_slice::<ubu_core::DeviceRegistration>(&original).unwrap(),
+        serde_json::from_slice::<ubu_core_legacy::DeviceRegistration>(&original).unwrap(),
         registration
     );
     let objects: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM objects")

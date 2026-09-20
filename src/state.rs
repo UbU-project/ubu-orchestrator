@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
-use ubu_core::{
+use ubu_core_legacy::{
     AuthoritySource, CausalityIssuer, DeviceRegistration, EnvelopeRequest, LocalIssuer,
-    IdempotencyKey, MutationEnvelope, UbuId, UbuTimestamp, VersionRef,
+    MutationEnvelope, UbuId, UbuTimestamp, VersionRef,
 };
 use ubu_store::UbuStore;
 
@@ -98,17 +98,22 @@ impl AppState {
     /// key. Advisory retries must reuse the candidate's own idempotency key.
     pub fn envelope_with_key(
         &self,
-        observed: BTreeMap<UbuId, VersionRef>,
-        authority: AuthoritySource,
-        effective_time: UbuTimestamp,
-        idempotency_key: IdempotencyKey,
-    ) -> crate::errors::Result<MutationEnvelope> {
-        let now = UbuTimestamp::now_utc();
-        let envelope = MutationEnvelope {
+        observed: BTreeMap<ubu_core::UbuId, ubu_core::VersionRef>,
+        authority: ubu_core::AuthoritySource,
+        effective_time: ubu_core::UbuTimestamp,
+        idempotency_key: ubu_core::IdempotencyKey,
+    ) -> crate::errors::Result<ubu_core::MutationEnvelope> {
+        let now = ubu_core::UbuTimestamp::now_utc();
+        let origin_device_id =
+            ubu_core::DeviceId::parse(self.inner.device_registration.device_id.as_str())
+                .map_err(|error| crate::errors::AppError::Internal(error.to_string()))?;
+        let actor_identity_id = ubu_core::UbuId::parse(self.actor_identity_id().as_str())
+            .map_err(|error| crate::errors::AppError::Internal(error.to_string()))?;
+        let envelope = ubu_core::MutationEnvelope {
             idempotency_key,
             observed_versions: observed,
-            origin_device_id: self.inner.device_registration.device_id.clone(),
-            actor_identity_id: self.actor_identity_id().clone(),
+            origin_device_id,
+            actor_identity_id,
             authority_source: authority,
             created_time: now,
             effective_time,
@@ -116,7 +121,9 @@ impl AppState {
             observed_policy_versions: None,
             execution_context: None,
         };
-        envelope.validate()?;
+        envelope
+            .validate()
+            .map_err(|error| crate::errors::AppError::Internal(error.to_string()))?;
         Ok(envelope)
     }
 
