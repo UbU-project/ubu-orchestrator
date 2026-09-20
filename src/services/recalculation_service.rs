@@ -143,8 +143,11 @@ async fn append_recalculation_log(state: &AppState, request: &RecalculationReque
         .map(|object| object.id.clone())
         .collect::<Vec<_>>();
 
+    let envelope = state.envelope_for(Default::default(), ubu_core::AuthoritySource::System,
+        UbuTimestamp::parse(&request.triggered_at)?)?;
     queries::append_log_entry(
         state.inner().store.pool(),
+        &envelope,
         NewLogRecord {
             id: UbuId::new(ObjectType::LogEntry).to_string(),
             event_type: "recalculation_requested".to_owned(),

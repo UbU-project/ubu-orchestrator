@@ -860,8 +860,13 @@ async fn admit_task(state: &AppState, title: &str, extra: Value) -> String {
         map.insert(key.clone(), value.clone());
     }
 
+    let envelope = state.envelope_for(
+        [(UbuId::parse(&id).unwrap(), ubu_core::VersionRef::Absent)].into_iter().collect(),
+        ubu_core::AuthoritySource::User, UbuTimestamp::parse(&now).unwrap(),
+    ).unwrap();
     queries::admit_object(
         state.inner().store.pool(),
+        &envelope,
         NewObjectRecord {
             id: id.clone(),
             object_type: ObjectType::Task.as_str().to_owned(),
@@ -881,8 +886,13 @@ async fn admit_task(state: &AppState, title: &str, extra: Value) -> String {
 async fn admit_universe_state(state: &AppState, facts: Value) -> String {
     let id = UbuId::new(ObjectType::UniverseState).to_string();
     let now = UbuTimestamp::now_utc().to_string();
+    let envelope = state.envelope_for(
+        [(UbuId::parse(&id).unwrap(), ubu_core::VersionRef::Absent)].into_iter().collect(),
+        ubu_core::AuthoritySource::User, UbuTimestamp::parse(&now).unwrap(),
+    ).unwrap();
     queries::admit_object(
         state.inner().store.pool(),
+        &envelope,
         NewObjectRecord {
             id: id.clone(),
             object_type: ObjectType::UniverseState.as_str().to_owned(),
@@ -911,8 +921,13 @@ async fn admit_universe_state(state: &AppState, facts: Value) -> String {
 async fn admit_preference(state: &AppState, name: &str, value: Value) -> String {
     let id = UbuId::new(ObjectType::Preference).to_string();
     let now = UbuTimestamp::now_utc().to_string();
+    let envelope = state.envelope_for(
+        [(UbuId::parse(&id).unwrap(), ubu_core::VersionRef::Absent)].into_iter().collect(),
+        ubu_core::AuthoritySource::User, UbuTimestamp::parse(&now).unwrap(),
+    ).unwrap();
     queries::admit_object(
         state.inner().store.pool(),
+        &envelope,
         NewObjectRecord {
             id: id.clone(),
             object_type: ObjectType::Preference.as_str().to_owned(),
@@ -944,8 +959,13 @@ async fn admit_preference(state: &AppState, name: &str, value: Value) -> String 
 
 async fn admit_snapshot(state: &AppState, observed_at: &str, values: Value) -> String {
     let id = UbuId::new(ObjectType::Snapshot).to_string();
+    let envelope = state.envelope_for(
+        [(UbuId::parse(&id).unwrap(), ubu_core::VersionRef::Absent)].into_iter().collect(),
+        ubu_core::AuthoritySource::User, UbuTimestamp::parse(observed_at).unwrap(),
+    ).unwrap();
     queries::admit_object(
         state.inner().store.pool(),
+        &envelope,
         NewObjectRecord {
             id: id.clone(),
             object_type: ObjectType::Snapshot.as_str().to_owned(),
@@ -1017,8 +1037,11 @@ async fn store_calendar_window(state: &AppState, start: &str, end: &str) {
 
 async fn append_user_override_log(state: &AppState, task_id: &str) {
     let now = UbuTimestamp::now_utc().to_string();
+    let envelope = state.envelope_for(Default::default(), ubu_core::AuthoritySource::UserOverride,
+        UbuTimestamp::parse(&now).unwrap()).unwrap();
     queries::append_log_entry(
         state.inner().store.pool(),
+        &envelope,
         NewLogRecord {
             id: UbuId::new(ObjectType::LogEntry).to_string(),
             event_type: "decision_recorded".to_owned(),

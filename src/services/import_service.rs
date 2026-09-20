@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::json;
 use ubu_core::core::{ExternalReference, Task};
 use ubu_core::id_registry::ObjectType;
-use ubu_core::{AuthoritySource, UbuId, UbuTimestamp};
+use ubu_core::{AuthoritySource, UbuId, UbuTimestamp, VersionRef};
 use ubu_github_adapter::auth::GitHubAuth;
 use ubu_github_adapter::candidate_mapping::map_repository_state;
 use ubu_github_adapter::cli::import_live::import_live_repository;
@@ -40,7 +40,7 @@ struct RawCandidate {
 }
 
 async fn admit_task(
-    pool: &sqlx::SqlitePool,
+    state: &AppState,
     title: &str,
     description: Option<&str>,
     status: &str,
@@ -50,6 +50,7 @@ async fn admit_task(
     provenance_source_id: &str,
     provenance_source_url: Option<String>,
     objective_id: Option<String>,
+    effective_time: UbuTimestamp,
 ) -> Result<ImportedCandidate> {
     let task_id = UbuId::new(ObjectType::Task).to_string();
     let now = UbuTimestamp::now_utc().to_string();
@@ -89,7 +90,14 @@ async fn admit_task(
         updated_at: now,
     };
 
-    queries::admit_object(pool, record)
+    let envelope = state.envelope_for(
+        [(UbuId::parse(&record.id)?, VersionRef::Absent)]
+            .into_iter()
+            .collect(),
+        authority_source,
+        effective_time,
+    )?;
+    queries::admit_object(state.inner().store.pool(), &envelope, record)
         .await
         .map_err(AppError::from)?;
 
@@ -109,11 +117,10 @@ pub async fn import_fixture(
     let fixture: FixtureFile = serde_json::from_str(&content)
         .map_err(|e| AppError::BadRequest(format!("failed to parse fixture: {e}")))?;
 
-    let pool = state.inner().store.pool();
     let mut admitted = Vec::with_capacity(fixture.candidates.len());
     for raw in &fixture.candidates {
         let candidate = admit_task(
-            pool,
+            &state,
             &raw.title,
             None,
             "active",
@@ -123,6 +130,7 @@ pub async fn import_fixture(
             &raw.source,
             None,
             None,
+            UbuTimestamp::now_utc(),
         )
         .await?;
         admitted.push(candidate);
@@ -142,15 +150,25 @@ pub async fn import_live(state: AppState, request: ImportLiveRequest) -> Result<
         .await
         .map_err(adapter_app_error)?;
     let mapping = map_repository_state(&normalized).map_err(adapter_app_error)?;
-    let pool = state.inner().store.pool();
 
     let mut admitted = Vec::with_capacity(mapping.tasks.len());
     for task in &mapping.tasks {
-        admitted.push(admit_mapped_task(pool, task, request.objective_id.clone()).await?);
+        // The pinned adapter retains its older core dependency. Cross the stable
+        // JSON contract explicitly without changing that dependency's revision.
+        let task: Task = serde_json::from_value(
+            serde_json::to_value(task).map_err(|e| AppError::Internal(e.to_string()))?,
+        )
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+        admitted.push(admit_mapped_task(&state, &task, request.objective_id.clone()).await?);
     }
 
     for external_reference in &mapping.external_references {
-        store_external_reference(pool, external_reference).await?;
+        let external_reference: ExternalReference = serde_json::from_value(
+            serde_json::to_value(external_reference)
+                .map_err(|e| AppError::Internal(e.to_string()))?,
+        )
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+        store_external_reference(&state, &external_reference).await?;
     }
 
     let admitted_to_store = mapping.tasks.len() + mapping.external_references.len();
@@ -212,7 +230,7 @@ fn mock_github_client(owner: &str, repo: &str) -> Result<GitHubClient> {
 }
 
 async fn admit_mapped_task(
-    pool: &sqlx::SqlitePool,
+    state: &AppState,
     task: &Task,
     objective_id: Option<String>,
 ) -> Result<ImportedCandidate> {
@@ -229,7 +247,7 @@ async fn admit_mapped_task(
     };
 
     admit_task(
-        pool,
+        state,
         &task.title,
         task.description.as_deref(),
         task.status.as_str(),
@@ -239,16 +257,23 @@ async fn admit_mapped_task(
         &source_ref.source_id,
         source_ref.url.clone(),
         objective_id,
+        task.provenance.created_at,
     )
     .await
 }
 
 async fn store_external_reference(
-    pool: &sqlx::SqlitePool,
+    state: &AppState,
     external_reference: &ExternalReference,
 ) -> Result<()> {
+    let envelope = state.envelope_for(
+        Default::default(),
+        external_reference.provenance.authority_source,
+        external_reference.observed_at,
+    )?;
     queries::store_external_reference(
-        pool,
+        state.inner().store.pool(),
+        &envelope,
         NewExternalReferenceRecord {
             id: external_reference.id.to_string(),
             source_type: external_reference.source.source_kind.clone(),

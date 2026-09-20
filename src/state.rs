@@ -1,7 +1,11 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
-use ubu_core::{DeviceRegistration, LocalIssuer, UbuId};
+use ubu_core::{
+    AuthoritySource, CausalityIssuer, DeviceRegistration, EnvelopeRequest, LocalIssuer,
+    MutationEnvelope, UbuId, UbuTimestamp, VersionRef,
+};
 use ubu_store::UbuStore;
 
 use crate::config::{SecretToken, ServerConfig};
@@ -71,6 +75,23 @@ impl AppState {
                 bootstrap_answers: Mutex::new(Vec::new()),
             }),
         })
+    }
+
+    /// Assemble provenance at the mutation boundary; domain time remains independent.
+    pub fn envelope_for(
+        &self,
+        observed: BTreeMap<UbuId, VersionRef>,
+        authority: AuthoritySource,
+        effective_time: UbuTimestamp,
+    ) -> crate::errors::Result<MutationEnvelope> {
+        Ok(self.inner.causality_issuer.issue(EnvelopeRequest {
+            observed_versions: observed,
+            actor_identity_id: self.actor_identity_id().clone(),
+            authority_source: authority,
+            effective_time,
+            observed_policy_versions: None,
+            execution_context: None,
+        })?)
     }
 
     pub fn actor_identity_id(&self) -> &UbuId {

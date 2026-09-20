@@ -13,7 +13,7 @@ use ubu_core::projection::{
 };
 use ubu_core::{
     AuthoritySource, Legitimization, ObjectRef, PolicySummary, Provenance, SourceRef, UbuId,
-    UbuTimestamp,
+    UbuTimestamp, VersionRef,
 };
 use ubu_github_adapter::auth::GitHubAuth;
 use ubu_github_adapter::client::{GitHubClient, RecordingGitHubApi};
@@ -206,9 +206,10 @@ pub async fn approve(
             operation,
             Some(&policy_summary),
             AuthoritySource::AutomationWorker,
+            state.actor_identity_id(),
         );
         append_boundary_log(
-            pool,
+            &state,
             &stored.preview,
             operation,
             &adjudication.decision.log_payload,
@@ -451,8 +452,13 @@ pub async fn accept_external(
         }
     });
 
+    let envelope = state.envelope_for(
+        [(UbuId::parse(&admitted_object_id)?, VersionRef::Absent)].into_iter().collect(),
+        authority_source, UbuTimestamp::parse(&now)?,
+    )?;
     queries::admit_object(
         pool,
+        &envelope,
         NewObjectRecord {
             id: admitted_object_id.clone(),
             object_type: ObjectType::ExternalEvent.as_str().to_owned(),
@@ -802,6 +808,7 @@ fn gate_export_operation(
     github_operation: &GitHubProjectionOperation,
     effective_policy: Option<&PolicySummary>,
     authority_source: AuthoritySource,
+    actor_identity_id: &UbuId,
 ) -> ExportGateDecision {
     let effective_time = UbuTimestamp::now_utc();
     let compartment_ref = ObjectRef {
@@ -809,7 +816,7 @@ fn gate_export_operation(
         object_type: ObjectType::Compartment,
     };
     let actor_identity_ref = ObjectRef {
-        id: UbuId::new(ObjectType::Identity),
+        id: actor_identity_id.clone(),
         object_type: ObjectType::Identity,
     };
     let provenance = Provenance {
@@ -832,13 +839,16 @@ fn gate_export_operation(
 }
 
 async fn append_boundary_log(
-    pool: &sqlx::SqlitePool,
+    state: &AppState,
     preview: &ProjectionPreview,
     operation: &GitHubProjectionOperation,
     log_payload: &CompartmentBoundaryDecidedPayload,
 ) -> Result<()> {
+    let envelope = state.envelope_for(Default::default(), log_payload.authority_source,
+        log_payload.effective_time)?;
     queries::append_log_entry(
-        pool,
+        state.inner().store.pool(),
+        &envelope,
         NewLogRecord {
             id: UbuId::new(ObjectType::LogEntry).to_string(),
             event_type: "compartment_boundary_decided".to_owned(),
@@ -907,7 +917,8 @@ async fn apply_managed_label_operation(
                 labels: vec![label.clone()],
             };
             let result =
-                apply_managed_label_write(client, &payload, permit.authority_source()).await?;
+                apply_managed_label_write(client, &payload,
+                    serde_json::from_value(serde_json::to_value(permit.authority_source())?)?).await?;
             Ok(format!(
                 "managed labels applied: {}",
                 result.applied_labels.join(", ")
@@ -1288,6 +1299,7 @@ mod tests {
             &github_operation,
             Some(&policy_summary),
             AuthoritySource::User,
+            &UbuId::new(ObjectType::Identity),
         );
 
         assert_eq!(

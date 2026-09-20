@@ -2,7 +2,7 @@ use serde_json::{json, Value};
 use sqlx::Row;
 use ubu_core::core::UniverseState;
 use ubu_core::id_registry::ObjectType;
-use ubu_core::{AuthoritySource, UbuId, UbuTimestamp};
+use ubu_core::{AuthoritySource, UbuId, UbuTimestamp, VersionRef};
 use ubu_store::models::object_record::NewObjectRecord;
 use ubu_store::queries;
 
@@ -44,9 +44,8 @@ pub async fn seed(state: AppState, request: BootstrapSeedRequest) -> Result<Boot
     reject_if_already_seeded(&state).await?;
     ensure_github_token_available(&state).await?;
 
-    let pool = state.inner().store.pool();
     let objective_id = admit_objective(&state, &request).await?;
-    let preference_ids = admit_preferences(pool, &request).await?;
+    let preference_ids = admit_preferences(&state, &request).await?;
 
     let imported_tasks = import_service::import_live(
         state.clone(),
@@ -57,7 +56,7 @@ pub async fn seed(state: AppState, request: BootstrapSeedRequest) -> Result<Boot
         },
     )
     .await?;
-    let universe_state_id = admit_universe_state(pool, &request).await?;
+    let universe_state_id = admit_universe_state(&state, &request).await?;
 
     Ok(BootstrapSeedResponse {
         schema_version: BOOTSTRAP_SCHEMA_VERSION.to_owned(),
@@ -181,7 +180,14 @@ async fn admit_objective(state: &AppState, request: &BootstrapSeedRequest) -> Re
         updated_at: now,
     };
 
-    queries::admit_object(state.inner().store.pool(), record)
+    let envelope = state.envelope_for(
+        [(UbuId::parse(&record.id)?, VersionRef::Absent)]
+            .into_iter()
+            .collect(),
+        AuthoritySource::User,
+        UbuTimestamp::parse(&record.created_at)?,
+    )?;
+    queries::admit_object(state.inner().store.pool(), &envelope, record)
         .await
         .map_err(AppError::from)?;
 
@@ -189,7 +195,7 @@ async fn admit_objective(state: &AppState, request: &BootstrapSeedRequest) -> Re
 }
 
 async fn admit_preferences(
-    pool: &sqlx::SqlitePool,
+    state: &AppState,
     request: &BootstrapSeedRequest,
 ) -> Result<Vec<String>> {
     let mut preferences = vec![
@@ -220,16 +226,13 @@ async fn admit_preferences(
 
     let mut admitted = Vec::with_capacity(preferences.len());
     for (name, value) in preferences {
-        admitted.push(admit_preference(pool, name, value).await?);
+        admitted.push(admit_preference(state, name, value).await?);
     }
 
     Ok(admitted)
 }
 
-async fn admit_universe_state(
-    pool: &sqlx::SqlitePool,
-    request: &BootstrapSeedRequest,
-) -> Result<String> {
+async fn admit_universe_state(state: &AppState, request: &BootstrapSeedRequest) -> Result<String> {
     let captured_at = UbuTimestamp::now_utc();
     let created_at = captured_at.to_string();
     let mut universe_state =
@@ -280,14 +283,21 @@ async fn admit_universe_state(
         updated_at: created_at,
     };
 
-    queries::admit_object(pool, record)
+    let envelope = state.envelope_for(
+        [(UbuId::parse(&record.id)?, VersionRef::Absent)]
+            .into_iter()
+            .collect(),
+        AuthoritySource::User,
+        UbuTimestamp::parse(&record.created_at)?,
+    )?;
+    queries::admit_object(state.inner().store.pool(), &envelope, record)
         .await
         .map_err(AppError::from)?;
 
     Ok(universe_state_id)
 }
 
-async fn admit_preference(pool: &sqlx::SqlitePool, name: &str, value: Value) -> Result<String> {
+async fn admit_preference(state: &AppState, name: &str, value: Value) -> Result<String> {
     let preference_id = UbuId::new(ObjectType::Preference).to_string();
     let now = UbuTimestamp::now_utc().to_string();
     let record = NewObjectRecord {
@@ -307,7 +317,14 @@ async fn admit_preference(pool: &sqlx::SqlitePool, name: &str, value: Value) -> 
         updated_at: now,
     };
 
-    queries::admit_object(pool, record)
+    let envelope = state.envelope_for(
+        [(UbuId::parse(&record.id)?, VersionRef::Absent)]
+            .into_iter()
+            .collect(),
+        AuthoritySource::User,
+        UbuTimestamp::parse(&record.created_at)?,
+    )?;
+    queries::admit_object(state.inner().store.pool(), &envelope, record)
         .await
         .map_err(AppError::from)?;
 

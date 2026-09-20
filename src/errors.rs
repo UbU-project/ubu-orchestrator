@@ -10,6 +10,8 @@ pub type Result<T> = std::result::Result<T, AppError>;
 
 #[derive(Debug, Error)]
 pub enum AppError {
+    #[error(transparent)]
+    Core(#[from] ubu_core::UbuError),
     #[error("bad request: {0}")]
     BadRequest(String),
     #[error("{message}")]
@@ -92,7 +94,7 @@ impl IntoResponse for AppError {
             Self::Diagnostic { status, .. } => *status,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::Upstream(_) => StatusCode::BAD_GATEWAY,
-            Self::Store(_) | Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Core(_) | Self::Store(_) | Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
         let diagnostics = match &self {

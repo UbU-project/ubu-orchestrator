@@ -263,8 +263,13 @@ async fn admit_universe_state(state: &AppState) -> String {
         "created_at": now.clone(),
         "authority_source": "user"
     });
+    let envelope = state.envelope_for(
+        [(UbuId::parse(&id).unwrap(), ubu_core::VersionRef::Absent)].into_iter().collect(),
+        ubu_core::AuthoritySource::User, UbuTimestamp::parse(&now).unwrap(),
+    ).unwrap();
     queries::admit_object(
         state.inner().store.pool(),
+        &envelope,
         NewObjectRecord {
             id: id.clone(),
             object_type: ObjectType::UniverseState.as_str().to_owned(),
@@ -284,8 +289,13 @@ async fn admit_universe_state(state: &AppState) -> String {
 async fn admit_task_with_effects(state: &AppState, title: &str, effects: Value) -> String {
     let id = UbuId::new(ObjectType::Task).to_string();
     let now = UbuTimestamp::now_utc().to_string();
+    let envelope = state.envelope_for(
+        [(UbuId::parse(&id).unwrap(), ubu_core::VersionRef::Absent)].into_iter().collect(),
+        ubu_core::AuthoritySource::User, UbuTimestamp::parse(&now).unwrap(),
+    ).unwrap();
     queries::admit_object(
         state.inner().store.pool(),
+        &envelope,
         NewObjectRecord {
             id: id.clone(),
             object_type: ObjectType::Task.as_str().to_owned(),
@@ -314,8 +324,13 @@ async fn admit_task_with_effects(state: &AppState, title: &str, effects: Value) 
 async fn admit_task(state: &AppState, title: &str) -> String {
     let id = UbuId::new(ObjectType::Task).to_string();
     let now = UbuTimestamp::now_utc().to_string();
+    let envelope = state.envelope_for(
+        [(UbuId::parse(&id).unwrap(), ubu_core::VersionRef::Absent)].into_iter().collect(),
+        ubu_core::AuthoritySource::User, UbuTimestamp::parse(&now).unwrap(),
+    ).unwrap();
     queries::admit_object(
         state.inner().store.pool(),
+        &envelope,
         NewObjectRecord {
             id: id.clone(),
             object_type: ObjectType::Task.as_str().to_owned(),

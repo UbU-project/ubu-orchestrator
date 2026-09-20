@@ -231,11 +231,19 @@ async fn next_action_returns_bounded_diagnostic_when_all_tasks_are_blocked() {
     .await;
 
     let pool = state.inner().store.pool();
-    sqlx::query("UPDATE objects SET status = 'failed' WHERE id = ?")
-        .bind(&dependency_id)
-        .execute(pool)
-        .await
-        .expect("dependency marked non-active");
+    let current = queries::get_current_state(pool, &dependency_id).await.unwrap().unwrap();
+    let now = UbuTimestamp::now_utc();
+    let envelope = state.envelope_for(
+        [(UbuId::parse(&dependency_id).unwrap(), ubu_core::VersionRef::Version(current.version as u64))].into_iter().collect(),
+        ubu_core::AuthoritySource::User, now,
+    ).unwrap();
+    let mut payload: Value = serde_json::from_str(&current.payload_json).unwrap();
+    payload["status"] = json!("failed");
+    queries::admit_object(pool, &envelope, NewObjectRecord {
+        id: current.id, object_type: current.object_type, version: current.version,
+        status: "failed".into(), compartment_label: current.compartment_label,
+        payload, created_at: current.created_at, updated_at: now.to_string(),
+    }).await.expect("dependency marked non-active");
 
     let app = ubu_orchestrator::build_router(state);
     let response = app
@@ -354,8 +362,13 @@ async fn store_plan(
 async fn admit_objective(state: &AppState, title: &str) -> String {
     let id = UbuId::new(ObjectType::Objective).to_string();
     let now = UbuTimestamp::now_utc().to_string();
+    let envelope = state.envelope_for(
+        [(UbuId::parse(&id).unwrap(), ubu_core::VersionRef::Absent)].into_iter().collect(),
+        ubu_core::AuthoritySource::User, UbuTimestamp::parse(&now).unwrap(),
+    ).unwrap();
     queries::admit_object(
         state.inner().store.pool(),
+        &envelope,
         NewObjectRecord {
             id: id.clone(),
             object_type: ObjectType::Objective.as_str().to_owned(),
@@ -401,8 +414,13 @@ async fn admit_task(
         payload["objective_id"] = json!(objective_id);
     }
 
+    let envelope = state.envelope_for(
+        [(UbuId::parse(&id).unwrap(), ubu_core::VersionRef::Absent)].into_iter().collect(),
+        ubu_core::AuthoritySource::User, UbuTimestamp::parse(&now).unwrap(),
+    ).unwrap();
     queries::admit_object(
         state.inner().store.pool(),
+        &envelope,
         NewObjectRecord {
             id: id.clone(),
             object_type: ObjectType::Task.as_str().to_owned(),

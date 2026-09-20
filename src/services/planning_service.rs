@@ -600,8 +600,11 @@ async fn raise_blocking_recalculation(
         .filter(|finding| finding.blocking)
         .map(|finding| format!("{:?}", finding.category).to_ascii_lowercase())
         .collect::<Vec<_>>();
+    let envelope = state.envelope_for(Default::default(), ubu_core::AuthoritySource::System,
+        UbuTimestamp::parse(&now)?)?;
     queries::append_log_entry(
         state.inner().store.pool(),
+        &envelope,
         NewLogRecord {
             id: UbuId::new(ObjectType::LogEntry).to_string(),
             event_type: "recalculation_requested".to_owned(),
@@ -1068,7 +1071,7 @@ async fn build_affect_profile(pool: &sqlx::SqlitePool) -> Result<AffectProfileBo
 
 async fn active_preferences(pool: &sqlx::SqlitePool) -> Result<HashMap<String, Value>> {
     let rows = sqlx::query(
-        "SELECT payload_json FROM objects
+        "SELECT payload_json, version FROM objects
         WHERE object_type = ? AND status = ?
         ORDER BY updated_at DESC",
     )
@@ -1220,7 +1223,7 @@ fn affect_profile_uses_bootstrap_defaults(profile: &AffectProfileBody) -> bool {
 
 async fn latest_snapshot_affect(pool: &sqlx::SqlitePool) -> Result<Option<AffectObservationBody>> {
     let row = sqlx::query(
-        "SELECT payload_json FROM objects
+        "SELECT payload_json, version FROM objects
         WHERE object_type = ? AND status = ?
         ORDER BY updated_at DESC
         LIMIT 1",
@@ -1500,7 +1503,7 @@ async fn partition_tasks_by_preconditions(
 /// none has been recorded yet. Used by the precondition path, which evaluates
 /// against an empty universe when nothing has been captured.
 async fn current_universe_state(pool: &sqlx::SqlitePool) -> Result<UniverseState> {
-    Ok(read_current_universe_state(pool).await?.unwrap_or_else(|| {
+    Ok(read_current_universe_state(pool).await?.map(|(state, _)| state).unwrap_or_else(|| {
         UniverseState::new(
             UbuTimestamp::now_utc(),
             "empty UniverseState synthesized by orchestrator",
@@ -1514,9 +1517,9 @@ async fn current_universe_state(pool: &sqlx::SqlitePool) -> Result<UniverseState
 /// store's `persist_universe_state` updates an existing current version in place.
 pub(crate) async fn read_current_universe_state(
     pool: &sqlx::SqlitePool,
-) -> Result<Option<UniverseState>> {
+) -> Result<Option<(UniverseState, i64)>> {
     let row = sqlx::query(
-        "SELECT payload_json FROM objects
+        "SELECT payload_json, version FROM objects
         WHERE object_type = ?
         ORDER BY updated_at DESC, created_at DESC
         LIMIT 1",
@@ -1533,8 +1536,9 @@ pub(crate) async fn read_current_universe_state(
     let payload_json: String = row
         .try_get("payload_json")
         .map_err(|e| AppError::Internal(e.to_string()))?;
+    let version: i64 = row.try_get("version").map_err(|e| AppError::Internal(e.to_string()))?;
     serde_json::from_str(&payload_json)
-        .map(Some)
+        .map(|state| Some((state, version)))
         .map_err(|e| AppError::Internal(format!("failed to deserialize UniverseState: {e}")))
 }
 
