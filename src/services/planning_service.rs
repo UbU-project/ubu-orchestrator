@@ -1561,13 +1561,11 @@ fn add_static_conflict(conflicts: &mut BTreeSet<(u64, String, String)>,
 }
 
 async fn stored_static_windows(pool: &sqlx::SqlitePool) -> Result<HashMap<String, TimeWindowBody>> {
-    let rows = sqlx::query("SELECT id, payload_json FROM objects WHERE object_type = ?")
-        .bind(ObjectType::Task.as_str()).fetch_all(pool).await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let rows = queries::query_active_tasks(pool).await.map_err(AppError::from)?;
     let mut windows = HashMap::new();
     for row in rows {
-        let id: String = row.get("id");
-        let payload: Value = serde_json::from_str(row.get("payload_json"))
+        let id = row.id;
+        let payload: Value = serde_json::from_str(&row.payload_json)
             .map_err(|e| AppError::Internal(format!("failed to deserialize Task `{id}`: {e}")))?;
         if let Some(value) = payload.get("static_window").filter(|value| !value.is_null()) {
             let window: StaticWindow = serde_json::from_value(value.clone())
