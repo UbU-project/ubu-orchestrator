@@ -101,6 +101,7 @@ pub enum NextActionDiagnosticCode {
     AllCandidatesBlockedOnUnmetDependencies,
     AllCandidatesBlockedOnPreconditions,
     NoReadyTask,
+    StaleCalendar,
 }
 
 #[utoipa::path(

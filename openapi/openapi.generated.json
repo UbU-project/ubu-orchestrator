@@ -2006,7 +2006,8 @@
           "no_active_tasks",
           "all_candidates_blocked_on_unmet_dependencies",
           "all_candidates_blocked_on_preconditions",
-          "no_ready_task"
+          "no_ready_task",
+          "stale_calendar"
         ]
       },
       "NextActionExplanation": {

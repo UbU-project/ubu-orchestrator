@@ -21,6 +21,7 @@ pub async fn get_next_action(
 ) -> Result<NextActionResponse> {
     validate_schema_version(request.schema_version.as_deref())?;
 
+    let now = state.planning_now().inner().unix_timestamp();
     let pool = state.inner().store.pool();
     let current_calendar = planning_service::latest_admitted_plan(&state)
         .await?
@@ -34,6 +35,14 @@ pub async fn get_next_action(
                     && report.result == "failed"
         ) {
             return Ok(failed_legitimization_response(plan));
+        }
+        if !plan.steps.is_empty() && plan.steps.iter().all(|step| i128::from(step.end) <= i128::from(now)) {
+            return Ok(surface_reports(diagnostic_response(NextActionDiagnostic {
+                code: NextActionDiagnosticCode::StaleCalendar,
+                message: "the current Calendar has no placement after now; regenerate the plan".to_owned(),
+                blocked_task_count: 0,
+                sampled_task_ids: Vec::new(),
+            }), Some(plan)));
         }
     }
 
@@ -81,7 +90,9 @@ pub async fn get_next_action(
         .collect::<Vec<_>>();
 
     if let Some(plan) = current_calendar.as_ref() {
-        let Some(first_placement) = plan.steps.iter().min_by(|left, right| {
+        let Some(first_placement) = plan.steps.iter()
+            .filter(|step| i128::from(step.end) > i128::from(now))
+            .min_by(|left, right| {
             left.start
                 .cmp(&right.start)
                 .then_with(|| left.end.cmp(&right.end))

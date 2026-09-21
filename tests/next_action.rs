@@ -289,6 +289,7 @@ async fn test_state() -> AppState {
     AppState::in_memory(ServerConfig::from_env())
         .await
         .expect("state")
+        .with_clock(ubu_orchestrator::planning_time::FixedClock(UbuTimestamp::parse("1970-01-01T00:00:00Z").unwrap()))
 }
 
 async fn next_action_body(state: AppState) -> Value {
