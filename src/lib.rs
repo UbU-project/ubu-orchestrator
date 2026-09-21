@@ -1,6 +1,7 @@
 pub mod adapters;
 pub mod api;
 pub mod config;
+pub mod category_palette;
 pub mod device_registration;
 pub mod errors;
 pub mod instance_mode;

@@ -8,6 +8,7 @@ use ubu_core::{
 };
 use ubu_store::UbuStore;
 
+use crate::category_palette::CategoryPalette;
 use crate::config::{SecretToken, ServerConfig};
 use crate::device_registration::{load_or_register, new_registration, require_registered};
 use crate::errors::StartupError;
@@ -19,6 +20,7 @@ pub struct AppState {
 
 pub struct OrchestratorState {
     pub config: ServerConfig,
+    pub category_palette: CategoryPalette,
     pub store: UbuStore,
     pub device_registration: DeviceRegistration,
     pub causality_issuer: LocalIssuer,
@@ -30,34 +32,37 @@ pub struct OrchestratorState {
 impl AppState {
     pub async fn new(config: ServerConfig) -> Result<Self, StartupError> {
         // Refuse invalid or revoked operator material before touching the database.
+        let palette = CategoryPalette::load(config.category_palette_path())?;
         let registration = load_or_register(&config.device_registration_path())?;
         let store = UbuStore::connect(config.db_path())
             .await
             .map_err(StartupError::store_open)?;
-        Self::from_store(config, store, registration).await
+        Self::from_store(config, store, registration, palette).await
     }
 
-    /// Isolated convenience constructor: a fresh ephemeral registration, no file I/O.
+    /// Isolated convenience constructor: a fresh ephemeral registration, no registration file I/O.
     pub async fn in_memory(config: ServerConfig) -> Result<Self, StartupError> {
         Self::in_memory_with_registration(config, new_registration()).await
     }
 
-    /// Tests can supply restored registration material without any real file.
+    /// Tests can supply restored registration material without a registration file.
     pub async fn in_memory_with_registration(
         config: ServerConfig,
         registration: DeviceRegistration,
     ) -> Result<Self, StartupError> {
+        let palette = CategoryPalette::load(config.category_palette_path())?;
         require_registered(&registration)?;
         let store = UbuStore::in_memory()
             .await
             .map_err(StartupError::store_open)?;
-        Self::from_store(config, store, registration).await
+        Self::from_store(config, store, registration, palette).await
     }
 
     async fn from_store(
         config: ServerConfig,
         store: UbuStore,
         registration: DeviceRegistration,
+        category_palette: CategoryPalette,
     ) -> Result<Self, StartupError> {
         require_registered(&registration)?;
         ensure_orchestrator_projection_tables(store.pool())
@@ -67,6 +72,7 @@ impl AppState {
         Ok(Self {
             inner: Arc::new(OrchestratorState {
                 config,
+                category_palette,
                 store,
                 device_registration: registration,
                 causality_issuer,

@@ -37,6 +37,7 @@ pub struct ServerConfig {
     db_path: String,
     /// Operator-owned registration file, outside mutable database state.
     device_registration_path: Option<PathBuf>,
+    category_palette_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,6 +88,7 @@ impl ServerConfig {
             ),
             db_path: env::var("UBU_DB_PATH").unwrap_or_else(|_| "ubu-orchestrator.db".to_owned()),
             device_registration_path: env::var_os("UBU_DEVICE_REGISTRATION").map(PathBuf::from),
+            category_palette_path: env::var_os("UBU_CATEGORY_PALETTE_PATH").map(PathBuf::from),
         }
     }
 
@@ -127,6 +129,15 @@ impl ServerConfig {
     pub fn with_device_registration_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.device_registration_path = Some(path.into());
         self
+    }
+
+    pub fn with_category_palette_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.category_palette_path = Some(path.into());
+        self
+    }
+
+    pub fn category_palette_path(&self) -> Option<&Path> {
+        self.category_palette_path.as_deref()
     }
 
     pub fn device_registration_path(&self) -> PathBuf {

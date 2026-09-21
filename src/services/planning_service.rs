@@ -100,7 +100,7 @@ pub async fn generate(
                     full_legitimization.report,
                     planning_request.affect_warning.clone(),
                 ));
-                let titles = task_titles(state.inner().store.pool()).await?;
+                let titles = task_titles(state.inner().store.pool(), &state.inner().category_palette).await?;
                 let selected_candidate =
                     kernel_candidate_body(&selected, &titles, &planning_request, &non_capacity_tasks);
                 let alternatives = candidates
@@ -616,7 +616,7 @@ async fn persist_kernel_plan(
     non_capacity_tasks: &[TaskSpecBody],
 ) -> Result<PlanBody> {
     let now = UbuTimestamp::now_utc().to_string();
-    let titles = task_titles(state.inner().store.pool()).await?;
+    let titles = task_titles(state.inner().store.pool(), &state.inner().category_palette).await?;
     let steps = merge_steps(frozen_steps, kernel_plan.steps.iter()
         .map(|task| scheduled_task_body(task, &titles, request))
         .chain(direct_static_steps(non_capacity_tasks, &titles)));
@@ -730,7 +730,7 @@ fn scheduled_task_body(
         placement_authority,
         occupies_capacity: true,
         category_tag: titles.get(&task.task_id).and_then(|display| display.category_tag.clone()),
-        gcal_color_id: None,
+        gcal_color_id: titles.get(&task.task_id).and_then(|display| display.gcal_color_id.clone()),
     }
 }
 
@@ -746,7 +746,8 @@ fn direct_static_steps(tasks: &[TaskSpecBody], titles: &HashMap<String, TaskDisp
             summary: display.map(|d| d.title.clone()).unwrap_or_else(|| task.id.clone()),
             start: window.start, end: window.end, depends_on: task.depends_on.clone(),
             static_anchor: true, placement_authority: "user_override".into(), occupies_capacity: false,
-            category_tag: display.and_then(|d| d.category_tag.clone()), gcal_color_id: None,
+            category_tag: display.and_then(|d| d.category_tag.clone()),
+            gcal_color_id: display.and_then(|d| d.gcal_color_id.clone()),
         }
     }).collect()
 }
@@ -1449,9 +1450,10 @@ fn bootstrap_affect_observation(
 struct TaskDisplay {
     title: String,
     category_tag: Option<String>,
+    gcal_color_id: Option<String>,
 }
 
-async fn task_titles(pool: &sqlx::SqlitePool) -> Result<HashMap<String, TaskDisplay>> {
+async fn task_titles(pool: &sqlx::SqlitePool, palette: &crate::category_palette::CategoryPalette) -> Result<HashMap<String, TaskDisplay>> {
     let rows = sqlx::query("SELECT id, payload_json FROM objects WHERE object_type = ?")
         .bind(ObjectType::Task.as_str())
         .fetch_all(pool)
@@ -1467,9 +1469,12 @@ async fn task_titles(pool: &sqlx::SqlitePool) -> Result<HashMap<String, TaskDisp
             .map_err(|e| AppError::Internal(e.to_string()))?;
         let payload: Value = serde_json::from_str(&payload_json)
             .map_err(|e| AppError::Internal(format!("failed to deserialize task: {e}")))?;
+        let category_tag = payload.get("category_tag").and_then(Value::as_str).map(str::to_owned);
+        let gcal_color_id = palette.color(category_tag.as_deref()).map(str::to_owned);
         titles.insert(id.clone(), TaskDisplay {
             title: payload.get("title").and_then(Value::as_str).unwrap_or(&id).to_owned(),
-            category_tag: payload.get("category_tag").and_then(Value::as_str).map(str::to_owned),
+            category_tag,
+            gcal_color_id,
         });
     }
     Ok(titles)
