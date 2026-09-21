@@ -6,6 +6,10 @@ use utoipa::OpenApi;
     paths(
         crate::api::advisory::queue,
         crate::api::advisory::candidate,
+        crate::api::advisory::admit,
+        crate::api::advisory::reject,
+        crate::api::advisory::defer,
+        crate::api::advisory::resurface,
         crate::api::health::health,
         crate::api::bootstrap::start,
         crate::api::bootstrap::answer,
@@ -33,6 +37,10 @@ use utoipa::OpenApi;
     components(schemas(
         crate::api::advisory::AdvisoryCandidateResponse,
         crate::api::advisory::AdvisoryQueueResponse,
+        crate::api::advisory::AdvisoryAdmitResponse,
+        crate::api::advisory::ReviewRequest,
+        crate::api::advisory::RejectRequest,
+        crate::api::advisory::ResurfaceRequest,
         crate::api::health::HealthResponse,
         crate::api::bootstrap::BootstrapStartResponse,
         crate::api::bootstrap::BootstrapAnswerRequest,
