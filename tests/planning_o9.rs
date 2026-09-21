@@ -1064,7 +1064,6 @@ fn timestamp_seconds(value: &str) -> u64 {
         .expect("timestamp")
         .inner()
         .unix_timestamp() as u64
-
 }
 
 fn json_request(uri: &str, body: Value) -> Request<Body> {
