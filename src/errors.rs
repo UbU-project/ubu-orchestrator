@@ -10,6 +10,13 @@ pub type Result<T> = std::result::Result<T, AppError>;
 
 #[derive(Debug, Error)]
 pub enum AppError {
+    #[error("unsupported proposal operation `{operation}` for candidate kind {candidate_kind:?}")]
+    UnsupportedProposal {
+        operation: String,
+        candidate_kind: ubu_core::CandidateKind,
+    },
+    #[error("advisory target `{id}` does not exist")]
+    TargetNotFound { id: String },
     #[error(transparent)]
     Core(#[from] ubu_core::UbuError),
     #[error("bad request: {0}")]
@@ -90,6 +97,8 @@ struct ApiDiagnostic {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let status = match &self {
+            Self::UnsupportedProposal { .. } => StatusCode::UNPROCESSABLE_ENTITY,
+            Self::TargetNotFound { .. } => StatusCode::NOT_FOUND,
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::Diagnostic { status, .. } => *status,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
@@ -98,6 +107,14 @@ impl IntoResponse for AppError {
         };
 
         let diagnostics = match &self {
+            Self::UnsupportedProposal { .. } => vec![ApiDiagnostic {
+                code: "UnsupportedProposal".into(),
+                message: self.to_string(),
+            }],
+            Self::TargetNotFound { .. } => vec![ApiDiagnostic {
+                code: "TargetNotFound".into(),
+                message: self.to_string(),
+            }],
             Self::Diagnostic { code, message, .. } => vec![ApiDiagnostic {
                 code: code.clone(),
                 message: message.clone(),
