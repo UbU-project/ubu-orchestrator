@@ -119,3 +119,50 @@ and grep evidence are retained in the sibling P1B-13-results directory.
 No new dependency, devshell change, reminders/after/lore field, or orchestrator
 use of the new mapping fields was introduced. P1B-14 planning/projection work
 remains out of scope.
+
+## J: patched and unpatched dependency verification
+
+Patched `CARGO_NET_OFFLINE=true cargo tree --locked -i ubu_core`:
+
+```text
+ubu_core v0.1.0 (/home/sean/ubu-phase1b/ubu-core)
+├── ubu_github_adapter v0.1.0 (/home/sean/ubu-phase1b/ubu-github-adapter)
+│   └── ubu_orchestrator v0.1.0 (/home/sean/ubu-phase1b/ubu-orchestrator)
+├── ubu_orchestrator v0.1.0 (/home/sean/ubu-phase1b/ubu-orchestrator)
+├── ubu_planning_core v0.1.0 (/home/sean/ubu-phase1b/ubu-planning-kernel/crates/ubu-planning-core)
+│   ├── ubu_orchestrator v0.1.0 (/home/sean/ubu-phase1b/ubu-orchestrator)
+│   └── ubu_planning_cpu v0.1.0 (/home/sean/ubu-phase1b/ubu-planning-kernel/crates/ubu-planning-cpu)
+│       └── ubu_orchestrator v0.1.0 (/home/sean/ubu-phase1b/ubu-orchestrator)
+├── ubu_planning_cpu v0.1.0 (/home/sean/ubu-phase1b/ubu-planning-kernel/crates/ubu-planning-cpu) (*)
+└── ubu_store v0.1.0 (/home/sean/ubu-phase1b/ubu-store)
+    └── ubu_orchestrator v0.1.0 (/home/sean/ubu-phase1b/ubu-orchestrator)
+```
+
+With the orchestrator config moved aside and its committed lockfile restored,
+`cargo build --locked` passed against the pushed git revisions. Then
+`CARGO_NET_OFFLINE=true cargo tree --locked -i ubu_core` reported:
+
+```text
+ubu_core v0.1.0 (https://github.com/UbU-project/ubu-core?rev=59f04f470aa5696e6762b6b594f1a02918bc525b#59f04f47)
+├── ubu_github_adapter v0.1.0 (https://github.com/UbU-project/ubu-github-adapter?rev=9ab7f7d752d22a9701250d1107f403745b795c66#9ab7f7d7)
+│   └── ubu_orchestrator v0.1.0 (/home/sean/ubu-phase1b/ubu-orchestrator)
+├── ubu_orchestrator v0.1.0 (/home/sean/ubu-phase1b/ubu-orchestrator)
+├── ubu_planning_core v0.1.0 (https://github.com/UbU-project/ubu-planning-kernel?rev=9e8ea74a0c7f306dd7770829c3e9457d5475dfb5#9e8ea74a)
+│   ├── ubu_orchestrator v0.1.0 (/home/sean/ubu-phase1b/ubu-orchestrator)
+│   └── ubu_planning_cpu v0.1.0 (https://github.com/UbU-project/ubu-planning-kernel?rev=9e8ea74a0c7f306dd7770829c3e9457d5475dfb5#9e8ea74a)
+│       └── ubu_orchestrator v0.1.0 (/home/sean/ubu-phase1b/ubu-orchestrator)
+├── ubu_planning_cpu v0.1.0 (https://github.com/UbU-project/ubu-planning-kernel?rev=9e8ea74a0c7f306dd7770829c3e9457d5475dfb5#9e8ea74a) (*)
+└── ubu_store v0.1.0 (https://github.com/UbU-project/ubu-store?rev=4ed3a0a97e4ede4a57d13bd05d69688f128e3755#4ed3a0a9)
+    └── ubu_orchestrator v0.1.0 (/home/sean/ubu-phase1b/ubu-orchestrator)
+```
+
+The lockfile contains exactly one ubu_core package, at the pushed D revision.
+The config was restored after verification, then every generated config was
+removed. All sibling lockfiles were restored to their committed or original
+bytes. All nine sibling working trees were confirmed clean after cleanup.
+No registry package/version/checksum changed in any lockfile, and unrelated
+sibling HEADs (including devshell) remain unchanged.
+
+The standalone P1B-13-results directory contains complete test/build logs,
+verbatim tails, both dependency listings, compiler probe output and final
+`tree -I target` listings for all six changed repositories.
