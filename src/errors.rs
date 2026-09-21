@@ -11,7 +11,7 @@ pub type Result<T> = std::result::Result<T, AppError>;
 #[derive(Debug, Error)]
 pub enum AppError {
     #[error(transparent)]
-    Core(#[from] ubu_core_legacy::UbuError),
+    Core(#[from] ubu_core::UbuError),
     #[error("bad request: {0}")]
     BadRequest(String),
     #[error("{message}")]

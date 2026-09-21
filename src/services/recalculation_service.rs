@@ -2,8 +2,8 @@ use std::collections::HashSet;
 
 use serde_json::{json, Value};
 use sqlx::Row;
-use ubu_core_legacy::id_registry::ObjectType;
-use ubu_core_legacy::{UbuId, UbuTimestamp};
+use ubu_core::id_registry::ObjectType;
+use ubu_core::{UbuId, UbuTimestamp};
 use ubu_store::models::log_record::NewLogRecord;
 use ubu_store::queries;
 
@@ -143,7 +143,7 @@ async fn append_recalculation_log(state: &AppState, request: &RecalculationReque
         .map(|object| object.id.clone())
         .collect::<Vec<_>>();
 
-    let envelope = state.envelope_for(Default::default(), ubu_core_legacy::AuthoritySource::System,
+    let envelope = state.envelope_for(Default::default(), ubu_core::AuthoritySource::System,
         UbuTimestamp::parse(&request.triggered_at)?)?;
     queries::append_log_entry(
         state.inner().store.pool(),

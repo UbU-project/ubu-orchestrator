@@ -3,8 +3,8 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
-use ubu_core_legacy::id_registry::ObjectType;
-use ubu_core_legacy::{UbuId, UbuTimestamp};
+use ubu_core::id_registry::ObjectType;
+use ubu_core::{UbuId, UbuTimestamp};
 use ubu_orchestrator::api::next_action::NEXT_ACTION_SCHEMA_VERSION;
 use ubu_orchestrator::config::ServerConfig;
 use ubu_orchestrator::state::AppState;
@@ -234,8 +234,8 @@ async fn next_action_returns_bounded_diagnostic_when_all_tasks_are_blocked() {
     let current = queries::get_current_state(pool, &dependency_id).await.unwrap().unwrap();
     let now = UbuTimestamp::now_utc();
     let envelope = state.envelope_for(
-        [(UbuId::parse(&dependency_id).unwrap(), ubu_core_legacy::VersionRef::Version(current.version as u64))].into_iter().collect(),
-        ubu_core_legacy::AuthoritySource::User, now,
+        [(UbuId::parse(&dependency_id).unwrap(), ubu_core::VersionRef::Version(current.version as u64))].into_iter().collect(),
+        ubu_core::AuthoritySource::User, now,
     ).unwrap();
     let mut payload: Value = serde_json::from_str(&current.payload_json).unwrap();
     payload["status"] = json!("failed");
@@ -363,8 +363,8 @@ async fn admit_objective(state: &AppState, title: &str) -> String {
     let id = UbuId::new(ObjectType::Objective).to_string();
     let now = UbuTimestamp::now_utc().to_string();
     let envelope = state.envelope_for(
-        [(UbuId::parse(&id).unwrap(), ubu_core_legacy::VersionRef::Absent)].into_iter().collect(),
-        ubu_core_legacy::AuthoritySource::User, UbuTimestamp::parse(&now).unwrap(),
+        [(UbuId::parse(&id).unwrap(), ubu_core::VersionRef::Absent)].into_iter().collect(),
+        ubu_core::AuthoritySource::User, UbuTimestamp::parse(&now).unwrap(),
     ).unwrap();
     queries::admit_object(
         state.inner().store.pool(),
@@ -415,8 +415,8 @@ async fn admit_task(
     }
 
     let envelope = state.envelope_for(
-        [(UbuId::parse(&id).unwrap(), ubu_core_legacy::VersionRef::Absent)].into_iter().collect(),
-        ubu_core_legacy::AuthoritySource::User, UbuTimestamp::parse(&now).unwrap(),
+        [(UbuId::parse(&id).unwrap(), ubu_core::VersionRef::Absent)].into_iter().collect(),
+        ubu_core::AuthoritySource::User, UbuTimestamp::parse(&now).unwrap(),
     ).unwrap();
     queries::admit_object(
         state.inner().store.pool(),

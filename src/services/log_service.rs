@@ -1,9 +1,9 @@
 use serde_json::json;
-use ubu_core_legacy::core::{
+use ubu_core::core::{
     apply_universe_mutations, validate_mutations_for_mode, InstanceMode, TaskEffect,
 };
-use ubu_core_legacy::id_registry::ObjectType;
-use ubu_core_legacy::{AuthoritySource, UbuId, UbuTimestamp, VersionRef};
+use ubu_core::id_registry::ObjectType;
+use ubu_core::{AuthoritySource, UbuId, UbuTimestamp, VersionRef};
 use ubu_store::models::log_record::NewLogRecord;
 use ubu_store::models::object_record::NewObjectRecord;
 use ubu_store::queries;

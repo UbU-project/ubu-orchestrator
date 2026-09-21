@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
-use ubu_core_legacy::{
+use ubu_core::{
     AuthoritySource, CausalityIssuer, DeviceRegistration, EnvelopeRequest, LocalIssuer,
     MutationEnvelope, UbuId, UbuTimestamp, VersionRef,
 };
@@ -104,16 +104,11 @@ impl AppState {
         idempotency_key: ubu_core::IdempotencyKey,
     ) -> crate::errors::Result<ubu_core::MutationEnvelope> {
         let now = ubu_core::UbuTimestamp::now_utc();
-        let origin_device_id =
-            ubu_core::DeviceId::parse(self.inner.device_registration.device_id.as_str())
-                .map_err(|error| crate::errors::AppError::Internal(error.to_string()))?;
-        let actor_identity_id = ubu_core::UbuId::parse(self.actor_identity_id().as_str())
-            .map_err(|error| crate::errors::AppError::Internal(error.to_string()))?;
         let envelope = ubu_core::MutationEnvelope {
             idempotency_key,
             observed_versions: observed,
-            origin_device_id,
-            actor_identity_id,
+            origin_device_id: self.inner.device_registration.device_id.clone(),
+            actor_identity_id: self.actor_identity_id().clone(),
             authority_source: authority,
             created_time: now,
             effective_time,
@@ -121,9 +116,7 @@ impl AppState {
             observed_policy_versions: None,
             execution_context: None,
         };
-        envelope
-            .validate()
-            .map_err(|error| crate::errors::AppError::Internal(error.to_string()))?;
+        envelope.validate()?;
         Ok(envelope)
     }
 

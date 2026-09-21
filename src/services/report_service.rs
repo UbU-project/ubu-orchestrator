@@ -13,7 +13,7 @@ pub async fn risk(state: AppState) -> Result<RiskReportResponse> {
             .await?
             .and_then(|plan| plan.risk_report)
             .unwrap_or_else(|| RiskReportResponse {
-                generated_at: ubu_core_legacy::UbuTimestamp::now_utc().to_string(),
+                generated_at: ubu_core::UbuTimestamp::now_utc().to_string(),
                 level: RiskLevel::Low,
                 findings: Vec::new(),
             }),

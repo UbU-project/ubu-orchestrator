@@ -60,7 +60,7 @@ pub async fn candidate(
     State(state): State<AppState>,
     Path(candidate_id): Path<String>,
 ) -> Result<Json<AdvisoryCandidateResponse>> {
-    let id = ubu_core_legacy::AdvisoryCandidateId::parse(&candidate_id)
+    let id = ubu_core::AdvisoryCandidateId::parse(&candidate_id)
         .map_err(|error| AppError::BadRequest(error.to_string()))?;
     let record = ubu_store::api::review::get_advisory_candidate(state.inner().store.pool(), &id)
         .await?

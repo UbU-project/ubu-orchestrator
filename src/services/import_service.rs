@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use serde_json::json;
-use ubu_core_legacy::core::{ExternalReference, Task};
-use ubu_core_legacy::id_registry::ObjectType;
-use ubu_core_legacy::{AuthoritySource, UbuId, UbuTimestamp, VersionRef};
+use ubu_core::core::{ExternalReference, Task};
+use ubu_core::id_registry::ObjectType;
+use ubu_core::{AuthoritySource, UbuId, UbuTimestamp, VersionRef};
 use ubu_github_adapter::auth::GitHubAuth;
 use ubu_github_adapter::candidate_mapping::map_repository_state;
 use ubu_github_adapter::cli::import_live::import_live_repository;

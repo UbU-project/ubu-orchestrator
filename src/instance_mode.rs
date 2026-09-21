@@ -7,7 +7,7 @@
 //! `UniverseState`. Keep the literal here so the mode can be configured later
 //! without scattering `InstanceMode` literals across the services.
 
-use ubu_core_legacy::core::InstanceMode;
+use ubu_core::core::InstanceMode;
 
 /// The instance mode for this MVP deployment (`user_mode`).
 pub const MVP_INSTANCE_MODE: InstanceMode = InstanceMode::UserMode;

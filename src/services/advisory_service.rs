@@ -26,12 +26,8 @@ pub async fn run_advisory<T: AdvisoryTransport>(
     submission: LocalAdvisorySubmission,
     transport: &T,
 ) -> Result<AdvisoryRunReport> {
-    submission
-        .validate()
-        .map_err(|error| crate::errors::AppError::Internal(error.to_string()))?;
-    let result = transport
-        .submit(&submission)
-        .map_err(|error| crate::errors::AppError::Internal(error.to_string()))?;
+    submission.validate()?;
+    let result = transport.submit(&submission)?;
     let mut report = AdvisoryRunReport {
         submission_id: submission.submission_id.clone(),
         status: result.status,
@@ -56,35 +52,19 @@ pub async fn run_advisory<T: AdvisoryTransport>(
             report.candidates_rejected += 1;
             continue;
         }
-        let key = ubu_core::IdempotencyKey::parse(candidate.idempotency_key.as_str())
-            .map_err(|error| crate::errors::AppError::Internal(error.to_string()))?;
         let envelope = state.envelope_with_key(
             Default::default(),
             ubu_core::AuthoritySource::AutomationWorker,
             candidate.effective_time.unwrap_or(candidate.proposed_at),
-            key,
+            candidate.idempotency_key.clone(),
         )?;
-        let legacy_envelope: ubu_core_legacy::MutationEnvelope = serde_json::from_value(
-            serde_json::to_value(envelope)
-                .map_err(|error| crate::errors::AppError::Internal(error.to_string()))?,
-        )
-        .map_err(|error| crate::errors::AppError::Internal(error.to_string()))?;
-        let legacy_candidate: ubu_core_legacy::AdvisoryCandidate = serde_json::from_value(
-            serde_json::to_value(candidate)
-                .map_err(|error| crate::errors::AppError::Internal(error.to_string()))?,
-        )
-        .map_err(|error| crate::errors::AppError::Internal(error.to_string()))?;
-        match store_advisory_candidate(
-            state.inner().store.pool(),
-            &legacy_envelope,
-            legacy_candidate,
-        )
-        .await
+        match store_advisory_candidate(state.inner().store.pool(), &envelope, candidate.clone())
+            .await
         {
             Ok(_) => report.candidates_stored += 1,
-            Err(ubu_store::StoreError::Core(
-                ubu_core_legacy::UbuError::IdempotencyKeyConflict { .. },
-            )) => {
+            Err(ubu_store::StoreError::Core(ubu_core::UbuError::IdempotencyKeyConflict {
+                ..
+            })) => {
                 report.candidates_rejected += 1;
                 report.diagnostics.push(json!({
                     "code": "idempotency_key_conflict",

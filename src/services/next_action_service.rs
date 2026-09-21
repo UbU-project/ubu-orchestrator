@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use serde_json::Value;
-use ubu_core_legacy::id_registry::ObjectType;
+use ubu_core::id_registry::ObjectType;
 use ubu_store::models::object_record::ObjectRecord;
 
 use crate::api::next_action::{

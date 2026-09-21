@@ -1,7 +1,7 @@
 use axum::extract::State;
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use ubu_core_legacy::AuthoritySource;
+use ubu_core::AuthoritySource;
 use utoipa::ToSchema;
 
 use crate::errors::Result;

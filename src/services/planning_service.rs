@@ -2,19 +2,19 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde_json::{json, Value};
 use sqlx::Row;
-use ubu_core_legacy::core::{
+use ubu_core::core::{
     evaluate_universe_precondition, validate_precondition_for_mode, InstanceMode,
     UniversePrecondition, UniversePreconditionError, UniverseState,
 };
-use ubu_core_legacy::id_registry::ObjectType;
-use ubu_core_legacy::{UbuId, UbuTimestamp};
+use ubu_core::id_registry::ObjectType;
+use ubu_core::{UbuId, UbuTimestamp};
 use ubu_planning_core::{
     CorrelationGroup, DurationModel, Plan as KernelPlan, PlanCandidate, PlanStatus,
     PlanningRequest, RepairRequest, ScheduledTask, TaskSpec, TimeWindow, PLANNING_SCHEMA_VERSION,
 };
 use ubu_store::models::log_record::NewLogRecord;
 use ubu_store::models::plan_record::NewPlanRecord;
-use ubu_store::models::task_record::{TaskCorrelationGroup, TaskDurationEstimate};
+use ubu_core::core::{TaskCorrelationGroup, TaskDurationEstimate};
 use ubu_store::queries;
 
 use crate::adapters::planner_adapter::{CpuPlannerAdapter, PlannerAdapter};
@@ -600,7 +600,7 @@ async fn raise_blocking_recalculation(
         .filter(|finding| finding.blocking)
         .map(|finding| format!("{:?}", finding.category).to_ascii_lowercase())
         .collect::<Vec<_>>();
-    let envelope = state.envelope_for(Default::default(), ubu_core_legacy::AuthoritySource::System,
+    let envelope = state.envelope_for(Default::default(), ubu_core::AuthoritySource::System,
         UbuTimestamp::parse(&now)?)?;
     queries::append_log_entry(
         state.inner().store.pool(),

@@ -4,8 +4,8 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use sqlx::Row;
 use tower::ServiceExt;
-use ubu_core_legacy::id_registry::ObjectType;
-use ubu_core_legacy::{UbuId, UbuTimestamp};
+use ubu_core::id_registry::ObjectType;
+use ubu_core::{UbuId, UbuTimestamp};
 use ubu_orchestrator::api::next_action::NEXT_ACTION_SCHEMA_VERSION;
 use ubu_orchestrator::api::planning::{
     AffectLegitimizationModeBody, PlanningModeBody, ProbabilityQualityBody,
@@ -861,8 +861,8 @@ async fn admit_task(state: &AppState, title: &str, extra: Value) -> String {
     }
 
     let envelope = state.envelope_for(
-        [(UbuId::parse(&id).unwrap(), ubu_core_legacy::VersionRef::Absent)].into_iter().collect(),
-        ubu_core_legacy::AuthoritySource::User, UbuTimestamp::parse(&now).unwrap(),
+        [(UbuId::parse(&id).unwrap(), ubu_core::VersionRef::Absent)].into_iter().collect(),
+        ubu_core::AuthoritySource::User, UbuTimestamp::parse(&now).unwrap(),
     ).unwrap();
     queries::admit_object(
         state.inner().store.pool(),
@@ -887,8 +887,8 @@ async fn admit_universe_state(state: &AppState, facts: Value) -> String {
     let id = UbuId::new(ObjectType::UniverseState).to_string();
     let now = UbuTimestamp::now_utc().to_string();
     let envelope = state.envelope_for(
-        [(UbuId::parse(&id).unwrap(), ubu_core_legacy::VersionRef::Absent)].into_iter().collect(),
-        ubu_core_legacy::AuthoritySource::User, UbuTimestamp::parse(&now).unwrap(),
+        [(UbuId::parse(&id).unwrap(), ubu_core::VersionRef::Absent)].into_iter().collect(),
+        ubu_core::AuthoritySource::User, UbuTimestamp::parse(&now).unwrap(),
     ).unwrap();
     queries::admit_object(
         state.inner().store.pool(),
@@ -922,8 +922,8 @@ async fn admit_preference(state: &AppState, name: &str, value: Value) -> String 
     let id = UbuId::new(ObjectType::Preference).to_string();
     let now = UbuTimestamp::now_utc().to_string();
     let envelope = state.envelope_for(
-        [(UbuId::parse(&id).unwrap(), ubu_core_legacy::VersionRef::Absent)].into_iter().collect(),
-        ubu_core_legacy::AuthoritySource::User, UbuTimestamp::parse(&now).unwrap(),
+        [(UbuId::parse(&id).unwrap(), ubu_core::VersionRef::Absent)].into_iter().collect(),
+        ubu_core::AuthoritySource::User, UbuTimestamp::parse(&now).unwrap(),
     ).unwrap();
     queries::admit_object(
         state.inner().store.pool(),
@@ -960,8 +960,8 @@ async fn admit_preference(state: &AppState, name: &str, value: Value) -> String 
 async fn admit_snapshot(state: &AppState, observed_at: &str, values: Value) -> String {
     let id = UbuId::new(ObjectType::Snapshot).to_string();
     let envelope = state.envelope_for(
-        [(UbuId::parse(&id).unwrap(), ubu_core_legacy::VersionRef::Absent)].into_iter().collect(),
-        ubu_core_legacy::AuthoritySource::User, UbuTimestamp::parse(observed_at).unwrap(),
+        [(UbuId::parse(&id).unwrap(), ubu_core::VersionRef::Absent)].into_iter().collect(),
+        ubu_core::AuthoritySource::User, UbuTimestamp::parse(observed_at).unwrap(),
     ).unwrap();
     queries::admit_object(
         state.inner().store.pool(),
@@ -1037,7 +1037,7 @@ async fn store_calendar_window(state: &AppState, start: &str, end: &str) {
 
 async fn append_user_override_log(state: &AppState, task_id: &str) {
     let now = UbuTimestamp::now_utc().to_string();
-    let envelope = state.envelope_for(Default::default(), ubu_core_legacy::AuthoritySource::UserOverride,
+    let envelope = state.envelope_for(Default::default(), ubu_core::AuthoritySource::UserOverride,
         UbuTimestamp::parse(&now).unwrap()).unwrap();
     queries::append_log_entry(
         state.inner().store.pool(),

@@ -3,7 +3,7 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
-use ubu_core_legacy::{AuthoritySource, MutationEnvelope, ObjectType, UbuId, UbuTimestamp, VersionRef};
+use ubu_core::{AuthoritySource, MutationEnvelope, ObjectType, UbuId, UbuTimestamp, VersionRef};
 use ubu_orchestrator::api::bootstrap::BOOTSTRAP_SCHEMA_VERSION;
 use ubu_orchestrator::api::user_action::TASK_ACTION_SCHEMA_VERSION;
 use ubu_orchestrator::config::{GithubIngestMode, ProjectionExportMode, ServerConfig};
