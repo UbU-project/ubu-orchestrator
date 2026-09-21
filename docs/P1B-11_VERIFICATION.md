@@ -113,3 +113,36 @@ ubu_core v0.1.0 (https://github.com/UbU-project/ubu-core?rev=cef80fe0ea68bf49413
 Cargo.lock contains exactly one ubu_core package, at cef80fe; neither old core
 revision remains. Adapter (23), kernel (35) and orchestrator (75) tests all pass.
 The orchestrator C/D named test outcomes match exactly.
+
+## F: DS-1 local patch verification
+
+Devshell remained on `ds-1-package-patches` at
+`0499179b860dca24de24c7e37929f4b4d8ff7f17`, unchanged. Its
+`./scripts/gen-patch-config.sh` generated store, adapter, kernel and orchestrator
+configs; core needs no patch because it has no sibling git dependency.
+
+`CARGO_NET_OFFLINE=true cargo build` succeeded in all four required repositories:
+ubu-core, ubu-store, ubu-github-adapter and ubu-orchestrator.
+
+`CARGO_NET_OFFLINE=true cargo tree --locked -i ubu_core` then reported:
+
+```text
+ubu_core v0.1.0 (/home/sean/ubu-phase1b/ubu-core)
+├── ubu_github_adapter v0.1.0 (/home/sean/ubu-phase1b/ubu-github-adapter)
+│   └── ubu_orchestrator v0.1.0 (/home/sean/ubu-phase1b/ubu-orchestrator)
+├── ubu_orchestrator v0.1.0 (/home/sean/ubu-phase1b/ubu-orchestrator)
+├── ubu_planning_core v0.1.0 (/home/sean/ubu-phase1b/ubu-planning-kernel/crates/ubu-planning-core)
+│   ├── ubu_orchestrator v0.1.0 (/home/sean/ubu-phase1b/ubu-orchestrator)
+│   └── ubu_planning_cpu v0.1.0 (/home/sean/ubu-phase1b/ubu-planning-kernel/crates/ubu-planning-cpu)
+│       └── ubu_orchestrator v0.1.0 (/home/sean/ubu-phase1b/ubu-orchestrator)
+├── ubu_planning_cpu v0.1.0 (/home/sean/ubu-phase1b/ubu-planning-kernel/crates/ubu-planning-cpu) (*)
+└── ubu_store v0.1.0 (/home/sean/ubu-phase1b/ubu-store)
+    └── ubu_orchestrator v0.1.0 (/home/sean/ubu-phase1b/ubu-orchestrator)
+```
+
+The patched lockfile had exactly one ubu_core package with no git source.
+All generated configs were removed first, then every sibling Cargo.lock was
+restored to its pre-F contents (or removed if absent before verification).
+All nine sibling trees were confirmed clean after cleanup. Core, schemas, store
+and devshell have no committed changes. The standalone evidence directory
+contains complete build/test logs, E/F listings and final `tree -I target` output.
