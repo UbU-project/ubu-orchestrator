@@ -2379,6 +2379,7 @@
       },
       "PlanningRequestBody": {
         "type": "object",
+        "description": "Store-built coordinates and durations use Unix seconds; supplied requests\nretain the caller's unit-agnostic kernel coordinates.",
         "required": [
           "request_id"
         ],
@@ -3353,6 +3354,8 @@
           "summary",
           "start",
           "end",
+          "start_at",
+          "end_at",
           "depends_on",
           "static_anchor",
           "placement_authority"
@@ -3373,7 +3376,12 @@
           "end": {
             "type": "integer",
             "format": "int64",
+            "description": "Unix seconds.",
             "minimum": 0
+          },
+          "end_at": {
+            "type": "string",
+            "description": "RFC 3339 UTC representation of end."
           },
           "gcal_color_id": {
             "type": [
@@ -3395,7 +3403,12 @@
           "start": {
             "type": "integer",
             "format": "int64",
+            "description": "Unix seconds.",
             "minimum": 0
+          },
+          "start_at": {
+            "type": "string",
+            "description": "RFC 3339 UTC representation of start."
           },
           "static_anchor": {
             "type": "boolean"
@@ -3674,6 +3687,7 @@
       },
       "TimeWindowBody": {
         "type": "object",
+        "description": "Unix seconds for store-built requests; caller-defined units for supplied requests.",
         "required": [
           "start",
           "end"

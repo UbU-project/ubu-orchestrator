@@ -37,6 +37,6 @@ late is a precedence conflict even if it does not consume capacity. Non-capacity
 steps never cause an occupancy conflict. A pair is reported once if it violates
 both rules, ordered by the earlier `(start, id)` and then the other id.
 
-Known deferred issues: without a calendar row the horizon starts at Unix minute
-zero; duration-estimate seconds still enter the minute timeline unconverted; the
-kernel preserves prior Static steps in repair even when their window has changed.
+Planning now uses Unix seconds and a bounded now-based default horizon; see
+[PLANNING_TIME.md](PLANNING_TIME.md). The kernel still preserves prior Static
+steps in repair even when their window has changed.

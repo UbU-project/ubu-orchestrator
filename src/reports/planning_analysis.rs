@@ -277,7 +277,7 @@ fn deadline_findings(
                 severity: RiskLevel::Medium,
                 blocking: false,
                 detail: format!(
-                    "scheduled end leaves {} seconds or planner units before the due coordinate",
+                    "scheduled end leaves {} seconds before the due coordinate",
                     due_at.saturating_sub(step.end)
                 ),
                 subject_ref: Some(step.task_id.clone()),
@@ -314,7 +314,7 @@ fn dependency_findings(
             category: RiskCategory::DependencyFragility,
             severity: RiskLevel::Medium,
             blocking: false,
-            detail: "a dependency chain has no more than the Phase 1 slack allowance".to_owned(),
+            detail: "a dependency chain has no more than 300 seconds of slack".to_owned(),
             subject_ref: fragile,
         });
     }
@@ -516,7 +516,7 @@ fn schedule_coordinate(value: &Value) -> Option<u64> {
     value.as_u64().or_else(|| {
         let timestamp = UbuTimestamp::parse(value.as_str()?).ok()?;
         let seconds = timestamp.inner().unix_timestamp();
-        (seconds >= 0).then_some(seconds as u64 / 60)
+        (seconds >= 0).then_some(seconds as u64)
     })
 }
 

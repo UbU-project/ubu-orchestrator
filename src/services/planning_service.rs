@@ -36,7 +36,7 @@ use crate::reports::planning_analysis::{self, PlanningAnalysisInput};
 use crate::state::AppState;
 
 /// Fixed planning duration used when a stored Task has no duration estimate.
-const DEFAULT_TASK_DURATION_MINUTES: u64 = 30;
+const DEFAULT_TASK_DURATION_SECONDS: u64 = 1800;
 const DEFAULT_AFFECT_SCALE: f64 = 1.5;
 const DEFAULT_AFFECT_THRESHOLD: f64 = 0.5;
 
@@ -102,11 +102,11 @@ pub async fn generate(
                 ));
                 let titles = task_titles(state.inner().store.pool(), &state.inner().category_palette).await?;
                 let selected_candidate =
-                    kernel_candidate_body(&selected, &titles, &planning_request, &non_capacity_tasks);
+                    kernel_candidate_body(&selected, &titles, &planning_request, &non_capacity_tasks)?;
                 let alternatives = candidates
                     .iter()
                     .map(|candidate| kernel_candidate_body(candidate, &titles, &planning_request, &non_capacity_tasks))
-                    .collect::<Vec<_>>();
+                    .collect::<Result<Vec<_>>>()?;
                 let (risk_report, plan_quality) = planning_analysis::analyze(
                     state.inner().store.pool(),
                     PlanningAnalysisInput {
@@ -372,21 +372,23 @@ pub fn frozen_steps_for_plan(
         .collect()
 }
 
-pub fn kernel_plan_body(plan: KernelPlan) -> PlanBody {
+pub fn kernel_plan_body(plan: KernelPlan) -> Result<PlanBody> {
     let created_at = UbuTimestamp::now_utc().to_string();
-    PlanBody {
+    Ok(PlanBody {
         id: plan.plan_id,
         status: format!("{:?}", plan.status).to_ascii_lowercase(),
         steps: plan
             .steps
             .into_iter()
             .enumerate()
-            .map(|(index, task)| ScheduledTaskBody {
+            .map(|(index, task)| Ok(ScheduledTaskBody {
                 index: index as u32,
                 task_id: task.task_id.clone(),
                 summary: task.task_id,
                 start: task.start,
                 end: task.end,
+                start_at: crate::planning_time::timestamp_at(task.start)?,
+                end_at: crate::planning_time::timestamp_at(task.end)?,
                 depends_on: task.depends_on,
                 static_anchor: task.static_anchor,
                 occupies_capacity: true,
@@ -397,8 +399,8 @@ pub fn kernel_plan_body(plan: KernelPlan) -> PlanBody {
                 } else {
                     "planner".to_owned()
                 },
-            })
-            .collect(),
+            }))
+            .collect::<Result<Vec<_>>>()?,
         created_at,
         supersedes_plan_id: None,
         legitimization: None,
@@ -406,7 +408,7 @@ pub fn kernel_plan_body(plan: KernelPlan) -> PlanBody {
         alternatives: Vec::new(),
         risk_report: None,
         human_complete_plan_quality: None,
-    }
+    })
 }
 
 fn validate_optional_schema_version(schema_version: Option<&str>) -> Result<()> {
@@ -454,7 +456,7 @@ async fn build_request_from_store_with_context(
 
     // Resolve H using the existing fallback before applying participation rules.
     let mut task_bodies = task_rows.iter().map(|task| TaskSpecBody {
-        id: task.id.clone(), duration: duration_minutes(&task.payload),
+        id: task.id.clone(), duration: duration_seconds(&task.payload),
         duration_estimate: None, correlation_groups: Vec::new(),
         depends_on: Vec::new(), window: None, static_anchor: None,
     }).collect::<Vec<_>>();
@@ -476,7 +478,7 @@ async fn build_request_from_store_with_context(
                         .iter()
                         .map(|task| task.duration)
                         .sum::<u64>()
-                        .max(DEFAULT_TASK_DURATION_MINUTES);
+                        .max(DEFAULT_TASK_DURATION_SECONDS);
                     time_window.end = time_window.start + remaining_duration;
                 }
             }
@@ -514,7 +516,7 @@ async fn build_request_from_store_with_context(
             }
         } else if capacity {
             task_bodies.push(TaskSpecBody {
-                id: task.id.clone(), duration: duration_minutes(&task.payload),
+                id: task.id.clone(), duration: duration_seconds(&task.payload),
                 duration_estimate: task_duration_estimate(&task.payload)?,
                 correlation_groups: task_correlation_groups(&task.payload)?,
                 depends_on: dependency_ids(&task.payload), window: Some(horizon.clone()),
@@ -619,7 +621,8 @@ async fn persist_kernel_plan(
     let titles = task_titles(state.inner().store.pool(), &state.inner().category_palette).await?;
     let steps = merge_steps(frozen_steps, kernel_plan.steps.iter()
         .map(|task| scheduled_task_body(task, &titles, request))
-        .chain(direct_static_steps(non_capacity_tasks, &titles)));
+        .collect::<Result<Vec<_>>>()?.into_iter()
+        .chain(direct_static_steps(non_capacity_tasks, &titles)?));
 
     let plan = PlanBody {
         id: plan_id.to_owned(),
@@ -706,7 +709,7 @@ fn scheduled_task_body(
     task: &ScheduledTask,
     titles: &HashMap<String, TaskDisplay>,
     request: &PlanningRequestBody,
-) -> ScheduledTaskBody {
+) -> Result<ScheduledTaskBody> {
     let placement_authority = request
         .tasks
         .iter()
@@ -716,7 +719,7 @@ fn scheduled_task_body(
         .unwrap_or("planner")
         .to_owned();
 
-    ScheduledTaskBody {
+    Ok(ScheduledTaskBody {
         index: 0,
         task_id: task.task_id.clone(),
         summary: titles
@@ -725,30 +728,34 @@ fn scheduled_task_body(
             .unwrap_or_else(|| task.task_id.clone()),
         start: task.start,
         end: task.end,
+        start_at: crate::planning_time::timestamp_at(task.start)?,
+        end_at: crate::planning_time::timestamp_at(task.end)?,
         depends_on: task.depends_on.clone(),
         static_anchor: task.static_anchor,
         placement_authority,
         occupies_capacity: true,
         category_tag: titles.get(&task.task_id).and_then(|display| display.category_tag.clone()),
         gcal_color_id: titles.get(&task.task_id).and_then(|display| display.gcal_color_id.clone()),
-    }
+    })
 }
 
 /// Non-capacity steps do not enter the kernel: robustness, probability and
 /// legitimization describe capacity work only. Risk and plan-quality analysis
 /// sees these steps through the merged candidate bodies.
-fn direct_static_steps(tasks: &[TaskSpecBody], titles: &HashMap<String, TaskDisplay>) -> Vec<ScheduledTaskBody> {
+fn direct_static_steps(tasks: &[TaskSpecBody], titles: &HashMap<String, TaskDisplay>) -> Result<Vec<ScheduledTaskBody>> {
     tasks.iter().map(|task| {
         let window = task.window.as_ref().expect("direct Static Task has a window");
         let display = titles.get(&task.id);
-        ScheduledTaskBody {
+        Ok(ScheduledTaskBody {
             index: 0, task_id: task.id.clone(),
             summary: display.map(|d| d.title.clone()).unwrap_or_else(|| task.id.clone()),
+            start_at: crate::planning_time::timestamp_at(window.start)?,
+            end_at: crate::planning_time::timestamp_at(window.end)?,
             start: window.start, end: window.end, depends_on: task.depends_on.clone(),
             static_anchor: true, placement_authority: "user_override".into(), occupies_capacity: false,
             category_tag: display.and_then(|d| d.category_tag.clone()),
             gcal_color_id: display.and_then(|d| d.gcal_color_id.clone()),
-        }
+        })
     }).collect()
 }
 
@@ -772,12 +779,13 @@ fn kernel_candidate_body(
     titles: &HashMap<String, TaskDisplay>,
     request: &PlanningRequestBody,
     non_capacity_tasks: &[TaskSpecBody],
-) -> PlanCandidateBody {
+) -> Result<PlanCandidateBody> {
     let steps = merge_steps(Vec::new(), candidate.schedule.steps.iter()
         .map(|task| scheduled_task_body(task, titles, request))
-        .chain(direct_static_steps(non_capacity_tasks, titles)));
+        .collect::<Result<Vec<_>>>()?.into_iter()
+        .chain(direct_static_steps(non_capacity_tasks, titles)?));
 
-    PlanCandidateBody {
+    Ok(PlanCandidateBody {
         candidate_id: candidate.candidate_id.clone(),
         rank: candidate.rank,
         candidate_role: candidate_role_body(candidate.candidate_role),
@@ -794,7 +802,7 @@ fn kernel_candidate_body(
         probability_quality: probability_quality_body(
             candidate.probability_summary.probability_quality,
         ),
-    }
+    })
 }
 
 fn canonical_plan_from_payload(payload_json: &str) -> Result<PlanBody> {
@@ -806,7 +814,7 @@ fn canonical_plan_from_payload(payload_json: &str) -> Result<PlanBody> {
         Err(_) => {
             let legacy: KernelPlan = serde_json::from_str(payload_json)
                 .map_err(|e| AppError::Internal(format!("failed to deserialize plan: {e}")))?;
-            Ok(kernel_plan_body(legacy))
+            kernel_plan_body(legacy)
         }
     }
 }
@@ -864,8 +872,8 @@ async fn resolve_time_window(
         let window_end: String = row
             .try_get("window_end")
             .map_err(|e| AppError::Internal(e.to_string()))?;
-        let start = timestamp_minutes(&window_start)?;
-        let end = timestamp_minutes(&window_end)?;
+        let start = timestamp_seconds(&window_start)?;
+        let end = timestamp_seconds(&window_end)?;
         if start < end {
             return Ok(TimeWindowBody { start, end });
         }
@@ -875,14 +883,14 @@ async fn resolve_time_window(
         .iter()
         .map(|task| task.duration)
         .sum::<u64>()
-        .max(DEFAULT_TASK_DURATION_MINUTES);
+        .max(DEFAULT_TASK_DURATION_SECONDS);
     Ok(TimeWindowBody {
         start: 0,
         end: total_duration,
     })
 }
 
-fn timestamp_minutes(value: &str) -> Result<u64> {
+fn timestamp_seconds(value: &str) -> Result<u64> {
     let timestamp = UbuTimestamp::parse(value)
         .map_err(|e| AppError::bad_request_diagnostic("invalid_calendar_window", e.to_string()))?;
     let seconds = timestamp.inner().unix_timestamp();
@@ -892,7 +900,7 @@ fn timestamp_minutes(value: &str) -> Result<u64> {
             "calendar windows before Unix epoch are not supported by the Phase A planner adapter",
         ));
     }
-    Ok((seconds as u64) / 60)
+    Ok(seconds as u64)
 }
 
 fn task_graph(tasks: &[TaskSpecBody]) -> Result<TaskGraphBody> {
@@ -956,19 +964,19 @@ fn dependency_ids(payload: &Value) -> Vec<String> {
         .collect()
 }
 
-fn duration_minutes(payload: &Value) -> u64 {
+fn duration_seconds(payload: &Value) -> u64 {
     if let Some(minutes) = payload.get("duration_minutes").and_then(Value::as_u64) {
-        return minutes.max(1);
+        return minutes.saturating_mul(60).max(1);
     }
     if let Some(minutes) = payload.get("estimate_minutes").and_then(Value::as_u64) {
-        return minutes.max(1);
+        return minutes.saturating_mul(60).max(1);
     }
     payload
         .get("estimate")
         .and_then(|estimate| estimate.get("seconds"))
         .and_then(Value::as_u64)
-        .map(|seconds| seconds.div_ceil(60).max(1))
-        .unwrap_or(DEFAULT_TASK_DURATION_MINUTES)
+        .map(|seconds| seconds.max(1))
+        .unwrap_or(DEFAULT_TASK_DURATION_SECONDS)
 }
 
 fn task_duration_estimate(payload: &Value) -> Result<Option<DurationEstimateBody>> {
@@ -1354,8 +1362,8 @@ fn snapshot_affect_observation(payload: &Value) -> Result<Option<AffectObservati
         .to_owned();
     let observed_at = affect
         .get("observed_at")
-        .and_then(observed_at_minutes)
-        .or_else(|| payload.get("captured_at").and_then(observed_at_minutes));
+        .and_then(observed_at_seconds)
+        .or_else(|| payload.get("captured_at").and_then(observed_at_seconds));
     let Some(observed_at) = observed_at else {
         return Ok(None);
     };
@@ -1387,11 +1395,11 @@ fn snapshot_affect_observation(payload: &Value) -> Result<Option<AffectObservati
     Ok(Some(AffectObservationBody { dimensions }))
 }
 
-fn observed_at_minutes(value: &Value) -> Option<u64> {
+fn observed_at_seconds(value: &Value) -> Option<u64> {
     value.as_u64().or_else(|| {
         value
             .as_str()
-            .and_then(|timestamp| timestamp_minutes(timestamp).ok())
+            .and_then(|timestamp| timestamp_seconds(timestamp).ok())
     })
 }
 
@@ -1420,7 +1428,6 @@ fn stale_profile_dimensions(
         time_window
             .start
             .saturating_sub(observed.observed_at)
-            .saturating_mul(60)
             > freshness_seconds
     })
 }
@@ -1559,10 +1566,8 @@ async fn stored_static_windows(pool: &sqlx::SqlitePool) -> Result<HashMap<String
         if let Some(value) = payload.get("static_window").filter(|value| !value.is_null()) {
             let window: StaticWindow = serde_json::from_value(value.clone())
                 .map_err(|e| AppError::Internal(format!("invalid Static window for `{id}`: {e}")))?;
-            let start = timestamp_minutes(&window.start.to_string())?;
-            let end_floor = timestamp_minutes(&window.end.to_string())?;
-            let end = end_floor + u64::from(window.end.inner().unix_timestamp() % 60 != 0
-                || window.end.inner().nanosecond() != 0);
+            let start = timestamp_seconds(&window.start.to_string())?;
+            let end = timestamp_seconds(&window.end.to_string())?;
             windows.insert(id, TimeWindowBody { start, end });
         }
     }

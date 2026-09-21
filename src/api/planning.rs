@@ -30,6 +30,8 @@ pub struct GeneratePlanningRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
+/// Store-built coordinates and durations use Unix seconds; supplied requests
+/// retain the caller's unit-agnostic kernel coordinates.
 pub struct PlanningRequestBody {
     #[serde(default)]
     pub schema_version: Option<String>,
@@ -139,6 +141,7 @@ fn default_planning_mode() -> PlanningModeBody {
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
+/// Unix seconds for store-built requests; caller-defined units for supplied requests.
 pub struct TimeWindowBody {
     pub start: u64,
     pub end: u64,
@@ -428,8 +431,14 @@ pub struct ScheduledTaskBody {
     pub index: u32,
     pub task_id: String,
     pub summary: String,
+    /// Unix seconds.
     pub start: u64,
+    /// Unix seconds.
     pub end: u64,
+    /// RFC 3339 UTC representation of start.
+    pub start_at: String,
+    /// RFC 3339 UTC representation of end.
+    pub end_at: String,
     pub depends_on: Vec<String>,
     pub static_anchor: bool,
     pub placement_authority: String,

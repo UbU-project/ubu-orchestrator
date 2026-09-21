@@ -108,19 +108,19 @@ async fn calendar_contains_capacity_noncapacity_and_category_steps() {
         .unwrap();
     assert!(!request.tasks.iter().any(|t| t.id == noncapacity));
     let anchor = request.tasks.iter().find(|t| t.id == capacity).unwrap();
-    assert_eq!(anchor.duration, 20);
+    assert_eq!(anchor.duration, 1200);
     assert!(anchor.duration_estimate.is_none() && anchor.correlation_groups.is_empty());
     assert_eq!(
         anchor.static_anchor.as_ref().unwrap().start,
-        timestamp_minutes(START)
+        timestamp_seconds(START)
     );
     let response = generate(&state).await;
     assert!(response["plan"].is_object(), "{response}");
     let calendar = calendar(&state).await;
     assert_eq!(calendar["steps"], calendar["selected_candidate"]["steps"]);
     let anchored = step(&calendar, &capacity);
-    assert_eq!(anchored["start"], timestamp_minutes(START));
-    assert_eq!(anchored["end"], timestamp_minutes("2026-06-10T15:20:00Z"));
+    assert_eq!(anchored["start"], timestamp_seconds(START));
+    assert_eq!(anchored["end"], timestamp_seconds("2026-06-10T15:20:00Z"));
     assert_eq!(anchored["placement_authority"], "user_override");
     assert_eq!(anchored["occupies_capacity"], true);
     assert_eq!(anchored["category_tag"], "commute");
@@ -171,28 +171,28 @@ async fn edge_crossings_keep_whole_statics_and_dynamic_horizon() {
         .unwrap();
     assert_eq!(
         request.time_window.as_ref().unwrap().start,
-        timestamp_minutes("2026-06-10T14:50:00Z")
+        timestamp_seconds("2026-06-10T14:50:12Z")
     );
     assert_eq!(
         request.time_window.as_ref().unwrap().end,
-        timestamp_minutes("2026-06-10T17:11:00Z")
+        timestamp_seconds("2026-06-10T17:10:01Z")
     );
     let d = request.tasks.iter().find(|t| t.id == dynamic).unwrap();
-    assert_eq!(d.window.as_ref().unwrap().start, timestamp_minutes(START));
-    assert_eq!(d.window.as_ref().unwrap().end, timestamp_minutes(END));
+    assert_eq!(d.window.as_ref().unwrap().start, timestamp_seconds(START));
+    assert_eq!(d.window.as_ref().unwrap().end, timestamp_seconds(END));
     let response = generate(&state).await;
     assert!(!codes(&response).iter().any(|c| c.contains("collision")));
     let cal = calendar(&state).await;
     assert_eq!(
         step(&cal, &early)["end"],
-        timestamp_minutes("2026-06-10T15:11:00Z")
+        timestamp_seconds("2026-06-10T15:10:00Z")
     );
     assert_eq!(
         step(&cal, &late)["end"],
-        timestamp_minutes("2026-06-10T17:11:00Z")
+        timestamp_seconds("2026-06-10T17:10:01Z")
     );
-    assert!(step(&cal, &dynamic)["start"].as_u64().unwrap() >= timestamp_minutes(START));
-    assert!(step(&cal, &dynamic)["end"].as_u64().unwrap() <= timestamp_minutes(END));
+    assert!(step(&cal, &dynamic)["start"].as_u64().unwrap() >= timestamp_seconds(START));
+    assert!(step(&cal, &dynamic)["end"].as_u64().unwrap() <= timestamp_seconds(END));
     assert!(!cal["steps"]
         .as_array()
         .unwrap()
@@ -309,7 +309,7 @@ async fn absent_static_dependencies_bound_dynamic_start_or_exclude_it() {
     let task = request.tasks.iter().find(|t| t.id == bounded).unwrap();
     assert_eq!(
         task.window.as_ref().unwrap().start,
-        timestamp_minutes("2026-06-10T15:30:00Z")
+        timestamp_seconds("2026-06-10T15:30:00Z")
     );
     assert!(task.depends_on.is_empty());
     let response = generate(&state).await;
@@ -317,7 +317,7 @@ async fn absent_static_dependencies_bound_dynamic_start_or_exclude_it() {
     let cal = calendar(&state).await;
     assert!(
         step(&cal, &bounded)["start"].as_u64().unwrap()
-            >= timestamp_minutes("2026-06-10T15:30:00Z")
+            >= timestamp_seconds("2026-06-10T15:30:00Z")
     );
 }
 
@@ -345,7 +345,7 @@ async fn other_exclusions_keep_existing_dependency_behavior() {
     assert!(task.depends_on.is_empty());
     assert_eq!(
         task.window.as_ref().unwrap().start,
-        timestamp_minutes(START)
+        timestamp_seconds(START)
     );
     let response = generate(&state).await;
     assert!(response["plan"].is_object());
@@ -569,6 +569,7 @@ async fn admitted_add_tag_preserves_explicit_category_and_colour() {
 fn step_defaults_capacity_and_omits_absent_category_fields() {
     let step: ubu_orchestrator::api::planning::ScheduledTaskBody = serde_json::from_value(json!({
         "index":0,"task_id":"task","summary":"Task","start":0,"end":1,
+        "start_at":"1970-01-01T00:00:00Z","end_at":"1970-01-01T00:00:01Z",
         "depends_on":[],"static_anchor":false,"placement_authority":"planner"
     }))
     .unwrap();
@@ -672,12 +673,12 @@ async fn append_user_override_log(state: &AppState, task_id: &str) {
     .expect("override log");
 }
 
-fn timestamp_minutes(value: &str) -> u64 {
+fn timestamp_seconds(value: &str) -> u64 {
     UbuTimestamp::parse(value)
         .expect("timestamp")
         .inner()
         .unix_timestamp() as u64
-        / 60
+
 }
 
 fn json_request(uri: &str, body: Value) -> Request<Body> {

@@ -48,8 +48,8 @@ async fn store_backed_request_uses_calendar_window_and_topological_order() {
         .expect("request");
 
     let window = request.time_window.as_ref().expect("time window");
-    assert_eq!(window.start, timestamp_minutes("2026-06-10T15:00:00Z"));
-    assert_eq!(window.end, timestamp_minutes("2026-06-10T17:00:00Z"));
+    assert_eq!(window.start, timestamp_seconds("2026-06-10T15:00:00Z"));
+    assert_eq!(window.end, timestamp_seconds("2026-06-10T17:00:00Z"));
     assert_eq!(
         request
             .task_graph
@@ -82,7 +82,7 @@ async fn store_backed_request_uses_calendar_window_and_topological_order() {
         .iter()
         .find(|task| task.id == first)
         .expect("first task");
-    assert_eq!(first_task.duration, DurationModel::Fixed { seconds: 15 });
+    assert_eq!(first_task.duration, DurationModel::Fixed { seconds: 900 });
     assert!(first_task.correlation_groups.is_empty());
 }
 
@@ -250,7 +250,7 @@ async fn store_backed_request_defaults_missing_model_to_fixed_independent() {
 
     let kernel_request = PlanningRequest::from(request);
     let task = &kernel_request.task_graph.tasks[0];
-    assert_eq!(task.duration, DurationModel::Fixed { seconds: 30 });
+    assert_eq!(task.duration, DurationModel::Fixed { seconds: 1800 });
     assert!(task.correlation_groups.is_empty());
 }
 
@@ -535,7 +535,7 @@ async fn stale_affect_snapshot_is_not_presented_as_current() {
     );
     assert_eq!(
         observation.dimensions["energy"].observed_at,
-        timestamp_minutes("2026-06-10T15:00:00Z")
+        timestamp_seconds("2026-06-10T15:00:00Z")
     );
     assert!(request
         .affect_warning
@@ -1058,12 +1058,12 @@ async fn append_user_override_log(state: &AppState, task_id: &str) {
     .expect("override log");
 }
 
-fn timestamp_minutes(value: &str) -> u64 {
+fn timestamp_seconds(value: &str) -> u64 {
     UbuTimestamp::parse(value)
         .expect("timestamp")
         .inner()
         .unix_timestamp() as u64
-        / 60
+
 }
 
 fn json_request(uri: &str, body: Value) -> Request<Body> {

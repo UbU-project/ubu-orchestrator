@@ -6,6 +6,7 @@ pub mod device_registration;
 pub mod errors;
 pub mod instance_mode;
 pub mod openapi;
+pub mod planning_time;
 pub mod reports;
 pub mod router;
 pub mod services;

@@ -322,6 +322,8 @@ async fn store_plan(
                 "summary": task_id,
                 "start": start,
                 "end": end,
+                "start_at": ubu_orchestrator::planning_time::timestamp_at(start).unwrap(),
+                "end_at": ubu_orchestrator::planning_time::timestamp_at(end).unwrap(),
                 "depends_on": [],
                 "static_anchor": false,
                 "placement_authority": "planner"
