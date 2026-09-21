@@ -2344,7 +2344,7 @@ dependencies = [
 [[package]]
 name = "ubu_store"
 version = "0.1.0"
-source = "git+https://github.com/UbU-project/ubu-store?rev=51a964af132083d1123b5baed0140e5945aa3ec2#51a964af132083d1123b5baed0140e5945aa3ec2"
+source = "git+https://github.com/UbU-project/ubu-store?rev=7be1146e98f1bda39d3a2bb2bac04ade4d97b581#7be1146e98f1bda39d3a2bb2bac04ade4d97b581"
 dependencies = [
  "serde",
  "serde_json",
