@@ -38,6 +38,7 @@ pub struct ServerConfig {
     /// Operator-owned registration file, outside mutable database state.
     device_registration_path: Option<PathBuf>,
     category_palette_path: Option<PathBuf>,
+    planning_horizon_seconds: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -89,7 +90,17 @@ impl ServerConfig {
             db_path: env::var("UBU_DB_PATH").unwrap_or_else(|_| "ubu-orchestrator.db".to_owned()),
             device_registration_path: env::var_os("UBU_DEVICE_REGISTRATION").map(PathBuf::from),
             category_palette_path: env::var_os("UBU_CATEGORY_PALETTE_PATH").map(PathBuf::from),
+            planning_horizon_seconds: env::var_os("UBU_PLANNING_HORIZON_SECONDS")
+                .map(|value| value.to_string_lossy().into_owned()),
         }
+    }
+
+    pub fn planning_horizon_seconds(&self) -> Result<u64, crate::errors::StartupError> {
+        let Some(value) = &self.planning_horizon_seconds else { return Ok(86400); };
+        value.parse::<u64>().ok().filter(|span| (1..=2678400).contains(span)
+            && value.bytes().all(|byte| byte.is_ascii_digit()))
+            .ok_or_else(|| crate::errors::StartupError(format!(
+                "invalid UBU_PLANNING_HORIZON_SECONDS `{value}`: expected an integer from 1 to 2678400")))
     }
 
     pub fn bind_addr(&self) -> SocketAddr {

@@ -26,7 +26,7 @@ use crate::api::planning::{
     AffectObservationValueBody, AffectProfileBody, AffectToleranceBody, BlockedTaskBody,
     ComputeBudgetBody, CorrelationGroupBody, DiagnosticBody, DurationEstimateBody,
     GeneratePlanningRequest, InvalidTaskBody, LegitimizationReportBody, PlanBody,
-    PlanCandidateBody, PlanningModeBody, PlanningRequestBody, PlanningResponseBody,
+    PlanCandidateBody, PlanningHorizonBody, PlanningModeBody, PlanningRequestBody, PlanningResponseBody,
     ProbabilityQualityBody, RepairContextBody, RepairScopeBody, ScheduledTaskBody,
     ScoringPolicyBody, StaticAnchorBody, TaskGraphBody, TaskGraphEdgeBody, TaskSpecBody,
     TimeWindowBody,
@@ -68,6 +68,7 @@ pub async fn generate(
                 PlanningModeBody::FreshGeneration,
                 None,
                 &[],
+                request.horizon.as_ref(),
             )
             .await?
         }
@@ -257,7 +258,7 @@ pub async fn current_calendar(state: AppState) -> Result<CalendarResponse> {
 
 pub async fn build_request_from_store(state: &AppState) -> Result<PlanningRequestBody> {
     Ok(
-        build_request_from_store_with_context(state, PlanningModeBody::FreshGeneration, None, &[])
+        build_request_from_store_with_context(state, PlanningModeBody::FreshGeneration, None, &[], None)
             .await?
             .request,
     )
@@ -280,6 +281,7 @@ pub async fn build_repair_request_from_store(
             repair_scope,
         }),
         frozen_task_ids,
+        None,
     )
     .await
 }
@@ -426,6 +428,7 @@ async fn build_request_from_store_with_context(
     mode: PlanningModeBody,
     repair_context: Option<RepairContextBody>,
     excluded_task_ids: &[String],
+    explicit_horizon: Option<&PlanningHorizonBody>,
 ) -> Result<StorePlanningRequest> {
     let pool = state.inner().store.pool();
     let tasks = queries::query_active_tasks(pool)
@@ -461,27 +464,20 @@ async fn build_request_from_store_with_context(
         depends_on: Vec::new(), window: None, static_anchor: None,
     }).collect::<Vec<_>>();
 
-    let mut time_window = resolve_time_window(pool, &task_bodies).await?;
+    let now = timestamp_seconds(&state.planning_now().to_string())?;
+    let mut time_window = resolve_time_window(state, explicit_horizon, now).await?;
     if repair_context.is_some() {
+        time_window.start = time_window.start.max(now);
         if let Some(prior_plan) = latest_admitted_plan(state).await? {
-            let frozen: HashSet<String> = excluded_task_ids.iter().cloned().collect();
-            if let Some(max_frozen_end) = prior_plan
-                .steps
-                .iter()
-                .filter(|step| frozen.contains(&step.task_id))
-                .map(|step| step.end)
-                .max()
-            {
+            if let Some(max_frozen_end) = prior_plan.steps.iter()
+                .filter(|step| excluded.contains(&step.task_id)).map(|step| step.end).max() {
                 time_window.start = time_window.start.max(max_frozen_end);
-                if time_window.end <= time_window.start {
-                    let remaining_duration = task_bodies
-                        .iter()
-                        .map(|task| task.duration)
-                        .sum::<u64>()
-                        .max(DEFAULT_TASK_DURATION_SECONDS);
-                    time_window.end = time_window.start + remaining_duration;
-                }
             }
+        }
+        if time_window.end <= time_window.start {
+            let remaining_duration = task_bodies.iter().map(|task| task.duration)
+                .sum::<u64>().max(DEFAULT_TASK_DURATION_SECONDS);
+            time_window.end = time_window.start.saturating_add(remaining_duration);
         }
     }
 
@@ -571,6 +567,12 @@ async fn build_request_from_store_with_context(
     });
     let planned_ids: HashSet<_> = task_bodies.iter().map(|task| task.id.clone()).collect();
     for task in &mut task_bodies {
+        if task.static_anchor.is_none() {
+            // Preserve the selected scope and whole Statics; only future Dynamic
+            // placement is allowed even if that scope starts in the past.
+            let window = task.window.as_mut().expect("Dynamic Task has H");
+            window.start = window.start.max(now);
+        }
         task.depends_on.retain(|dependency| planned_ids.contains(dependency));
     }
 
@@ -853,9 +855,18 @@ fn validate_canonical_plan(plan: &PlanBody) -> Result<()> {
 }
 
 async fn resolve_time_window(
-    pool: &sqlx::SqlitePool,
-    tasks: &[TaskSpecBody],
+    state: &AppState,
+    explicit: Option<&PlanningHorizonBody>,
+    now: u64,
 ) -> Result<TimeWindowBody> {
+    if let Some(explicit) = explicit {
+        let invalid = || AppError::bad_request_diagnostic("invalid_horizon", "horizon requires RFC 3339 timestamps with start before end");
+        let start = timestamp_seconds(&explicit.start).map_err(|_| invalid())?;
+        let end = timestamp_seconds(&explicit.end).map_err(|_| invalid())?;
+        if start >= end { return Err(invalid()); }
+        return Ok(TimeWindowBody { start, end });
+    }
+    let pool = state.inner().store.pool();
     let row = sqlx::query(
         "SELECT window_start, window_end, payload_json FROM calendars
         ORDER BY created_at DESC
@@ -879,14 +890,9 @@ async fn resolve_time_window(
         }
     }
 
-    let total_duration = tasks
-        .iter()
-        .map(|task| task.duration)
-        .sum::<u64>()
-        .max(DEFAULT_TASK_DURATION_SECONDS);
     Ok(TimeWindowBody {
-        start: 0,
-        end: total_duration,
+        start: now,
+        end: now.saturating_add(state.inner().planning_horizon_seconds),
     })
 }
 

@@ -54,6 +54,7 @@ mod integration {
             GeneratePlanningRequest {
                 schema_version: None,
                 request: None,
+                horizon: None,
             },
         )
         .await
@@ -99,6 +100,7 @@ mod integration {
             GeneratePlanningRequest {
                 schema_version: None,
                 request: None,
+                horizon: None,
             },
         )
         .await

@@ -837,6 +837,7 @@ async fn test_state() -> AppState {
     AppState::in_memory(ServerConfig::from_env())
         .await
         .expect("state")
+        .with_clock(ubu_orchestrator::planning_time::FixedClock(UbuTimestamp::parse("2026-06-10T15:00:00Z").unwrap()))
 }
 
 async fn admit_task(state: &AppState, title: &str, extra: Value) -> String {

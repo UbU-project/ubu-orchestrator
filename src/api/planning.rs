@@ -26,6 +26,17 @@ pub struct GeneratePlanningRequest {
     pub schema_version: Option<String>,
     #[serde(default)]
     pub request: Option<PlanningRequestBody>,
+    /// Store-built scope; ignored when a full request is supplied.
+    #[serde(default)]
+    pub horizon: Option<PlanningHorizonBody>,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct PlanningHorizonBody {
+    /// RFC 3339 timestamp; converted to UTC Unix seconds.
+    pub start: String,
+    /// RFC 3339 timestamp; must be after start.
+    pub end: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

@@ -16,10 +16,12 @@ use crate::errors::StartupError;
 #[derive(Clone)]
 pub struct AppState {
     inner: Arc<OrchestratorState>,
+    clock: Arc<dyn crate::planning_time::PlanningClock>,
 }
 
 pub struct OrchestratorState {
     pub config: ServerConfig,
+    pub planning_horizon_seconds: u64,
     pub category_palette: CategoryPalette,
     pub store: UbuStore,
     pub device_registration: DeviceRegistration,
@@ -32,12 +34,13 @@ pub struct OrchestratorState {
 impl AppState {
     pub async fn new(config: ServerConfig) -> Result<Self, StartupError> {
         // Refuse invalid or revoked operator material before touching the database.
+        let span = config.planning_horizon_seconds()?;
         let palette = CategoryPalette::load(config.category_palette_path())?;
         let registration = load_or_register(&config.device_registration_path())?;
         let store = UbuStore::connect(config.db_path())
             .await
             .map_err(StartupError::store_open)?;
-        Self::from_store(config, store, registration, palette).await
+        Self::from_store(config, store, registration, palette, span).await
     }
 
     /// Isolated convenience constructor: a fresh ephemeral registration, no registration file I/O.
@@ -50,12 +53,13 @@ impl AppState {
         config: ServerConfig,
         registration: DeviceRegistration,
     ) -> Result<Self, StartupError> {
+        let span = config.planning_horizon_seconds()?;
         let palette = CategoryPalette::load(config.category_palette_path())?;
         require_registered(&registration)?;
         let store = UbuStore::in_memory()
             .await
             .map_err(StartupError::store_open)?;
-        Self::from_store(config, store, registration, palette).await
+        Self::from_store(config, store, registration, palette, span).await
     }
 
     async fn from_store(
@@ -63,6 +67,7 @@ impl AppState {
         store: UbuStore,
         registration: DeviceRegistration,
         category_palette: CategoryPalette,
+        planning_horizon_seconds: u64,
     ) -> Result<Self, StartupError> {
         require_registered(&registration)?;
         ensure_orchestrator_projection_tables(store.pool())
@@ -70,9 +75,11 @@ impl AppState {
             .map_err(StartupError::projection_tables)?;
         let causality_issuer = LocalIssuer::new(registration.device_id.clone());
         Ok(Self {
+            clock: Arc::new(crate::planning_time::SystemClock),
             inner: Arc::new(OrchestratorState {
                 config,
                 category_palette,
+                planning_horizon_seconds,
                 store,
                 device_registration: registration,
                 causality_issuer,
@@ -82,6 +89,13 @@ impl AppState {
             }),
         })
     }
+
+    pub fn with_clock(mut self, clock: impl crate::planning_time::PlanningClock + 'static) -> Self {
+        self.clock = Arc::new(clock);
+        self
+    }
+
+    pub fn planning_now(&self) -> UbuTimestamp { self.clock.now() }
 
     /// Assemble provenance at the mutation boundary; domain time remains independent.
     pub fn envelope_for(

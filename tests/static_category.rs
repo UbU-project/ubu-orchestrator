@@ -25,6 +25,7 @@ const END: &str = "2026-06-10T17:00:00Z";
 
 async fn state() -> AppState {
     let state = AppState::in_memory(ServerConfig::from_env()).await.unwrap();
+    let state = state.with_clock(ubu_orchestrator::planning_time::FixedClock(UbuTimestamp::parse(START).unwrap()));
     store_calendar_window(&state, START, END).await;
     state
 }
@@ -497,6 +498,7 @@ async fn palette_override_merges_defaults_and_matches_case_exactly() {
         .await
         .unwrap();
     std::fs::remove_file(path).unwrap();
+    let state = state.with_clock(ubu_orchestrator::planning_time::FixedClock(UbuTimestamp::parse(START).unwrap()));
     store_calendar_window(&state, START, END).await;
     for (category, expected) in [
         ("commute", "6"),

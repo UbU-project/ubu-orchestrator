@@ -14,3 +14,18 @@ pub fn timestamp_at(seconds: u64) -> Result<String> {
         timestamp.year(), u8::from(timestamp.month()), timestamp.day(),
         timestamp.hour(), timestamp.minute(), timestamp.second()))
 }
+
+/// Clock used only for planning horizons and next-action selection.
+pub trait PlanningClock: Send + Sync {
+    fn now(&self) -> UbuTimestamp;
+}
+
+pub struct SystemClock;
+impl PlanningClock for SystemClock {
+    fn now(&self) -> UbuTimestamp { UbuTimestamp::now_utc() }
+}
+
+pub struct FixedClock(pub UbuTimestamp);
+impl PlanningClock for FixedClock {
+    fn now(&self) -> UbuTimestamp { self.0 }
+}

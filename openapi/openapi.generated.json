@@ -1632,6 +1632,17 @@
       "GeneratePlanningRequest": {
         "type": "object",
         "properties": {
+          "horizon": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PlanningHorizonBody",
+                "description": "Store-built scope; ignored when a full request is supplied."
+              }
+            ]
+          },
           "request": {
             "oneOf": [
               {
@@ -2367,6 +2378,23 @@
             "items": {
               "$ref": "#/components/schemas/ScheduledTaskBody"
             }
+          }
+        }
+      },
+      "PlanningHorizonBody": {
+        "type": "object",
+        "required": [
+          "start",
+          "end"
+        ],
+        "properties": {
+          "end": {
+            "type": "string",
+            "description": "RFC 3339 timestamp; must be after start."
+          },
+          "start": {
+            "type": "string",
+            "description": "RFC 3339 timestamp; converted to UTC Unix seconds."
           }
         }
       },
