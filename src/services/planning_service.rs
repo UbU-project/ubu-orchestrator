@@ -14,7 +14,7 @@ use ubu_planning_core::{
 };
 use ubu_store::models::log_record::NewLogRecord;
 use ubu_store::models::plan_record::NewPlanRecord;
-use ubu_core::core::{TaskCorrelationGroup, TaskDurationEstimate};
+use ubu_core::core::{StaticWindow, TaskCorrelationGroup, TaskDurationEstimate};
 use ubu_store::queries;
 
 use crate::adapters::planner_adapter::{CpuPlannerAdapter, PlannerAdapter};
@@ -49,6 +49,8 @@ pub async fn generate(
         request: planning_request,
         blocked_tasks,
         invalid_tasks,
+        mut diagnostics,
+        non_capacity_tasks: _,
     } = match request.request {
         Some(body) => {
             validate_optional_schema_version(body.schema_version.as_deref())?;
@@ -56,6 +58,8 @@ pub async fn generate(
                 request: body,
                 blocked_tasks: Vec::new(),
                 invalid_tasks: Vec::new(),
+                diagnostics: Vec::new(),
+                non_capacity_tasks: Vec::new(),
             }
         }
         None => {
@@ -72,10 +76,14 @@ pub async fn generate(
     validate_task_models(&planning_request)?;
     let kernel_request = PlanningRequest::from(planning_request.clone());
     let adapter = CpuPlannerAdapter;
-    let response = adapter.plan(kernel_request.clone());
-    let mut diagnostics = diagnostics_from_kernel(response.diagnostics);
+    let mut candidates = if has_static_conflicts(&diagnostics) {
+        Vec::new()
+    } else {
+        let response = adapter.plan(kernel_request.clone());
+        diagnostics.extend(diagnostics_from_kernel(response.diagnostics));
+        response.plan_candidates
+    };
     diagnostics.extend(precondition_diagnostics(&blocked_tasks, &invalid_tasks));
-    let mut candidates = response.plan_candidates;
     let selected_index = candidates.iter().position(|candidate| candidate.rank == 1);
     let canonical_plan_id = UbuId::new(ObjectType::Plan).to_string();
     let (plan, selected_candidate, alternatives, legitimization, risk_report, plan_quality) =
@@ -170,8 +178,8 @@ pub async fn generate(
         };
 
     Ok(PlanningResponseBody {
-        schema_version: response.schema_version,
-        request_id: response.request_id,
+        schema_version: PLANNING_SCHEMA_VERSION.to_owned(),
+        request_id: planning_request.request_id,
         plan,
         selected_candidate,
         alternatives,
@@ -259,8 +267,8 @@ pub async fn build_repair_request_from_store(
     repair_scope: RepairScopeBody,
     observed_divergence_refs: Vec<String>,
     frozen_task_ids: &[String],
-) -> Result<PlanningRequestBody> {
-    Ok(build_request_from_store_with_context(
+) -> Result<StorePlanningRequest> {
+    build_request_from_store_with_context(
         state,
         PlanningModeBody::Repair,
         Some(RepairContextBody {
@@ -271,8 +279,7 @@ pub async fn build_repair_request_from_store(
         }),
         frozen_task_ids,
     )
-    .await?
-    .request)
+    .await
 }
 
 pub async fn latest_admitted_plan(state: &AppState) -> Result<Option<PlanBody>> {
@@ -416,6 +423,7 @@ async fn build_request_from_store_with_context(
         .await
         .map_err(AppError::from)?;
 
+    let static_windows = stored_static_windows(pool).await?;
     let excluded: HashSet<_> = excluded_task_ids.iter().cloned().collect();
     let task_rows = tasks
         .into_iter()
@@ -443,23 +451,12 @@ async fn build_request_from_store_with_context(
     } = partition_tasks_by_preconditions(pool, task_rows, crate::instance_mode::MVP_INSTANCE_MODE)
         .await?;
 
-    let planned_task_ids: HashSet<String> = task_rows.iter().map(|task| task.id.clone()).collect();
-    let mut task_bodies = Vec::with_capacity(task_rows.len());
-    for task in &task_rows {
-        let dependencies = dependency_ids(&task.payload)
-            .into_iter()
-            .filter(|dependency| planned_task_ids.contains(dependency))
-            .collect::<Vec<_>>();
-        task_bodies.push(TaskSpecBody {
-            id: task.id.clone(),
-            duration: duration_minutes(&task.payload),
-            duration_estimate: task_duration_estimate(&task.payload)?,
-            correlation_groups: task_correlation_groups(&task.payload)?,
-            depends_on: dependencies,
-            window: None,
-            static_anchor: None,
-        });
-    }
+    // Resolve H using the existing fallback before applying participation rules.
+    let mut task_bodies = task_rows.iter().map(|task| TaskSpecBody {
+        id: task.id.clone(), duration: duration_minutes(&task.payload),
+        duration_estimate: None, correlation_groups: Vec::new(),
+        depends_on: Vec::new(), window: None, static_anchor: None,
+    }).collect::<Vec<_>>();
 
     let mut time_window = resolve_time_window(pool, &task_bodies).await?;
     if repair_context.is_some() {
@@ -485,11 +482,99 @@ async fn build_request_from_store_with_context(
         }
     }
 
+    let horizon = time_window.clone();
+    let mut diagnostics = Vec::new();
+    let mut non_capacity_tasks = Vec::new();
+    let mut absent_static_windows = HashMap::new();
+    task_bodies.clear();
+    let mut participating = Vec::new();
+    for task in &task_rows {
+        let capacity = task.payload.get("occupies_capacity").and_then(Value::as_bool).unwrap_or(true);
+        let window = static_windows.get(&task.id);
+        if let Some(window) = window {
+            let outside_horizon = window.start >= horizon.end || window.end <= horizon.start;
+            if !capacity || outside_horizon {
+                absent_static_windows.insert(task.id.clone(), window);
+            }
+            if outside_horizon { continue; }
+            participating.push((task, window, capacity));
+            let spec = TaskSpecBody {
+                id: task.id.clone(), duration: window.end - window.start,
+                duration_estimate: None, correlation_groups: Vec::new(),
+                depends_on: dependency_ids(&task.payload), window: Some(window.clone()),
+                static_anchor: Some(StaticAnchorBody { start: window.start }),
+            };
+            if capacity {
+                time_window.start = time_window.start.min(window.start);
+                time_window.end = time_window.end.max(window.end);
+                task_bodies.push(spec);
+            } else {
+                non_capacity_tasks.push(spec);
+            }
+        } else if capacity {
+            task_bodies.push(TaskSpecBody {
+                id: task.id.clone(), duration: duration_minutes(&task.payload),
+                duration_estimate: task_duration_estimate(&task.payload)?,
+                correlation_groups: task_correlation_groups(&task.payload)?,
+                depends_on: dependency_ids(&task.payload), window: Some(horizon.clone()),
+                static_anchor: None,
+            });
+        } else {
+            diagnostics.push(DiagnosticBody { code: "non_capacity_dynamic_task_unsupported".into(),
+                message: format!("Dynamic non-capacity Task `{}` is unsupported", task.id) });
+        }
+    }
+    // One diagnostic per pair, even if both occupancy and precedence conflict.
+    // Clause (b) applies to all Static prerequisites, including non-capacity ones.
+    let mut conflicts = BTreeSet::new();
+    for (i, (task, window, capacity)) in participating.iter().enumerate() {
+        for (other, other_window, other_capacity) in participating.iter().skip(i + 1) {
+            if *capacity && *other_capacity && window.start < other_window.end && window.end > other_window.start {
+                add_static_conflict(&mut conflicts, &task.id, window, &other.id, other_window);
+            }
+        }
+        for dependency in dependency_ids(&task.payload) {
+            if let Some(other_window) = static_windows.get(&dependency) {
+                if other_window.end > window.start {
+                    add_static_conflict(&mut conflicts, &task.id, window, &dependency, other_window);
+                }
+            }
+        }
+    }
+    diagnostics.extend(conflicts.into_iter().map(|(_, first, second)| DiagnosticBody {
+        code: "static_task_collision".into(),
+        message: format!("Static Tasks `{first}` and `{second}` have conflicting fixed placements or dependencies"),
+    }));
+    let planned_ids: HashSet<_> = task_bodies.iter().map(|task| task.id.clone()).collect();
+    task_bodies.retain_mut(|task| {
+        if task.static_anchor.is_none() {
+            let window = task.window.as_mut().expect("Dynamic Tasks have H");
+            for dependency in &task.depends_on {
+                if !planned_ids.contains(dependency) {
+                    // Other exclusions (preconditions, lifecycle, frozen ids) retain
+                    // the existing edge-dropping behaviour.
+                    if let Some(prerequisite) = absent_static_windows.get(dependency) {
+                        window.start = window.start.max(prerequisite.end);
+                    }
+                }
+            }
+            if window.start >= horizon.end {
+                diagnostics.push(DiagnosticBody { code: "dependency_outside_horizon".into(),
+                    message: format!("Task `{}` has a Static prerequisite ending outside the horizon", task.id) });
+                return false;
+            }
+        }
+        true
+    });
+    let planned_ids: HashSet<_> = task_bodies.iter().map(|task| task.id.clone()).collect();
     for task in &mut task_bodies {
-        task.window = Some(time_window.clone());
+        task.depends_on.retain(|dependency| planned_ids.contains(dependency));
     }
 
-    let task_graph = task_graph(&task_bodies)?;
+    let task_graph = if has_static_conflicts(&diagnostics) {
+        // Conflicts must return all diagnostics even if their dependency graph cycles.
+        TaskGraphBody { topological_order: Vec::new(), edges: Vec::new() }
+    } else { task_graph(&task_bodies)? };
     let request_id = UbuId::new(ObjectType::Plan).to_string();
     let rng_seed = stable_seed(&request_id, &time_window, &task_graph.topological_order);
     let affect_profile = build_affect_profile(pool).await?;
@@ -514,6 +599,8 @@ async fn build_request_from_store_with_context(
         },
         blocked_tasks,
         invalid_tasks,
+        diagnostics,
+        non_capacity_tasks,
     })
 }
 
@@ -1419,10 +1506,46 @@ fn precondition_diagnostics(
 }
 
 #[derive(Debug)]
-struct StorePlanningRequest {
-    request: PlanningRequestBody,
-    blocked_tasks: Vec<BlockedTaskBody>,
-    invalid_tasks: Vec<InvalidTaskBody>,
+pub struct StorePlanningRequest {
+    pub request: PlanningRequestBody,
+    pub blocked_tasks: Vec<BlockedTaskBody>,
+    pub invalid_tasks: Vec<InvalidTaskBody>,
+    pub diagnostics: Vec<DiagnosticBody>,
+    pub non_capacity_tasks: Vec<TaskSpecBody>,
+}
+
+pub fn has_static_conflicts(diagnostics: &[DiagnosticBody]) -> bool {
+    diagnostics.iter().any(|d| d.code == "static_task_collision")
+}
+
+fn add_static_conflict(conflicts: &mut BTreeSet<(u64, String, String)>,
+    first: &str, first_window: &TimeWindowBody, second: &str, second_window: &TimeWindowBody) {
+    let (first, start, second) = if (first_window.start, first) <= (second_window.start, second) {
+        (first, first_window.start, second)
+    } else { (second, second_window.start, first) };
+    conflicts.insert((start, first.to_owned(), second.to_owned()));
+}
+
+async fn stored_static_windows(pool: &sqlx::SqlitePool) -> Result<HashMap<String, TimeWindowBody>> {
+    let rows = sqlx::query("SELECT id, payload_json FROM objects WHERE object_type = ?")
+        .bind(ObjectType::Task.as_str()).fetch_all(pool).await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let mut windows = HashMap::new();
+    for row in rows {
+        let id: String = row.get("id");
+        let payload: Value = serde_json::from_str(row.get("payload_json"))
+            .map_err(|e| AppError::Internal(format!("failed to deserialize Task `{id}`: {e}")))?;
+        if let Some(value) = payload.get("static_window").filter(|value| !value.is_null()) {
+            let window: StaticWindow = serde_json::from_value(value.clone())
+                .map_err(|e| AppError::Internal(format!("invalid Static window for `{id}`: {e}")))?;
+            let start = timestamp_minutes(&window.start.to_string())?;
+            let end_floor = timestamp_minutes(&window.end.to_string())?;
+            let end = end_floor + u64::from(window.end.inner().unix_timestamp() % 60 != 0
+                || window.end.inner().nanosecond() != 0);
+            windows.insert(id, TimeWindowBody { start, end });
+        }
+    }
+    Ok(windows)
 }
 
 #[derive(Debug)]

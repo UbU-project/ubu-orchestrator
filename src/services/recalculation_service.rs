@@ -62,24 +62,37 @@ pub async fn recalculate_from_request(
         &frozen_task_ids.iter().cloned().collect::<Vec<_>>(),
     )
     .await?;
+    let mut diagnostics = repair_request_body.diagnostics.clone();
+    diagnostics.extend(repair_request_body.blocked_tasks.iter().map(|task| DiagnosticBody {
+        code: "task_precondition_blocked".into(), message: format!("Task `{}` precondition is false", task.task_id),
+    }));
+    diagnostics.extend(repair_request_body.invalid_tasks.iter().map(|task| DiagnosticBody {
+        code: "task_precondition_invalid".into(), message: format!("Task `{}`: {}", task.task_id, task.error),
+    }));
+    if planning_service::has_static_conflicts(&diagnostics) {
+        return Ok(RecalculationResponse {
+            schema_version: RECALCULATION_SCHEMA_VERSION.to_owned(), trigger_type: request.trigger_type,
+            repair_scope, prior_plan_id: prior_plan.id, plan: None, diagnostics,
+        });
+    }
     let adapter = CpuPlannerAdapter;
     let repair_response = adapter.repair(planning_service::repair_kernel_request(
-        &repair_request_body,
+        &repair_request_body.request,
     ));
-    let diagnostics = repair_response
+    diagnostics.extend(repair_response
         .diagnostics
         .into_iter()
         .map(|diagnostic| DiagnosticBody {
             code: format!("{:?}", diagnostic.code),
             message: diagnostic.message,
         })
-        .collect::<Vec<_>>();
+        .collect::<Vec<_>>());
 
     let plan = match repair_response.repaired_plan {
         Some(plan) => {
             let stored = planning_service::persist_repair_plan(
                 &state,
-                &repair_request_body,
+                &repair_request_body.request,
                 &plan,
                 &prior_plan,
                 frozen_steps,
