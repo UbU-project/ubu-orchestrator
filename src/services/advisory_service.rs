@@ -249,3 +249,84 @@ async fn review_transition(
     )
     .await?)
 }
+
+#[cfg(test)]
+use crate as orchestrator;
+#[cfg(test)]
+#[path = "../../tests/support/advisory_fixture.rs"]
+mod review_fixture;
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+    use review_fixture::{ingest, proposal, seed_task, state};
+
+    #[tokio::test]
+    async fn concurrent_target_change_after_read_fails_without_partial_admission() {
+        let state = state().await;
+        let original = seed_task(&state, vec![]).await;
+        let candidate = proposal();
+        ingest(&state, candidate.clone()).await;
+        let id = &candidate.advisory_candidate_id;
+        let prepared = prepare_admission(&state, id, 1).await.unwrap();
+        assert_eq!(
+            prepared
+                .envelope
+                .observed_versions
+                .get(&candidate.target_refs[0].id),
+            Some(&VersionRef::Version(1))
+        );
+
+        let envelope = state
+            .envelope_for(
+                [(candidate.target_refs[0].id.clone(), VersionRef::Version(1))]
+                    .into_iter()
+                    .collect(),
+                AuthoritySource::User,
+                UbuTimestamp::now_utc(),
+            )
+            .unwrap();
+        let mut changed = prepared.record.clone();
+        changed.payload = serde_json::from_str(&original.payload_json).unwrap();
+        changed.payload["title"] = json!("Changed concurrently");
+        let current =
+            ubu_store::api::admission::admit_object(state.inner().store.pool(), &envelope, changed)
+                .await
+                .unwrap();
+        let ledger_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mutation_envelopes")
+            .fetch_one(state.inner().store.pool())
+            .await
+            .unwrap();
+
+        let error = prepared.commit(&state, id, 1).await.unwrap_err();
+        assert!(
+            matches!(error, AppError::Store(ubu_store::StoreError::PreconditionFailed { ref object_id, .. }) if object_id == &original.id)
+        );
+        assert_eq!(
+            ubu_store::queries::get_current_state(state.inner().store.pool(), &original.id)
+                .await
+                .unwrap(),
+            Some(current)
+        );
+        let candidate = get_advisory_candidate(state.inner().store.pool(), id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (candidate.lifecycle_state.as_str(), candidate.version),
+            ("proposed", 1)
+        );
+        assert!(ubu_store::api::review::list_candidate_decision_events(
+            state.inner().store.pool(),
+            id
+        )
+        .await
+        .unwrap()
+        .is_empty());
+        let ledger_after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mutation_envelopes")
+            .fetch_one(state.inner().store.pool())
+            .await
+            .unwrap();
+        assert_eq!(ledger_after, ledger_before);
+    }
+}
