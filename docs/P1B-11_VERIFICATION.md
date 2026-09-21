@@ -76,7 +76,7 @@ No test expectations were edited. No additional compilation breakage surfaced.
 - Adapter .gitignore:2 ignores Cargo.lock and none was tracked or present at
   setup. A force-added the generated lockfile to satisfy the explicit A
   `(+ Cargo.lock)` requirement. Dependency declarations were not added.
-- Adapter Cargo.toml:18 and kernel Cargo.toml:23 use the full cef80fe revision,
+- Adapter Cargo.toml:16 and kernel Cargo.toml:23 use the full cef80fe revision,
   matching orchestrator Cargo.toml:21 and store exactly so Cargo unifies sources.
 - Adapter src/candidate_mapping.rs:3 retains core::store::CandidateObject;
   src/candidate_mapping.rs:186 still constructs it. Migration to AdvisoryCandidate
@@ -91,3 +91,25 @@ No test expectations were edited. No additional compilation breakage surfaced.
   removal of a redundant cross-revision core conversion.
 - Lettered sections E and F are recorded as separate documentation commits;
   verification outputs also live in the sibling P1B-11-results directory.
+
+## E: committed dependency graph
+
+`CARGO_NET_OFFLINE=true cargo tree --locked -i ubu_core`, with no patch configs:
+
+```text
+ubu_core v0.1.0 (https://github.com/UbU-project/ubu-core?rev=cef80fe0ea68bf49413b6e75673dcd41274c9d75#cef80fe0)
+├── ubu_github_adapter v0.1.0 (https://github.com/UbU-project/ubu-github-adapter?rev=4b31c8c3c933a0b1cc8674a7d69849bf39484467#4b31c8c3)
+│   └── ubu_orchestrator v0.1.0 (/home/sean/ubu-phase1b/ubu-orchestrator)
+├── ubu_orchestrator v0.1.0 (/home/sean/ubu-phase1b/ubu-orchestrator)
+├── ubu_planning_core v0.1.0 (https://github.com/UbU-project/ubu-planning-kernel?rev=951d88ded8c95ed7cf5bfe815200dea0bdffd962#951d88de)
+│   ├── ubu_orchestrator v0.1.0 (/home/sean/ubu-phase1b/ubu-orchestrator)
+│   └── ubu_planning_cpu v0.1.0 (https://github.com/UbU-project/ubu-planning-kernel?rev=951d88ded8c95ed7cf5bfe815200dea0bdffd962#951d88de)
+│       └── ubu_orchestrator v0.1.0 (/home/sean/ubu-phase1b/ubu-orchestrator)
+├── ubu_planning_cpu v0.1.0 (https://github.com/UbU-project/ubu-planning-kernel?rev=951d88ded8c95ed7cf5bfe815200dea0bdffd962#951d88de) (*)
+└── ubu_store v0.1.0 (https://github.com/UbU-project/ubu-store?rev=51a964af132083d1123b5baed0140e5945aa3ec2#51a964af)
+    └── ubu_orchestrator v0.1.0 (/home/sean/ubu-phase1b/ubu-orchestrator)
+```
+
+Cargo.lock contains exactly one ubu_core package, at cef80fe; neither old core
+revision remains. Adapter (23), kernel (35) and orchestrator (75) tests all pass.
+The orchestrator C/D named test outcomes match exactly.
