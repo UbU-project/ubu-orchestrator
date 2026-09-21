@@ -2,10 +2,20 @@ use serde_json::json;
 use ubu_core::worker::local_advisory::{
     AdvisoryTransport, LocalAdvisoryResultStatus, LocalAdvisorySubmission,
 };
-use ubu_core::CandidateLifecycleState;
+use ubu_core::{
+    AdvisoryCandidateId, AuthoritySource, CandidateLifecycleState, MutationEnvelope,
+    ResurfaceTrigger, RetentionPolicy, UbuTimestamp, VersionRef,
+};
+use ubu_store::api::admission::{
+    admit_advisory_candidate, reject_advisory_candidate, transition_advisory_candidate,
+    RejectionInput,
+};
+use ubu_store::api::review::{get_advisory_candidate, CandidateRecord};
 use ubu_store::candidates::store_advisory_candidate;
+use ubu_store::models::object_record::{NewObjectRecord, ObjectRecord};
 
-use crate::errors::Result;
+use crate::errors::{AppError, Result};
+use crate::services::proposal_applier::{apply_proposal, proposal_target};
 use crate::state::AppState;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -75,4 +85,167 @@ pub async fn run_advisory<T: AdvisoryTransport>(
         }
     }
     Ok(report)
+}
+
+async fn reviewed_candidate(
+    state: &AppState,
+    id: &AdvisoryCandidateId,
+    observed_version: u64,
+) -> Result<ubu_core::AdvisoryCandidate> {
+    let record = get_advisory_candidate(state.inner().store.pool(), id)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("advisory candidate {}", id.as_str())))?;
+    if u64::try_from(record.version).ok() != Some(observed_version) {
+        return Err(ubu_store::StoreError::PreconditionFailed {
+            object_id: id.as_str().to_owned(),
+            expected: format!("v{observed_version}"),
+            actual: format!("v{}", record.version),
+        }
+        .into());
+    }
+    Ok(record.candidate()?)
+}
+
+// The read and pure application happen before the atomic writer. Carry the exact
+// read version into that writer so any intervening target mutation is rejected.
+struct PreparedAdmission {
+    envelope: MutationEnvelope,
+    record: NewObjectRecord,
+}
+
+async fn prepare_admission(
+    state: &AppState,
+    id: &AdvisoryCandidateId,
+    observed_version: u64,
+) -> Result<PreparedAdmission> {
+    let candidate = reviewed_candidate(state, id, observed_version).await?;
+    let target_ref = proposal_target(&candidate)?;
+    let target =
+        ubu_store::queries::get_current_state(state.inner().store.pool(), target_ref.id.as_str())
+            .await?
+            .ok_or_else(|| AppError::TargetNotFound {
+                id: target_ref.id.to_string(),
+            })?;
+    let mut record = apply_proposal(&candidate, &target)?;
+    let version = u64::try_from(target.version)
+        .map_err(|_| AppError::Internal("target has an invalid store version".into()))?;
+    let envelope = state.envelope_for(
+        [(target_ref.id.clone(), VersionRef::Version(version))]
+            .into_iter()
+            .collect(),
+        AuthoritySource::User,
+        UbuTimestamp::now_utc(),
+    )?;
+    record.updated_at = envelope.recorded_time.to_string();
+    Ok(PreparedAdmission { envelope, record })
+}
+
+impl PreparedAdmission {
+    async fn commit(
+        self,
+        state: &AppState,
+        id: &AdvisoryCandidateId,
+        observed_version: u64,
+    ) -> Result<(CandidateRecord, ObjectRecord)> {
+        Ok(admit_advisory_candidate(
+            state.inner().store.pool(),
+            &self.envelope,
+            id,
+            observed_version,
+            self.record,
+        )
+        .await?)
+    }
+}
+
+pub async fn admit_candidate(
+    state: &AppState,
+    id: &AdvisoryCandidateId,
+    observed_version: u64,
+) -> Result<(CandidateRecord, ObjectRecord)> {
+    prepare_admission(state, id, observed_version)
+        .await?
+        .commit(state, id, observed_version)
+        .await
+}
+
+pub async fn reject_candidate(
+    state: &AppState,
+    id: &AdvisoryCandidateId,
+    observed_version: u64,
+    reason: String,
+    retention_policy: RetentionPolicy,
+) -> Result<CandidateRecord> {
+    let envelope = state.envelope_for(
+        Default::default(),
+        AuthoritySource::User,
+        UbuTimestamp::now_utc(),
+    )?;
+    Ok(reject_advisory_candidate(
+        state.inner().store.pool(),
+        &envelope,
+        id,
+        observed_version,
+        RejectionInput {
+            rejection_reason_or_user_correction: reason,
+            retention_policy,
+            evidence_hashes_or_source_fingerprints: Vec::new(),
+            suppression_key: None,
+        },
+    )
+    .await?)
+}
+
+pub async fn defer_candidate(
+    state: &AppState,
+    id: &AdvisoryCandidateId,
+    observed_version: u64,
+) -> Result<CandidateRecord> {
+    review_transition(
+        state,
+        id,
+        observed_version,
+        CandidateLifecycleState::Deferred,
+        None,
+    )
+    .await
+}
+
+pub async fn resurface_candidate(
+    state: &AppState,
+    id: &AdvisoryCandidateId,
+    observed_version: u64,
+    trigger: ResurfaceTrigger,
+) -> Result<CandidateRecord> {
+    review_transition(
+        state,
+        id,
+        observed_version,
+        CandidateLifecycleState::Resurfaced,
+        Some(trigger),
+    )
+    .await
+}
+
+async fn review_transition(
+    state: &AppState,
+    id: &AdvisoryCandidateId,
+    observed_version: u64,
+    next: CandidateLifecycleState,
+    trigger: Option<ResurfaceTrigger>,
+) -> Result<CandidateRecord> {
+    let envelope = state.envelope_for(
+        Default::default(),
+        AuthoritySource::User,
+        UbuTimestamp::now_utc(),
+    )?;
+    Ok(transition_advisory_candidate(
+        state.inner().store.pool(),
+        &envelope,
+        id,
+        observed_version,
+        next,
+        trigger,
+    )
+    .await?)
 }
