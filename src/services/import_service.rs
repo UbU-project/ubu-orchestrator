@@ -153,22 +153,11 @@ pub async fn import_live(state: AppState, request: ImportLiveRequest) -> Result<
 
     let mut admitted = Vec::with_capacity(mapping.tasks.len());
     for task in &mapping.tasks {
-        // The pinned adapter retains its older core dependency. Cross the stable
-        // JSON contract explicitly without changing that dependency's revision.
-        let task: Task = serde_json::from_value(
-            serde_json::to_value(task).map_err(|e| AppError::Internal(e.to_string()))?,
-        )
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-        admitted.push(admit_mapped_task(&state, &task, request.objective_id.clone()).await?);
+        admitted.push(admit_mapped_task(&state, task, request.objective_id.clone()).await?);
     }
 
     for external_reference in &mapping.external_references {
-        let external_reference: ExternalReference = serde_json::from_value(
-            serde_json::to_value(external_reference)
-                .map_err(|e| AppError::Internal(e.to_string()))?,
-        )
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-        store_external_reference(&state, &external_reference).await?;
+        store_external_reference(&state, external_reference).await?;
     }
 
     let admitted_to_store = mapping.tasks.len() + mapping.external_references.len();

@@ -917,8 +917,7 @@ async fn apply_managed_label_operation(
                 labels: vec![label.clone()],
             };
             let result =
-                apply_managed_label_write(client, &payload,
-                    serde_json::from_value(serde_json::to_value(permit.authority_source())?)?).await?;
+                apply_managed_label_write(client, &payload, permit.authority_source()).await?;
             Ok(format!(
                 "managed labels applied: {}",
                 result.applied_labels.join(", ")
