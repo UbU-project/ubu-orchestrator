@@ -77,3 +77,31 @@ The inclusive range check also rejects NaN and infinities, preserving the
 previous acceptance rules. No schema or data migration is needed.
 
 E changes only this verification record; D contains the type/pin changes.
+
+## F: committed dependency graph
+
+Pushed in dependency order:
+
+- Core: `cef80fe0ea68bf49413b6e75673dcd41274c9d75`.
+- Store: `51a964af132083d1123b5baed0140e5945aa3ec2`.
+
+Before D, Cargo listed four core sources: cf162b2, db37776, 139ce98, 2444b76.
+After D, `cargo tree -i ubu_core` reports ambiguity and lists exactly three
+source-qualified package ids. Running `cargo tree --locked -i` separately for
+each id gives the following output. No db37776, path source, or alias remains.
+
+```text
+ubu_core v0.1.0 (https://github.com/UbU-project/ubu-core?rev=cef80fe0ea68bf49413b6e75673dcd41274c9d75#cef80fe0)
+├── ubu_orchestrator v0.1.0 (/home/sean/ubu-phase1b/ubu-orchestrator)
+└── ubu_store v0.1.0 (https://github.com/UbU-project/ubu-store?rev=51a964af132083d1123b5baed0140e5945aa3ec2#51a964af)
+    └── ubu_orchestrator v0.1.0 (/home/sean/ubu-phase1b/ubu-orchestrator)
+ubu_core v0.1.0 (https://github.com/UbU-project/ubu-core?rev=139ce98a2dce40f8e73f472344d5cc4a8eb59db1#139ce98a)
+├── ubu_planning_core v0.1.0 (https://github.com/UbU-project/ubu-planning-kernel?rev=62c6d7a2f71078d141f7a4b9c91bd78193ee3314#62c6d7a2)
+│   ├── ubu_orchestrator v0.1.0 (/home/sean/ubu-phase1b/ubu-orchestrator)
+│   └── ubu_planning_cpu v0.1.0 (https://github.com/UbU-project/ubu-planning-kernel?rev=62c6d7a2f71078d141f7a4b9c91bd78193ee3314#62c6d7a2)
+│       └── ubu_orchestrator v0.1.0 (/home/sean/ubu-phase1b/ubu-orchestrator)
+└── ubu_planning_cpu v0.1.0 (https://github.com/UbU-project/ubu-planning-kernel?rev=62c6d7a2f71078d141f7a4b9c91bd78193ee3314#62c6d7a2) (*)
+ubu_core v0.1.0 (https://github.com/UbU-project/ubu-core?rev=2444b76e8eed75040e5a5791d1dce2579f0fe006#2444b76e)
+└── ubu_github_adapter v0.1.0 (https://github.com/UbU-project/ubu-github-adapter?rev=4dce0887f0929584654e032992ed10fe5281a5cc#4dce0887)
+    └── ubu_orchestrator v0.1.0 (/home/sean/ubu-phase1b/ubu-orchestrator)
+```
