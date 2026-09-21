@@ -10,6 +10,259 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/advisory/candidate/{candidate_id}": {
+      "get": {
+        "tags": [
+          "crate::api::advisory"
+        ],
+        "operationId": "candidate",
+        "parameters": [
+          {
+            "name": "candidate_id",
+            "in": "path",
+            "description": "Advisory candidate id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdvisoryCandidateResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/advisory/candidate/{candidate_id}/admit": {
+      "post": {
+        "tags": [
+          "crate::api::advisory"
+        ],
+        "operationId": "admit",
+        "parameters": [
+          {
+            "name": "candidate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdvisoryAdmitResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          },
+          "422": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/advisory/candidate/{candidate_id}/defer": {
+      "post": {
+        "tags": [
+          "crate::api::advisory"
+        ],
+        "operationId": "defer",
+        "parameters": [
+          {
+            "name": "candidate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdvisoryCandidateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/advisory/candidate/{candidate_id}/reject": {
+      "post": {
+        "tags": [
+          "crate::api::advisory"
+        ],
+        "operationId": "reject",
+        "parameters": [
+          {
+            "name": "candidate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RejectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdvisoryCandidateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/advisory/candidate/{candidate_id}/resurface": {
+      "post": {
+        "tags": [
+          "crate::api::advisory"
+        ],
+        "operationId": "resurface",
+        "parameters": [
+          {
+            "name": "candidate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResurfaceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdvisoryCandidateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/advisory/queue": {
+      "get": {
+        "tags": [
+          "crate::api::advisory"
+        ],
+        "operationId": "queue",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdvisoryQueueResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/bootstrap/answer": {
       "post": {
         "tags": [
@@ -724,6 +977,53 @@
             "type": "string"
           },
           "message": {
+            "type": "string"
+          }
+        }
+      },
+      "AdvisoryAdmitResponse": {
+        "type": "object",
+        "required": [
+          "state_category",
+          "candidate",
+          "task"
+        ],
+        "properties": {
+          "candidate": {},
+          "state_category": {
+            "type": "string"
+          },
+          "task": {}
+        }
+      },
+      "AdvisoryCandidateResponse": {
+        "type": "object",
+        "description": "Explicitly identifies the review-only candidate-state surface. Candidate\nrows are never presented as canonical admitted objects.",
+        "required": [
+          "state_category",
+          "candidate"
+        ],
+        "properties": {
+          "candidate": {},
+          "state_category": {
+            "type": "string"
+          }
+        }
+      },
+      "AdvisoryQueueResponse": {
+        "type": "object",
+        "required": [
+          "state_category",
+          "candidates"
+        ],
+        "properties": {
+          "candidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdvisoryCandidateResponse"
+            }
+          },
+          "state_category": {
             "type": "string"
           }
         }
@@ -2872,6 +3172,32 @@
           }
         }
       },
+      "RejectRequest": {
+        "type": "object",
+        "required": [
+          "observed_version",
+          "reason",
+          "retention_policy"
+        ],
+        "properties": {
+          "observed_version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "reason": {
+            "type": "string"
+          },
+          "retention_policy": {
+            "type": "string",
+            "enum": [
+              "retain",
+              "purge_payload"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "RepairContextBody": {
         "type": "object",
         "required": [
@@ -2906,6 +3232,45 @@
           "override_placement",
           "full_window"
         ]
+      },
+      "ResurfaceRequest": {
+        "type": "object",
+        "required": [
+          "observed_version",
+          "trigger"
+        ],
+        "properties": {
+          "observed_version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "trigger": {
+            "type": "string",
+            "enum": [
+              "materially_new_evidence",
+              "user_request",
+              "policy_review_interval",
+              "accepted_change_to_target_or_dependencies",
+              "clarification_or_external_reference_arrival"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "ReviewRequest": {
+        "type": "object",
+        "required": [
+          "observed_version"
+        ],
+        "properties": {
+          "observed_version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
       },
       "RiskCategory": {
         "type": "string",
@@ -2993,6 +3358,12 @@
           "placement_authority"
         ],
         "properties": {
+          "category_tag": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "depends_on": {
             "type": "array",
             "items": {
@@ -3004,10 +3375,19 @@
             "format": "int64",
             "minimum": 0
           },
+          "gcal_color_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "index": {
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          },
+          "occupies_capacity": {
+            "type": "boolean"
           },
           "placement_authority": {
             "type": "string"

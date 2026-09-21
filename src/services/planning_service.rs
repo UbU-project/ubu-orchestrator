@@ -50,7 +50,7 @@ pub async fn generate(
         blocked_tasks,
         invalid_tasks,
         mut diagnostics,
-        non_capacity_tasks: _,
+        non_capacity_tasks,
     } = match request.request {
         Some(body) => {
             validate_optional_schema_version(body.schema_version.as_deref())?;
@@ -76,7 +76,8 @@ pub async fn generate(
     validate_task_models(&planning_request)?;
     let kernel_request = PlanningRequest::from(planning_request.clone());
     let adapter = CpuPlannerAdapter;
-    let mut candidates = if has_static_conflicts(&diagnostics) {
+    add_empty_capacity_diagnostic(&planning_request, &mut diagnostics);
+    let mut candidates = if has_static_conflicts(&diagnostics) || planning_request.tasks.is_empty() {
         Vec::new()
     } else {
         let response = adapter.plan(kernel_request.clone());
@@ -101,10 +102,10 @@ pub async fn generate(
                 ));
                 let titles = task_titles(state.inner().store.pool()).await?;
                 let selected_candidate =
-                    kernel_candidate_body(&selected, &titles, &planning_request);
+                    kernel_candidate_body(&selected, &titles, &planning_request, &non_capacity_tasks);
                 let alternatives = candidates
                     .iter()
-                    .map(|candidate| kernel_candidate_body(candidate, &titles, &planning_request))
+                    .map(|candidate| kernel_candidate_body(candidate, &titles, &planning_request, &non_capacity_tasks))
                     .collect::<Vec<_>>();
                 let (risk_report, plan_quality) = planning_analysis::analyze(
                     state.inner().store.pool(),
@@ -132,6 +133,7 @@ pub async fn generate(
                         human_complete_plan_quality: Some(plan_quality.clone()),
                     },
                     Vec::new(),
+                    &non_capacity_tasks,
                 )
                 .await?;
                 if risk_report.findings.iter().any(|finding| finding.blocking) {
@@ -305,11 +307,12 @@ pub async fn latest_admitted_plan(state: &AppState) -> Result<Option<PlanBody>> 
 
 pub async fn persist_repair_plan(
     state: &AppState,
-    request: &PlanningRequestBody,
+    context: &StorePlanningRequest,
     repaired_plan: &KernelPlan,
     prior_plan: &PlanBody,
     frozen_steps: Vec<ScheduledTaskBody>,
 ) -> Result<PlanBody> {
+    let request = &context.request;
     let plan_id = UbuId::new(ObjectType::Plan).to_string();
     persist_kernel_plan(
         state,
@@ -326,6 +329,7 @@ pub async fn persist_repair_plan(
             human_complete_plan_quality: None,
         },
         frozen_steps,
+        &context.non_capacity_tasks,
     )
     .await
 }
@@ -385,6 +389,9 @@ pub fn kernel_plan_body(plan: KernelPlan) -> PlanBody {
                 end: task.end,
                 depends_on: task.depends_on,
                 static_anchor: task.static_anchor,
+                occupies_capacity: true,
+                category_tag: None,
+                gcal_color_id: None,
                 placement_authority: if task.static_anchor {
                     "user_override".to_owned()
                 } else {
@@ -437,12 +444,6 @@ async fn build_request_from_store_with_context(
             })
         })
         .collect::<Result<Vec<_>>>()?;
-
-    if task_rows.is_empty() {
-        return Err(AppError::BadRequest(
-            "import GitHub candidates before generating a plan".to_owned(),
-        ));
-    }
 
     let TaskPreconditionPartition {
         eligible: task_rows,
@@ -612,28 +613,13 @@ async fn persist_kernel_plan(
     request: &PlanningRequestBody,
     metadata: PersistPlanMetadata,
     frozen_steps: Vec<ScheduledTaskBody>,
+    non_capacity_tasks: &[TaskSpecBody],
 ) -> Result<PlanBody> {
     let now = UbuTimestamp::now_utc().to_string();
     let titles = task_titles(state.inner().store.pool()).await?;
-    let mut steps = frozen_steps;
-    let existing_task_ids: HashSet<String> =
-        steps.iter().map(|step| step.task_id.clone()).collect();
-    steps.extend(
-        kernel_plan
-            .steps
-            .iter()
-            .filter(|task| !existing_task_ids.contains(&task.task_id))
-            .map(|task| scheduled_task_body(task, &titles, request)),
-    );
-    steps.sort_by(|left, right| {
-        left.start
-            .cmp(&right.start)
-            .then_with(|| left.end.cmp(&right.end))
-            .then_with(|| left.task_id.cmp(&right.task_id))
-    });
-    for (index, step) in steps.iter_mut().enumerate() {
-        step.index = index as u32;
-    }
+    let steps = merge_steps(frozen_steps, kernel_plan.steps.iter()
+        .map(|task| scheduled_task_body(task, &titles, request))
+        .chain(direct_static_steps(non_capacity_tasks, &titles)));
 
     let plan = PlanBody {
         id: plan_id.to_owned(),
@@ -718,7 +704,7 @@ async fn raise_blocking_recalculation(
 
 fn scheduled_task_body(
     task: &ScheduledTask,
-    titles: &HashMap<String, String>,
+    titles: &HashMap<String, TaskDisplay>,
     request: &PlanningRequestBody,
 ) -> ScheduledTaskBody {
     let placement_authority = request
@@ -735,36 +721,60 @@ fn scheduled_task_body(
         task_id: task.task_id.clone(),
         summary: titles
             .get(&task.task_id)
-            .cloned()
+            .map(|display| display.title.clone())
             .unwrap_or_else(|| task.task_id.clone()),
         start: task.start,
         end: task.end,
         depends_on: task.depends_on.clone(),
         static_anchor: task.static_anchor,
         placement_authority,
+        occupies_capacity: true,
+        category_tag: titles.get(&task.task_id).and_then(|display| display.category_tag.clone()),
+        gcal_color_id: None,
+    }
+}
+
+/// Non-capacity steps do not enter the kernel: robustness, probability and
+/// legitimization describe capacity work only. Risk and plan-quality analysis
+/// sees these steps through the merged candidate bodies.
+fn direct_static_steps(tasks: &[TaskSpecBody], titles: &HashMap<String, TaskDisplay>) -> Vec<ScheduledTaskBody> {
+    tasks.iter().map(|task| {
+        let window = task.window.as_ref().expect("direct Static Task has a window");
+        let display = titles.get(&task.id);
+        ScheduledTaskBody {
+            index: 0, task_id: task.id.clone(),
+            summary: display.map(|d| d.title.clone()).unwrap_or_else(|| task.id.clone()),
+            start: window.start, end: window.end, depends_on: task.depends_on.clone(),
+            static_anchor: true, placement_authority: "user_override".into(), occupies_capacity: false,
+            category_tag: display.and_then(|d| d.category_tag.clone()), gcal_color_id: None,
+        }
+    }).collect()
+}
+
+fn merge_steps(mut frozen: Vec<ScheduledTaskBody>, others: impl IntoIterator<Item = ScheduledTaskBody>) -> Vec<ScheduledTaskBody> {
+    let mut seen: HashSet<_> = frozen.iter().map(|step| step.task_id.clone()).collect();
+    frozen.extend(others.into_iter().filter(|step| seen.insert(step.task_id.clone())));
+    frozen.sort_by(|a, b| (a.start, a.end, &a.task_id).cmp(&(b.start, b.end, &b.task_id)));
+    for (index, step) in frozen.iter_mut().enumerate() { step.index = index as u32; }
+    frozen
+}
+
+pub fn add_empty_capacity_diagnostic(request: &PlanningRequestBody, diagnostics: &mut Vec<DiagnosticBody>) {
+    if request.tasks.is_empty() {
+        diagnostics.push(DiagnosticBody { code: "no_capacity_tasks_to_plan".into(),
+            message: "No capacity Tasks remain for the planning kernel".into() });
     }
 }
 
 fn kernel_candidate_body(
     candidate: &PlanCandidate,
-    titles: &HashMap<String, String>,
+    titles: &HashMap<String, TaskDisplay>,
     request: &PlanningRequestBody,
+    non_capacity_tasks: &[TaskSpecBody],
 ) -> PlanCandidateBody {
-    let mut steps = candidate
-        .schedule
-        .steps
-        .iter()
+    let steps = merge_steps(Vec::new(), candidate.schedule.steps.iter()
         .map(|task| scheduled_task_body(task, titles, request))
-        .collect::<Vec<_>>();
-    steps.sort_by(|left, right| {
-        left.start
-            .cmp(&right.start)
-            .then_with(|| left.end.cmp(&right.end))
-            .then_with(|| left.task_id.cmp(&right.task_id))
-    });
-    for (index, step) in steps.iter_mut().enumerate() {
-        step.index = index as u32;
-    }
+        .chain(direct_static_steps(non_capacity_tasks, titles)));
 
     PlanCandidateBody {
         candidate_id: candidate.candidate_id.clone(),
@@ -1436,7 +1446,12 @@ fn bootstrap_affect_observation(
     }
 }
 
-async fn task_titles(pool: &sqlx::SqlitePool) -> Result<HashMap<String, String>> {
+struct TaskDisplay {
+    title: String,
+    category_tag: Option<String>,
+}
+
+async fn task_titles(pool: &sqlx::SqlitePool) -> Result<HashMap<String, TaskDisplay>> {
     let rows = sqlx::query("SELECT id, payload_json FROM objects WHERE object_type = ?")
         .bind(ObjectType::Task.as_str())
         .fetch_all(pool)
@@ -1452,9 +1467,10 @@ async fn task_titles(pool: &sqlx::SqlitePool) -> Result<HashMap<String, String>>
             .map_err(|e| AppError::Internal(e.to_string()))?;
         let payload: Value = serde_json::from_str(&payload_json)
             .map_err(|e| AppError::Internal(format!("failed to deserialize task: {e}")))?;
-        if let Some(title) = payload.get("title").and_then(Value::as_str) {
-            titles.insert(id, title.to_owned());
-        }
+        titles.insert(id.clone(), TaskDisplay {
+            title: payload.get("title").and_then(Value::as_str).unwrap_or(&id).to_owned(),
+            category_tag: payload.get("category_tag").and_then(Value::as_str).map(str::to_owned),
+        });
     }
     Ok(titles)
 }

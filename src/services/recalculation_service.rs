@@ -69,7 +69,8 @@ pub async fn recalculate_from_request(
     diagnostics.extend(repair_request_body.invalid_tasks.iter().map(|task| DiagnosticBody {
         code: "task_precondition_invalid".into(), message: format!("Task `{}`: {}", task.task_id, task.error),
     }));
-    if planning_service::has_static_conflicts(&diagnostics) {
+    planning_service::add_empty_capacity_diagnostic(&repair_request_body.request, &mut diagnostics);
+    if planning_service::has_static_conflicts(&diagnostics) || repair_request_body.request.tasks.is_empty() {
         return Ok(RecalculationResponse {
             schema_version: RECALCULATION_SCHEMA_VERSION.to_owned(), trigger_type: request.trigger_type,
             repair_scope, prior_plan_id: prior_plan.id, plan: None, diagnostics,
@@ -92,7 +93,7 @@ pub async fn recalculate_from_request(
         Some(plan) => {
             let stored = planning_service::persist_repair_plan(
                 &state,
-                &repair_request_body.request,
+                &repair_request_body,
                 &plan,
                 &prior_plan,
                 frozen_steps,

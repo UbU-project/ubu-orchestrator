@@ -433,7 +433,15 @@ pub struct ScheduledTaskBody {
     pub depends_on: Vec<String>,
     pub static_anchor: bool,
     pub placement_authority: String,
+    #[serde(default = "default_step_capacity")]
+    pub occupies_capacity: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category_tag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gcal_color_id: Option<String>,
 }
+
+fn default_step_capacity() -> bool { true }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
