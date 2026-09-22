@@ -1,0 +1,399 @@
+{
+  "snapshot_version": 1,
+  "store": {
+    "routines": {
+      "00000000-0000-4000-8000-000000000001": {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "title": "Synthetic routine 1",
+        "recurrence": "Daily",
+        "start_time": "12:00:00",
+        "duration": [
+          300,
+          0
+        ],
+        "category": "relationship",
+        "dynamic": false,
+        "transparent": false,
+        "reminders": [
+          -1,
+          0
+        ],
+        "after": []
+      },
+      "00000000-0000-4000-8000-000000000002": {
+        "id": "00000000-0000-4000-8000-000000000002",
+        "title": "Synthetic routine 2",
+        "recurrence": "Daily",
+        "start_time": "12:00:00",
+        "duration": [
+          300,
+          0
+        ],
+        "category": "relationship",
+        "dynamic": true,
+        "transparent": true,
+        "reminders": [
+          0
+        ],
+        "after": [
+          {
+            "template_id": "00000000-0000-4000-8000-000000000001",
+            "offset": [
+              3600,
+              0
+            ]
+          },
+          {
+            "template_id": "00000000-0000-4000-8000-000000000099",
+            "offset": [
+              0,
+              0
+            ]
+          },
+          {
+            "template_id": "00000000-0000-4000-8000-000000000002",
+            "offset": [
+              0,
+              0
+            ]
+          },
+          {
+            "template_id": "00000000-0000-4000-8000-000000000001",
+            "offset": [
+              -1,
+              0
+            ]
+          }
+        ],
+        "latest_tod": "14:00:00"
+      },
+      "00000000-0000-4000-8000-000000000003": {
+        "id": "00000000-0000-4000-8000-000000000003",
+        "title": "Synthetic routine 3",
+        "recurrence": {
+          "Weekly": {
+            "weekdays": [
+              "Mon",
+              "Thu"
+            ]
+          }
+        },
+        "start_time": "12:00:00",
+        "duration": [
+          300,
+          0
+        ],
+        "category": "relationship",
+        "dynamic": false,
+        "transparent": false,
+        "reminders": [
+          0
+        ],
+        "after": []
+      },
+      "00000000-0000-4000-8000-000000000004": {
+        "id": "00000000-0000-4000-8000-000000000004",
+        "title": "Synthetic routine 4",
+        "recurrence": {
+          "MonthlyDay": {
+            "days": [
+              1,
+              15
+            ]
+          }
+        },
+        "start_time": "12:00:00",
+        "duration": [
+          300,
+          0
+        ],
+        "category": "relationship",
+        "dynamic": false,
+        "transparent": false,
+        "reminders": [
+          0
+        ],
+        "after": []
+      },
+      "00000000-0000-4000-8000-000000000005": {
+        "id": "00000000-0000-4000-8000-000000000005",
+        "title": "Synthetic routine 5",
+        "recurrence": "MonthlyFirstWorkday",
+        "start_time": "12:00:00",
+        "duration": [
+          300,
+          0
+        ],
+        "category": "relationship",
+        "dynamic": false,
+        "transparent": false,
+        "reminders": [
+          0
+        ],
+        "after": []
+      }
+    },
+    "tasks": {
+      "00000000-0000-4000-8000-000000000011": {
+        "id": "00000000-0000-4000-8000-000000000011",
+        "title": "Synthetic task 11",
+        "status": "Backlog",
+        "detail": "Synthetic import fixture",
+        "tags": [
+          "focus"
+        ],
+        "category": "focus",
+        "transparent": false,
+        "est_duration": [
+          600,
+          0
+        ],
+        "blocked_by": [],
+        "pinned": {
+          "start": "2026-09-22T09:30:00Z",
+          "end": "2026-09-22T09:40:00Z"
+        }
+      },
+      "00000000-0000-4000-8000-000000000012": {
+        "id": "00000000-0000-4000-8000-000000000012",
+        "title": "Synthetic task 12",
+        "status": "Backlog",
+        "detail": "Synthetic import fixture",
+        "tags": [
+          "focus"
+        ],
+        "category": "focus",
+        "transparent": false,
+        "est_duration": [
+          600,
+          0
+        ],
+        "blocked_by": [],
+        "pinned": {
+          "start": "2026-09-22T08:00:00Z",
+          "end": "2026-09-22T08:10:00Z"
+        }
+      },
+      "00000000-0000-4000-8000-000000000013": {
+        "id": "00000000-0000-4000-8000-000000000013",
+        "title": "Synthetic task 13",
+        "status": "Done",
+        "detail": "Synthetic import fixture",
+        "tags": [
+          "focus"
+        ],
+        "category": "focus",
+        "transparent": false,
+        "est_duration": [
+          600,
+          0
+        ],
+        "blocked_by": []
+      },
+      "00000000-0000-4000-8000-000000000014": {
+        "id": "00000000-0000-4000-8000-000000000014",
+        "title": "Synthetic task 14",
+        "status": "Backlog",
+        "detail": "Synthetic import fixture",
+        "tags": [
+          "focus"
+        ],
+        "category": "focus",
+        "transparent": false,
+        "est_duration": [
+          600,
+          0
+        ],
+        "blocked_by": [
+          "00000000-0000-4000-8000-000000000011",
+          "00000000-0000-4000-8000-000000000012"
+        ],
+        "after": [
+          {
+            "task_id": "00000000-0000-4000-8000-000000000011",
+            "offset": [
+              0,
+              0
+            ]
+          }
+        ]
+      },
+      "00000000-0000-4000-8000-000000000015": {
+        "id": "00000000-0000-4000-8000-000000000015",
+        "title": "Synthetic task 15",
+        "status": "Backlog",
+        "detail": "Synthetic import fixture",
+        "tags": [
+          "focus"
+        ],
+        "category": "focus",
+        "transparent": false,
+        "est_duration": [
+          600,
+          0
+        ],
+        "blocked_by": [],
+        "pinned": {
+          "start": "2026-09-22T10:00:00Z",
+          "end": "2026-09-22T10:10:00Z"
+        }
+      },
+      "00000000-0000-4000-8000-000000000016": {
+        "id": "00000000-0000-4000-8000-000000000016",
+        "title": "Synthetic task 16",
+        "status": "Backlog",
+        "detail": "Synthetic import fixture",
+        "tags": [
+          "focus"
+        ],
+        "category": "focus",
+        "transparent": false,
+        "est_duration": [
+          600,
+          0
+        ],
+        "blocked_by": []
+      },
+      "00000000-0000-4000-8000-000000000017": {
+        "id": "00000000-0000-4000-8000-000000000017",
+        "title": "Synthetic task 17",
+        "status": "Backlog",
+        "detail": "Synthetic import fixture",
+        "tags": [
+          "focus"
+        ],
+        "category": "focus",
+        "transparent": false,
+        "est_duration": [
+          600,
+          0
+        ],
+        "blocked_by": []
+      },
+      "00000000-0000-4000-8000-000000000018": {
+        "id": "00000000-0000-4000-8000-000000000018",
+        "title": "Synthetic task 18",
+        "status": "Backlog",
+        "detail": "Synthetic import fixture",
+        "tags": [
+          "focus"
+        ],
+        "category": "focus",
+        "transparent": false,
+        "est_duration": [
+          600,
+          0
+        ],
+        "blocked_by": [],
+        "earliest_start": "2026-09-22T09:00:00Z"
+      },
+      "00000000-0000-4000-8000-000000000019": {
+        "id": "00000000-0000-4000-8000-000000000019",
+        "title": "Synthetic task 19",
+        "status": "Backlog",
+        "detail": "Synthetic import fixture",
+        "tags": [
+          "focus"
+        ],
+        "category": "focus",
+        "transparent": false,
+        "est_duration": [
+          600,
+          0
+        ],
+        "blocked_by": [],
+        "earliest_start": "2026-09-22T10:00:00Z",
+        "must_finish_by": "2026-09-22T09:00:00Z"
+      },
+      "00000000-0000-4000-8000-000000000020": {
+        "id": "00000000-0000-4000-8000-000000000020",
+        "title": "Synthetic task 20",
+        "status": "Backlog",
+        "detail": "Synthetic import fixture",
+        "tags": [
+          "focus"
+        ],
+        "category": "",
+        "transparent": false,
+        "est_duration": [
+          600,
+          0
+        ],
+        "blocked_by": []
+      }
+    },
+    "objectives": {
+      "00000000-0000-4000-8000-000000000050": {
+        "id": "00000000-0000-4000-8000-000000000050",
+        "title": "Not imported"
+      }
+    },
+    "bundles": {
+      "00000000-0000-4000-8000-000000000031": {
+        "id": "00000000-0000-4000-8000-000000000031",
+        "members": [
+          "00000000-0000-4000-8000-000000000011"
+        ]
+      },
+      "00000000-0000-4000-8000-000000000032": {
+        "id": "00000000-0000-4000-8000-000000000032",
+        "members": [
+          "00000000-0000-4000-8000-000000000014"
+        ]
+      },
+      "00000000-0000-4000-8000-000000000033": {
+        "id": "00000000-0000-4000-8000-000000000033",
+        "members": [
+          "00000000-0000-4000-8000-000000000011",
+          "00000000-0000-4000-8000-000000000014"
+        ]
+      },
+      "00000000-0000-4000-8000-000000000034": {
+        "id": "00000000-0000-4000-8000-000000000034",
+        "members": [
+          "00000000-0000-4000-8000-000000000013"
+        ]
+      },
+      "00000000-0000-4000-8000-000000000035": {
+        "id": "00000000-0000-4000-8000-000000000035",
+        "members": [
+          "00000000-0000-4000-8000-000000000015"
+        ]
+      }
+    },
+    "preferences": [
+      {
+        "left": "00000000-0000-4000-8000-000000000031",
+        "right": "00000000-0000-4000-8000-000000000032",
+        "relation": "Strict"
+      },
+      {
+        "left": "00000000-0000-4000-8000-000000000032",
+        "right": "00000000-0000-4000-8000-000000000035",
+        "relation": "Indifferent"
+      },
+      {
+        "left": "00000000-0000-4000-8000-000000000033",
+        "right": "00000000-0000-4000-8000-000000000032",
+        "relation": "Strict"
+      },
+      {
+        "left": "00000000-0000-4000-8000-000000000034",
+        "right": "00000000-0000-4000-8000-000000000031",
+        "relation": "Strict"
+      }
+    ]
+  },
+  "task_origins": {
+    "00000000-0000-4000-8000-000000000011": "manual",
+    "00000000-0000-4000-8000-000000000012": "manual",
+    "00000000-0000-4000-8000-000000000013": "manual",
+    "00000000-0000-4000-8000-000000000014": "manual",
+    "00000000-0000-4000-8000-000000000015": "calendar_capture",
+    "00000000-0000-4000-8000-000000000016": "routine_occurrence",
+    "00000000-0000-4000-8000-000000000017": "orphaned_routine_occurrence",
+    "00000000-0000-4000-8000-000000000018": "manual",
+    "00000000-0000-4000-8000-000000000019": "manual",
+    "00000000-0000-4000-8000-000000000020": "manual"
+  }
+}

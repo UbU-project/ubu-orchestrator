@@ -529,3 +529,74 @@ fn explanation(
         source_refs,
     }
 }
+
+#[cfg(test)]
+mod routine_parent_tests {
+    use super::*;
+    use ubu_core::{AuthoritySource, UbuId, UbuTimestamp, VersionRef};
+    use ubu_store::{models::object_record::NewObjectRecord, queries};
+    #[tokio::test]
+    async fn implicit_parent_counts_only_one_time_objectives() {
+        let state = AppState::in_memory(crate::config::ServerConfig::from_env())
+            .await
+            .unwrap();
+        let now = UbuTimestamp::parse("2026-09-22T09:00:00Z").unwrap();
+        let mut legacy_id = String::new();
+        for mode in [None, Some("evergreen"), Some("evergreen")] {
+            let id = UbuId::new(ObjectType::Objective);
+            if mode.is_none() {
+                legacy_id = id.to_string();
+            }
+            let mut payload = serde_json::json!({"id":id,"title":"Synthetic objective","status":"active","provenance":{"created_at":now,"authority_source":"user"}});
+            if let Some(mode) = mode {
+                payload["mode"] = serde_json::json!(mode);
+            }
+            let envelope = state
+                .envelope_for(
+                    [(id.clone(), VersionRef::Absent)].into_iter().collect(),
+                    AuthoritySource::User,
+                    now,
+                )
+                .unwrap();
+            queries::admit_object(
+                state.inner().store.pool(),
+                &envelope,
+                NewObjectRecord {
+                    id: id.to_string(),
+                    object_type: "Objective".into(),
+                    version: 1,
+                    status: "active".into(),
+                    compartment_label: "test".into(),
+                    payload,
+                    created_at: now.to_string(),
+                    updated_at: now.to_string(),
+                },
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(
+            parent_objective(state.inner().store.pool(), &serde_json::json!({}))
+                .await
+                .unwrap()
+                .unwrap()
+                .objective_id,
+            legacy_id
+        );
+        sqlx::query(
+            "UPDATE objects SET payload_json=json_set(payload_json,'$.mode','one_time') WHERE id=?",
+        )
+        .bind(&legacy_id)
+        .execute(state.inner().store.pool())
+        .await
+        .unwrap();
+        assert_eq!(
+            parent_objective(state.inner().store.pool(), &serde_json::json!({}))
+                .await
+                .unwrap()
+                .unwrap()
+                .objective_id,
+            legacy_id
+        );
+    }
+}
