@@ -430,7 +430,7 @@ async fn parent_objective(
     }
 
     let rows = sqlx::query_as::<_, ObjectRecord>(
-        "SELECT * FROM objects WHERE object_type = ? AND status = ? ORDER BY created_at ASC, id ASC LIMIT 2",
+        "SELECT * FROM objects WHERE object_type = ? AND status = ? AND (json_extract(payload_json, '$.mode') IS NULL OR json_extract(payload_json, '$.mode') = 'one_time') ORDER BY created_at ASC, id ASC LIMIT 2",
     )
     .bind(ObjectType::Objective.as_str())
     .bind("active")

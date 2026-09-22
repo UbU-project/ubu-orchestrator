@@ -16,6 +16,7 @@ use utoipa::OpenApi;
         crate::api::bootstrap::seed,
         crate::api::desktop::github_token,
         crate::api::github::import_fixture,
+        crate::api::quick_ubu::import_quick_ubu,
         crate::api::github::import_live,
         crate::api::planning::generate,
         crate::api::recalculation::recalculate,
@@ -35,6 +36,11 @@ use utoipa::OpenApi;
         crate::api::reports::human_complete
     ),
     components(schemas(
+        crate::api::quick_ubu::QuickUbuImportRequest,
+        crate::api::quick_ubu::QuickUbuImportResponse,
+        crate::api::quick_ubu::ImportCounts,
+        crate::api::quick_ubu::QuickUbuSkipped,
+        crate::api::quick_ubu::QuickUbuObjectRef,
         crate::api::advisory::AdvisoryCandidateResponse,
         crate::api::advisory::AdvisoryQueueResponse,
         crate::api::advisory::AdvisoryAdmitResponse,

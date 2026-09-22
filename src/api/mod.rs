@@ -10,3 +10,5 @@ pub mod projection;
 pub mod recalculation;
 pub mod reports;
 pub mod user_action;
+
+pub mod quick_ubu;

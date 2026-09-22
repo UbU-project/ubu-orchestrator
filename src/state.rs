@@ -29,6 +29,7 @@ pub struct OrchestratorState {
     pub causality_issuer: LocalIssuer,
     pub desktop_session_token: Mutex<Option<SecretToken>>,
     pub bootstrap_started: Mutex<bool>,
+    pub quick_ubu_import_lock: Mutex<()>,
     pub bootstrap_answers: Mutex<Vec<String>>,
 }
 
@@ -90,6 +91,7 @@ impl AppState {
                 causality_issuer,
                 desktop_session_token: Mutex::new(None),
                 bootstrap_started: Mutex::new(false),
+                quick_ubu_import_lock: Mutex::new(()),
                 bootstrap_answers: Mutex::new(Vec::new()),
             }),
         })

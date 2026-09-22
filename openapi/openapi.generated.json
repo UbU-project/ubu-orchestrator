@@ -473,6 +473,39 @@
         }
       }
     },
+    "/import/quick-ubu": {
+      "post": {
+        "tags": [
+          "crate::api::quick_ubu"
+        ],
+        "operationId": "import_quick_ubu",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuickUbuImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuickUbuImportResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid timezone or snapshot"
+          }
+        }
+      }
+    },
     "/next-action": {
       "get": {
         "tags": [
@@ -1797,6 +1830,28 @@
           }
         }
       },
+      "ImportCounts": {
+        "type": "object",
+        "required": [
+          "created",
+          "updated",
+          "unchanged"
+        ],
+        "properties": {
+          "created": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "unchanged": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "updated": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
       "ImportFixtureRequest": {
         "type": "object",
         "properties": {
@@ -3031,6 +3086,114 @@
             "type": "string"
           },
           "repo": {
+            "type": "string"
+          }
+        }
+      },
+      "QuickUbuImportRequest": {
+        "type": "object",
+        "required": [
+          "snapshot_path"
+        ],
+        "properties": {
+          "dry_run": {
+            "type": "boolean"
+          },
+          "snapshot_path": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string"
+          }
+        }
+      },
+      "QuickUbuImportResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "dry_run",
+          "routines",
+          "tasks",
+          "preferences",
+          "objectives_not_imported",
+          "skipped",
+          "diverged",
+          "stale"
+        ],
+        "properties": {
+          "diverged": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuickUbuObjectRef"
+            }
+          },
+          "dry_run": {
+            "type": "boolean"
+          },
+          "objectives_not_imported": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "preferences": {
+            "$ref": "#/components/schemas/ImportCounts"
+          },
+          "routines": {
+            "$ref": "#/components/schemas/ImportCounts"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuickUbuSkipped"
+            }
+          },
+          "stale": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuickUbuObjectRef"
+            }
+          },
+          "tasks": {
+            "$ref": "#/components/schemas/ImportCounts"
+          }
+        }
+      },
+      "QuickUbuObjectRef": {
+        "type": "object",
+        "required": [
+          "kind",
+          "id",
+          "quick_ubu_id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "quick_ubu_id": {
+            "type": "string"
+          }
+        }
+      },
+      "QuickUbuSkipped": {
+        "type": "object",
+        "required": [
+          "kind",
+          "quick_ubu_id",
+          "reason"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "quick_ubu_id": {
+            "type": "string"
+          },
+          "reason": {
             "type": "string"
           }
         }
