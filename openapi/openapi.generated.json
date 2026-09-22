@@ -2596,6 +2596,12 @@
                 "$ref": "#/components/schemas/PlanCandidateBody"
               }
             ]
+          },
+          "task_priorities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskPriorityBody"
+            }
           }
         }
       },
@@ -3638,6 +3644,44 @@
           "moot"
         ]
       },
+      "TaskPriorityBody": {
+        "type": "object",
+        "description": "Request-local explanation only; never part of a persisted Plan.",
+        "required": [
+          "task_id",
+          "bucket_count",
+          "value"
+        ],
+        "properties": {
+          "bucket": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "bucket_count": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "normalized_rank": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "value": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
       "TaskSpecBody": {
         "type": "object",
         "required": [
@@ -3685,6 +3729,10 @@
                 "$ref": "#/components/schemas/StaticAnchorBody"
               }
             ]
+          },
+          "value": {
+            "type": "number",
+            "format": "double"
           },
           "window": {
             "oneOf": [

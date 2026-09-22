@@ -9,3 +9,4 @@ pub mod planning_service;
 pub mod projection_service;
 pub mod recalculation_service;
 pub mod report_service;
+pub mod task_priority;

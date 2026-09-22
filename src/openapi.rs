@@ -69,6 +69,7 @@ use utoipa::OpenApi;
         crate::api::planning::RepairContextBody,
         crate::api::planning::RepairScopeBody,
         crate::api::planning::TaskSpecBody,
+        crate::api::planning::TaskPriorityBody,
         crate::api::planning::DurationEstimateBody,
         crate::api::planning::CorrelationGroupBody,
         crate::api::planning::StaticAnchorBody,

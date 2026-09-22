@@ -199,6 +199,8 @@ pub struct TaskSpecBody {
     pub id: String,
     /// Legacy fixed duration used when `duration_estimate` is omitted.
     pub duration: u64,
+    #[serde(default = "default_task_value")]
+    pub value: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_estimate: Option<DurationEstimateBody>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -210,6 +212,8 @@ pub struct TaskSpecBody {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub static_anchor: Option<StaticAnchorBody>,
 }
+
+fn default_task_value() -> f64 { 1.0 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -294,6 +298,8 @@ pub struct AffectObservationBody {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct PlanningResponseBody {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub task_priorities: Vec<TaskPriorityBody>,
     pub schema_version: String,
     pub request_id: String,
     pub plan: Option<PlanBody>,
@@ -517,7 +523,7 @@ impl From<PlanningRequestBody> for PlanningRequest {
                         strength: group.strength,
                     })
                     .collect(),
-                value: 1.0,
+                value: task.value,
                 priority: 1.0,
                 depends_on: task.depends_on,
                 window: task.window.map(|window| TimeWindow {
@@ -785,4 +791,14 @@ pub async fn generate(
 ) -> Result<Json<PlanningResponseBody>> {
     let response = planning_service::generate(state, request).await?;
     Ok(Json(response))
+}
+
+/// Request-local explanation only; never part of a persisted Plan.
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
+pub struct TaskPriorityBody {
+    pub task_id: String,
+    pub bucket: Option<u32>,
+    pub bucket_count: u32,
+    pub normalized_rank: Option<f64>,
+    pub value: f64,
 }

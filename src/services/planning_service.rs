@@ -14,7 +14,7 @@ use ubu_planning_core::{
 };
 use ubu_store::models::log_record::NewLogRecord;
 use ubu_store::models::plan_record::NewPlanRecord;
-use ubu_core::core::{AllowedTimeRange, StaticWindow, TaskCorrelationGroup, TaskDurationEstimate};
+use ubu_core::core::{Preference, AllowedTimeRange, StaticWindow, TaskCorrelationGroup, TaskDurationEstimate};
 use ubu_store::queries;
 
 use crate::adapters::planner_adapter::{CpuPlannerAdapter, PlannerAdapter};
@@ -29,7 +29,7 @@ use crate::api::planning::{
     PlanCandidateBody, PlanningHorizonBody, PlanningModeBody, PlanningRequestBody, PlanningResponseBody,
     ProbabilityQualityBody, RepairContextBody, RepairScopeBody, ScheduledTaskBody,
     ScoringPolicyBody, StaticAnchorBody, TaskGraphBody, TaskGraphEdgeBody, TaskSpecBody,
-    TimeWindowBody,
+    TimeWindowBody, TaskPriorityBody,
 };
 use crate::errors::{AppError, Result};
 use crate::reports::planning_analysis::{self, PlanningAnalysisInput};
@@ -50,6 +50,7 @@ pub async fn generate(
         blocked_tasks,
         invalid_tasks,
         mut diagnostics,
+        task_priorities,
         non_capacity_tasks,
     } = match request.request {
         Some(body) => {
@@ -59,6 +60,7 @@ pub async fn generate(
                 blocked_tasks: Vec::new(),
                 invalid_tasks: Vec::new(),
                 diagnostics: Vec::new(),
+                task_priorities: Vec::new(),
                 non_capacity_tasks: Vec::new(),
             }
         }
@@ -181,6 +183,7 @@ pub async fn generate(
         };
 
     Ok(PlanningResponseBody {
+        task_priorities,
         schema_version: PLANNING_SCHEMA_VERSION.to_owned(),
         request_id: planning_request.request_id,
         plan,
@@ -459,7 +462,7 @@ async fn build_request_from_store_with_context(
 
     // Resolve H using the existing fallback before applying participation rules.
     let mut task_bodies = task_rows.iter().map(|task| TaskSpecBody {
-        id: task.id.clone(), duration: duration_seconds(&task.payload),
+                value: 1.0,        id: task.id.clone(), duration: duration_seconds(&task.payload),
         duration_estimate: None, correlation_groups: Vec::new(),
         depends_on: Vec::new(), window: None, static_anchor: None,
     }).collect::<Vec<_>>();
@@ -498,7 +501,7 @@ async fn build_request_from_store_with_context(
             if outside_horizon { continue; }
             participating.push((task, window, capacity));
             let spec = TaskSpecBody {
-                id: task.id.clone(), duration: window.end - window.start,
+                value: 1.0,                id: task.id.clone(), duration: window.end - window.start,
                 duration_estimate: None, correlation_groups: Vec::new(),
                 depends_on: dependency_ids(&task.payload), window: Some(window.clone()),
                 static_anchor: Some(StaticAnchorBody { start: window.start }),
@@ -519,7 +522,7 @@ async fn build_request_from_store_with_context(
                 window.end = window.end.min(timestamp_seconds(&range.latest_finish.to_string())?);
             }
             task_bodies.push(TaskSpecBody {
-                id: task.id.clone(), duration: duration_seconds(&task.payload),
+                value: 1.0,                id: task.id.clone(), duration: duration_seconds(&task.payload),
                 duration_estimate: task_duration_estimate(&task.payload)?,
                 correlation_groups: task_correlation_groups(&task.payload)?,
                 depends_on: dependency_ids(&task.payload), window: Some(window),
@@ -603,16 +606,35 @@ async fn build_request_from_store_with_context(
         task.depends_on.retain(|dependency| planned_ids.contains(dependency));
     }
 
+    let preferences = active_task_preferences(pool).await?;
+    let eligible = task_bodies.iter().map(|task| task.id.clone()).collect::<Vec<_>>();
+    let priorities = super::task_priority::layer_preferences(&eligible, &preferences);
+    let priority_order = priorities.order_keys();
+    let values: HashMap<_, _> = priorities.tasks.iter().map(|task| (task.task_id.as_str(), task.value)).collect();
+    for task in &mut task_bodies { task.value = values[task.id.as_str()]; }
+    diagnostics.extend(priorities.cycles.iter().map(|members| DiagnosticBody {
+        code: "preference_cycle".into(),
+        message: format!("Preference cycle among Tasks [{}]; please resolve this high-priority consistency error", members.join(", ")),
+    }));
+    let mut deadlines = HashMap::new();
+    for row in &task_rows {
+        if let Some(range) = row.payload.get("allowed_time_range") {
+            let range: AllowedTimeRange = serde_json::from_value(range.clone())
+                .map_err(|e| AppError::Internal(format!("failed to deserialize Task range: {e}")))?;
+            deadlines.insert(row.id.clone(), timestamp_seconds(&range.latest_finish.to_string())?);
+        }
+    }
     let task_graph = if has_static_conflicts(&diagnostics) {
         // Conflicts must return all diagnostics even if their dependency graph cycles.
         TaskGraphBody { topological_order: Vec::new(), edges: Vec::new() }
-    } else { task_graph(&task_bodies)? };
+    } else { task_graph(&task_bodies, &priority_order, &deadlines)? };
     let request_id = UbuId::new(ObjectType::Plan).to_string();
     let rng_seed = stable_seed(&request_id, &time_window, &task_graph.topological_order);
     let affect_profile = build_affect_profile(pool).await?;
     let affect_resolution = resolve_affect_observation(pool, &affect_profile, &time_window).await?;
 
     Ok(StorePlanningRequest {
+        task_priorities: priorities.tasks,
         request: PlanningRequestBody {
             schema_version: Some(PLANNING_SCHEMA_VERSION.to_owned()),
             request_id,
@@ -936,7 +958,8 @@ fn timestamp_seconds(value: &str) -> Result<u64> {
     Ok(seconds as u64)
 }
 
-fn task_graph(tasks: &[TaskSpecBody]) -> Result<TaskGraphBody> {
+fn task_graph(tasks: &[TaskSpecBody], priorities: &BTreeMap<String, u32>, deadlines: &HashMap<String, u64>) -> Result<TaskGraphBody> {
+    let key = |id: &String| (priorities[id], deadlines.get(id).copied().unwrap_or(u64::MAX), id.clone());
     let mut children: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut indegree: BTreeMap<String, usize> = BTreeMap::new();
     let mut edges = Vec::new();
@@ -956,12 +979,12 @@ fn task_graph(tasks: &[TaskSpecBody]) -> Result<TaskGraphBody> {
         }
     }
 
-    let mut ready: BTreeSet<String> = indegree
+    let mut ready: BTreeSet<(u32, u64, String)> = indegree
         .iter()
-        .filter_map(|(task_id, count)| (*count == 0).then_some(task_id.clone()))
+        .filter_map(|(task_id, count)| (*count == 0).then(|| key(task_id)))
         .collect();
     let mut topological_order = Vec::with_capacity(tasks.len());
-    while let Some(task_id) = ready.pop_first() {
+    while let Some((_, _, task_id)) = ready.pop_first() {
         topological_order.push(task_id.clone());
         if let Some(next_tasks) = children.get(&task_id) {
             for next in next_tasks {
@@ -970,7 +993,7 @@ fn task_graph(tasks: &[TaskSpecBody]) -> Result<TaskGraphBody> {
                 })?;
                 *count -= 1;
                 if *count == 0 {
-                    ready.insert(next.clone());
+                    ready.insert(key(next));
                 }
             }
         }
@@ -1093,6 +1116,9 @@ fn validate_task_models(request: &PlanningRequestBody) -> Result<()> {
                 message,
             ));
         }
+        if !task.value.is_finite() || task.value < 0.0 {
+            return Err(AppError::bad_request_diagnostic("invalid_task_value", "Task value must be finite and non-negative"));
+        }
         let kernel_task = TaskSpec {
             id: task.id.clone(),
             duration,
@@ -1104,7 +1130,7 @@ fn validate_task_models(request: &PlanningRequestBody) -> Result<()> {
                     strength: group.strength,
                 })
                 .collect(),
-            value: 1.0,
+            value: task.value,
             priority: 1.0,
             depends_on: task.depends_on.clone(),
             window: None,
@@ -1210,6 +1236,15 @@ async fn build_affect_profile(pool: &sqlx::SqlitePool) -> Result<AffectProfileBo
         profile.mode = AffectLegitimizationModeBody::Enforce;
     }
     Ok(profile)
+}
+
+async fn active_task_preferences(pool: &sqlx::SqlitePool) -> Result<Vec<Preference>> {
+    let rows = sqlx::query("SELECT payload_json FROM objects WHERE object_type = 'Preference' AND status = 'active'")
+        .fetch_all(pool).await.map_err(|e| AppError::Internal(e.to_string()))?;
+    rows.into_iter().map(|row| {
+        let payload: String = row.try_get("payload_json").map_err(|e| AppError::Internal(e.to_string()))?;
+        serde_json::from_str(&payload).map_err(|e| AppError::Internal(format!("failed to deserialize Preference: {e}")))
+    }).collect()
 }
 
 async fn active_settings(pool: &sqlx::SqlitePool) -> Result<HashMap<String, Value>> {
@@ -1572,6 +1607,7 @@ fn precondition_diagnostics(
 
 #[derive(Debug)]
 pub struct StorePlanningRequest {
+    pub task_priorities: Vec<TaskPriorityBody>,
     pub request: PlanningRequestBody,
     pub blocked_tasks: Vec<BlockedTaskBody>,
     pub invalid_tasks: Vec<InvalidTaskBody>,
