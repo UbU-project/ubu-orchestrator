@@ -385,3 +385,81 @@ async fn corrupt_admitted_preference_is_an_internal_error() {
     let (status, _) = post(&state, json!({})).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
+
+#[tokio::test]
+async fn chunked_rescues_priority_taking_the_narrow_slot_and_greedy_still_fails() {
+    for strategy in [None, Some("greedy")] {
+        let mut config = ServerConfig::from_env();
+        if let Some(raw) = strategy {
+            config = config.with_planner_strategy(raw);
+        }
+        let state = AppState::in_memory(config)
+            .await
+            .unwrap()
+            .with_clock(FixedClock(UbuTimestamp::parse(NOW).unwrap()));
+        let a = task(&state, 1, range(NOW, "2026-06-10T09:10:00Z")).await;
+        let b = task(&state, 2, json!({})).await;
+        preference(&state, &b, &a).await;
+        let (status, response) = post(&state, horizon()).await;
+        assert_eq!(status, StatusCode::OK, "{response}");
+        println!(
+            "P1B17_RESCUE_{}_BEGIN\n{}\nP1B17_RESCUE_END",
+            strategy.unwrap_or("chunked"),
+            serde_json::to_string_pretty(
+                &json!({"steps":response["plan"]["steps"],"diagnostics":response["diagnostics"]})
+            )
+            .unwrap()
+        );
+        if strategy.is_none() {
+            assert_eq!(
+                state.inner().planner_strategy,
+                ubu_orchestrator::config::PlannerStrategyChoice::Chunked
+            );
+            assert_eq!(step(&response, &a)["start"], seconds(NOW));
+            assert_eq!(step(&response, &a)["end"], seconds("2026-06-10T09:10:00Z"));
+            assert!(
+                step(&response, &b)["start"].as_u64().unwrap() >= seconds("2026-06-10T09:10:00Z")
+            );
+        } else {
+            assert!(response["plan"].is_null());
+            diagnostic(&response, &a, "SkeletonFailure");
+        }
+    }
+}
+
+#[tokio::test]
+async fn recalculation_uses_configured_strategy_after_priority_changes() {
+    use ubu_orchestrator::services::recalculation_service;
+    for strategy in ["chunked", "greedy"] {
+        let state = AppState::in_memory(ServerConfig::from_env().with_planner_strategy(strategy))
+            .await
+            .unwrap()
+            .with_clock(FixedClock(UbuTimestamp::parse(NOW).unwrap()));
+        let a = task(&state, 1, range(NOW, "2026-06-10T09:10:00Z")).await;
+        let b = task(&state, 2, json!({})).await;
+        // Without a preference, both strategies can admit the prior Plan.
+        let prior = generate(&state, horizon()).await;
+        preference(&state, &b, &a).await;
+        let response = recalculation_service::recalculate_from_request(
+            state.clone(),
+            serde_json::from_value(json!({
+                "triggered_at":NOW,"trigger_type":"worker_request","objects":[]
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+        let response = serde_json::to_value(response).unwrap();
+        assert_eq!(response["prior_plan_id"], prior["plan"]["id"]);
+        if strategy == "chunked" {
+            assert_eq!(step(&response, &a)["start"], seconds(NOW));
+            assert_eq!(step(&response, &a)["end"], seconds("2026-06-10T09:10:00Z"));
+            assert!(
+                step(&response, &b)["start"].as_u64().unwrap() >= seconds("2026-06-10T09:10:00Z")
+            );
+        } else {
+            assert!(response["plan"].is_null());
+            diagnostic(&response, &a, "SkeletonFailure");
+        }
+    }
+}

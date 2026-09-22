@@ -233,3 +233,39 @@ mod registration_path_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod planner_strategy_tests {
+    use super::*;
+    use crate::state::AppState;
+
+    #[tokio::test]
+    async fn strategy_is_parsed_at_startup_and_invalid_values_name_the_variable() {
+        let mut config = ServerConfig::from_env();
+        config.planner_strategy = None;
+        let state = AppState::in_memory(config.clone()).await.unwrap();
+        assert_eq!(
+            state.inner().planner_strategy,
+            PlannerStrategyChoice::Chunked
+        );
+        for (raw, expected) in [
+            ("chunked", PlannerStrategyChoice::Chunked),
+            ("greedy", PlannerStrategyChoice::Greedy),
+        ] {
+            let state = AppState::in_memory(config.clone().with_planner_strategy(raw))
+                .await
+                .unwrap();
+            assert_eq!(state.inner().planner_strategy, expected);
+        }
+        for raw in ["", "other", "Chunked", " greedy "] {
+            let bad = config.clone().with_planner_strategy(raw);
+            for result in [
+                AppState::in_memory(bad.clone()).await,
+                AppState::new(bad).await,
+            ] {
+                let error = result.err().expect("invalid strategy must fail startup");
+                assert!(error.to_string().contains("UBU_PLANNER_STRATEGY"));
+            }
+        }
+    }
+}
