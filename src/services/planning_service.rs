@@ -14,7 +14,7 @@ use ubu_planning_core::{
 };
 use ubu_store::models::log_record::NewLogRecord;
 use ubu_store::models::plan_record::NewPlanRecord;
-use ubu_core::core::{StaticWindow, TaskCorrelationGroup, TaskDurationEstimate};
+use ubu_core::core::{AllowedTimeRange, StaticWindow, TaskCorrelationGroup, TaskDurationEstimate};
 use ubu_store::queries;
 
 use crate::adapters::planner_adapter::{CpuPlannerAdapter, PlannerAdapter};
@@ -511,11 +511,18 @@ async fn build_request_from_store_with_context(
                 non_capacity_tasks.push(spec);
             }
         } else if capacity {
+            let mut window = horizon.clone();
+            if let Some(range) = task.payload.get("allowed_time_range") {
+                let range: AllowedTimeRange = serde_json::from_value(range.clone())
+                    .map_err(|e| AppError::Internal(format!("failed to deserialize Task range: {e}")))?;
+                window.start = window.start.max(timestamp_seconds(&range.earliest_start.to_string())?);
+                window.end = window.end.min(timestamp_seconds(&range.latest_finish.to_string())?);
+            }
             task_bodies.push(TaskSpecBody {
                 id: task.id.clone(), duration: duration_seconds(&task.payload),
                 duration_estimate: task_duration_estimate(&task.payload)?,
                 correlation_groups: task_correlation_groups(&task.payload)?,
-                depends_on: dependency_ids(&task.payload), window: Some(horizon.clone()),
+                depends_on: dependency_ids(&task.payload), window: Some(window),
                 static_anchor: None,
             });
         } else {
@@ -544,35 +551,55 @@ async fn build_request_from_store_with_context(
         code: "static_task_collision".into(),
         message: format!("Static Tasks `{first}` and `{second}` have conflicting fixed placements or dependencies"),
     }));
+    // Keep original dependencies through every exclusion, including the fixpoint.
     let planned_ids: HashSet<_> = task_bodies.iter().map(|task| task.id.clone()).collect();
+    let mut removed = HashSet::new();
     task_bodies.retain_mut(|task| {
-        if task.static_anchor.is_none() {
-            let window = task.window.as_mut().expect("Dynamic Tasks have H");
-            for dependency in &task.depends_on {
-                if !planned_ids.contains(dependency) {
-                    // Other exclusions (preconditions, lifecycle, frozen ids) retain
-                    // the existing edge-dropping behaviour.
-                    if let Some(prerequisite) = absent_static_windows.get(dependency) {
-                        window.start = window.start.max(prerequisite.end);
-                    }
+        if task.static_anchor.is_some() { return true; }
+        let window = task.window.as_mut().expect("Dynamic Tasks have a window");
+        let mut dependency_outside_horizon = false;
+        for dependency in &task.depends_on {
+            if !planned_ids.contains(dependency) {
+                if let Some(prerequisite) = absent_static_windows.get(dependency) {
+                    window.start = window.start.max(prerequisite.end);
+                    dependency_outside_horizon |= prerequisite.end >= horizon.end;
                 }
             }
-            if window.start >= horizon.end {
-                diagnostics.push(DiagnosticBody { code: "dependency_outside_horizon".into(),
-                    message: format!("Task `{}` has a Static prerequisite ending outside the horizon", task.id) });
-                return false;
-            }
+        }
+        // Static-prerequisite push precedes the now floor, and its diagnostic
+        // takes precedence over an empty/short occupancy window.
+        window.start = window.start.max(now);
+        let code = if dependency_outside_horizon {
+            Some("dependency_outside_horizon")
+        } else if window.end <= window.start
+            || window.end - window.start < task_duration_model(task).placement_seconds() {
+            Some("task_unplaceable")
+        } else { None };
+        if let Some(code) = code {
+            removed.insert(task.id.clone());
+            diagnostics.push(DiagnosticBody { code: code.into(), message: if dependency_outside_horizon {
+                format!("Task `{}` has a Static prerequisite ending outside the horizon", task.id)
+            } else { format!("Task `{}` cannot fit its allowed occupancy window at placement duration", task.id) } });
+            return false;
         }
         true
     });
+    loop {
+        let before = removed.len();
+        task_bodies.retain(|task| {
+            if task.static_anchor.is_none() && task.depends_on.iter().any(|id| removed.contains(id)) {
+                removed.insert(task.id.clone());
+                diagnostics.push(DiagnosticBody { code: "prerequisite_unplaceable".into(),
+                    message: format!("Task `{}` depends on an unplaceable Task", task.id) });
+                false
+            } else { true }
+        });
+        if removed.len() == before { break; }
+    }
+    // Only now drop edges to unplanned Tasks. Kept Statics break propagation;
+    // lifecycle, precondition and frozen exclusions retain their old behavior.
     let planned_ids: HashSet<_> = task_bodies.iter().map(|task| task.id.clone()).collect();
     for task in &mut task_bodies {
-        if task.static_anchor.is_none() {
-            // Preserve the selected scope and whole Statics; only future Dynamic
-            // placement is allowed even if that scope starts in the past.
-            let window = task.window.as_mut().expect("Dynamic Task has H");
-            window.start = window.start.max(now);
-        }
         task.depends_on.retain(|dependency| planned_ids.contains(dependency));
     }
 
@@ -1037,9 +1064,8 @@ fn task_correlation_groups(payload: &Value) -> Result<Vec<CorrelationGroupBody>>
         })
 }
 
-fn validate_task_models(request: &PlanningRequestBody) -> Result<()> {
-    for task in &request.tasks {
-        let duration = match &task.duration_estimate {
+fn task_duration_model(task: &TaskSpecBody) -> DurationModel {
+match &task.duration_estimate {
             Some(DurationEstimateBody::Fixed { seconds }) => {
                 DurationModel::Fixed { seconds: *seconds }
             }
@@ -1055,7 +1081,12 @@ fn validate_task_models(request: &PlanningRequestBody) -> Result<()> {
             None => DurationModel::Fixed {
                 seconds: task.duration,
             },
-        };
+        }
+}
+
+fn validate_task_models(request: &PlanningRequestBody) -> Result<()> {
+    for task in &request.tasks {
+        let duration = task_duration_model(task);
         if let Err(message) = TaskSpec::new(task.id.clone(), duration.clone()) {
             return Err(AppError::bad_request_diagnostic(
                 "invalid_duration_estimate",

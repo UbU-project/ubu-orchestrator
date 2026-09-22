@@ -28,10 +28,27 @@ clock. Envelope, log and record timestamps continue to use their existing clocks
 Next action skips ended placements and reports `stale_calendar` when all current
 placements have ended. All times are UTC; local day boundaries are deferred.
 
-Known limitations: the unchanged kernel can fail the whole plan when one Dynamic
-Task cannot fit in the bounded horizon, including a large backlog against the
-24-hour default. Kernel repair also preserves prior Static placements even when
-their window changes. No Calendar rows or horizon UI are introduced here.
+## Allowed ranges
+
+A Dynamic Task's `allowed_time_range` is intersected with the requested horizon.
+The existing absent-Static-prerequisite push applies next, followed by the now
+floor. Allowed ranges only narrow the Task window; they never widen the horizon.
+An absent Static prerequisite ending at or after the horizon end takes precedence
+and produces `dependency_outside_horizon`. Otherwise an empty window or one shorter
+than the kernel duration model's `placement_seconds()` produces `task_unplaceable`.
+This uses the fixed duration or log-normal mode, not its minimum or p95.
+
+Dynamic dependents of these removed Tasks are excluded to a fixpoint with
+`prerequisite_unplaceable`, before any dependency edge is dropped. Kept Static
+Tasks break that chain. Preconditions, lifecycle and frozen repair exclusions
+retain their existing edge-dropping behavior.
+
+Known limitations: individually oversized Tasks are now excluded, while greedy
+packing failures can still fail the whole request. In particular, a higher-priority
+wide-range Task may take the slot needed by a narrow-range Task. Chunked search
+(`UBU-D0279`/`UBU-D0280`) and partial placement (`UBU-Q0155`) address that later.
+Kernel repair also preserves prior Static placements even when their window
+changes. No Calendar rows or horizon UI are introduced here.
 
 `ubu-ui` still renders numeric coordinates as minutes in `formatMinuteTimestamp`.
 It will display incorrect times until a separate UI change reads `start_at` and
