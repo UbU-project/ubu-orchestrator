@@ -108,6 +108,9 @@ fn derive_reports(
     };
 
     let mut findings = Vec::new();
+    for diagnostic in input.diagnostics.iter().filter(|d| matches!(d.code.as_str(), "mandatory_occurrence_unplaceable" | "routine_occurrence_overlaps_commitment" | "routine_occurrences_overlap")) {
+        findings.push(RiskFinding { category: RiskCategory::RoutineTriage, severity: RiskLevel::Medium, blocking: false, detail: diagnostic.message.clone(), subject_ref: diagnostic.message.split('`').nth(1).map(str::to_owned) });
+    }
     deadline_findings(steps, &context.tasks, &mut findings);
     dependency_findings(steps, input.selected_candidate, &mut findings);
     if context.active_worker_count > 1 {

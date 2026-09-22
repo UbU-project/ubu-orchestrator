@@ -52,6 +52,8 @@ pub async fn generate(
         mut diagnostics,
         task_priorities,
         non_capacity_tasks,
+        covered_static_tasks,
+        carrier_windows,
     } = match request.request {
         Some(body) => {
             validate_optional_schema_version(body.schema_version.as_deref())?;
@@ -62,6 +64,8 @@ pub async fn generate(
                 diagnostics: Vec::new(),
                 task_priorities: Vec::new(),
                 non_capacity_tasks: Vec::new(),
+                covered_static_tasks: Vec::new(),
+                carrier_windows: HashMap::new(),
             }
         }
         None => {
@@ -76,6 +80,7 @@ pub async fn generate(
         }
     };
 
+    let direct = DirectPlacements { non_capacity: &non_capacity_tasks, covered: &covered_static_tasks, carriers: &carrier_windows };
     validate_task_models(&planning_request)?;
     let kernel_request = PlanningRequest::from(planning_request.clone());
     let adapter = CpuPlannerAdapter {
@@ -107,10 +112,10 @@ pub async fn generate(
                 ));
                 let titles = task_titles(state.inner().store.pool(), &state.inner().category_palette).await?;
                 let selected_candidate =
-                    kernel_candidate_body(&selected, &titles, &planning_request, &non_capacity_tasks)?;
+                    kernel_candidate_body(&selected, &titles, &planning_request, &direct)?;
                 let alternatives = candidates
                     .iter()
-                    .map(|candidate| kernel_candidate_body(candidate, &titles, &planning_request, &non_capacity_tasks))
+                    .map(|candidate| kernel_candidate_body(candidate, &titles, &planning_request, &direct))
                     .collect::<Result<Vec<_>>>()?;
                 let (risk_report, plan_quality) = planning_analysis::analyze(
                     state.inner().store.pool(),
@@ -138,7 +143,7 @@ pub async fn generate(
                         human_complete_plan_quality: Some(plan_quality.clone()),
                     },
                     Vec::new(),
-                    &non_capacity_tasks,
+                    &direct,
                 )
                 .await?;
                 if risk_report.findings.iter().any(|finding| finding.blocking) {
@@ -336,7 +341,7 @@ pub async fn persist_repair_plan(
             human_complete_plan_quality: None,
         },
         frozen_steps,
-        &context.non_capacity_tasks,
+        &DirectPlacements { non_capacity: &context.non_capacity_tasks, covered: &context.covered_static_tasks, carriers: &context.carrier_windows },
     )
     .await
 }
@@ -435,6 +440,9 @@ async fn build_request_from_store_with_context(
     excluded_task_ids: &[String],
     explicit_horizon: Option<&PlanningHorizonBody>,
 ) -> Result<StorePlanningRequest> {
+    let now = timestamp_seconds(&state.planning_now().to_string())?;
+    let pre_repair_horizon = resolve_time_window(state, explicit_horizon, now).await?;
+    let routine_context = super::routine_service::materialize(state, &pre_repair_horizon, now).await?;
     let pool = state.inner().store.pool();
     let tasks = queries::query_active_tasks(pool)
         .await
@@ -469,8 +477,7 @@ async fn build_request_from_store_with_context(
         depends_on: Vec::new(), window: None, static_anchor: None,
     }).collect::<Vec<_>>();
 
-    let now = timestamp_seconds(&state.planning_now().to_string())?;
-    let mut time_window = resolve_time_window(state, explicit_horizon, now).await?;
+    let mut time_window = pre_repair_horizon.clone();
     if repair_context.is_some() {
         time_window.start = time_window.start.max(now);
         if let Some(prior_plan) = latest_admitted_plan(state).await? {
@@ -487,7 +494,8 @@ async fn build_request_from_store_with_context(
     }
 
     let horizon = time_window.clone();
-    let mut diagnostics = Vec::new();
+    let mandatory: HashSet<_> = task_rows.iter().filter(|t| t.payload.get("occurrence").is_some_and(|v| !v.is_null())).map(|t| t.id.clone()).collect();
+    let mut diagnostics = routine_context.diagnostics;
     let mut non_capacity_tasks = Vec::new();
     let mut absent_static_windows = HashMap::new();
     task_bodies.clear();
@@ -498,7 +506,7 @@ async fn build_request_from_store_with_context(
         if let Some(window) = window {
             let outside_horizon = window.start >= horizon.end || window.end <= horizon.start;
             if !capacity || outside_horizon {
-                absent_static_windows.insert(task.id.clone(), window);
+                absent_static_windows.insert(task.id.clone(), window.clone());
             }
             if outside_horizon { continue; }
             participating.push((task, window, capacity));
@@ -515,13 +523,18 @@ async fn build_request_from_store_with_context(
             } else {
                 non_capacity_tasks.push(spec);
             }
-        } else if capacity {
+        } else if capacity || mandatory.contains(&task.id) {
             let mut window = horizon.clone();
             if let Some(range) = task.payload.get("allowed_time_range") {
                 let range: AllowedTimeRange = serde_json::from_value(range.clone())
                     .map_err(|e| AppError::Internal(format!("failed to deserialize Task range: {e}")))?;
                 window.start = window.start.max(timestamp_seconds(&range.earliest_start.to_string())?);
-                window.end = window.end.min(timestamp_seconds(&range.latest_finish.to_string())?);
+                let end = timestamp_seconds(&range.latest_finish.to_string())?;
+                if mandatory.contains(&task.id) {
+                    if timestamp_seconds(&range.earliest_start.to_string())? >= pre_repair_horizon.end || end <= pre_repair_horizon.start { continue; }
+                    window.end = end;
+                    window.start = window.start.max(routine_context.realized_floors.get(&task.id).copied().unwrap_or(0));
+                } else { window.end = window.end.min(end); }
             }
             task_bodies.push(TaskSpecBody {
                 value: 1.0,                id: task.id.clone(), duration: duration_seconds(&task.payload),
@@ -538,16 +551,22 @@ async fn build_request_from_store_with_context(
     // One diagnostic per pair, even if both occupancy and precedence conflict.
     // Clause (b) applies to all Static prerequisites, including non-capacity ones.
     let mut conflicts = BTreeSet::new();
+    let mut dropped_edges = HashSet::new();
     for (i, (task, window, capacity)) in participating.iter().enumerate() {
         for (other, other_window, other_capacity) in participating.iter().skip(i + 1) {
             if *capacity && *other_capacity && window.start < other_window.end && window.end > other_window.start {
-                add_static_conflict(&mut conflicts, &task.id, window, &other.id, other_window);
+                if !mandatory.contains(&task.id) && !mandatory.contains(&other.id) {
+                    add_static_conflict(&mut conflicts, &task.id, window, &other.id, other_window);
+                }
             }
         }
         for dependency in dependency_ids(&task.payload) {
             if let Some(other_window) = static_windows.get(&dependency) {
                 if other_window.end > window.start {
-                    add_static_conflict(&mut conflicts, &task.id, window, &dependency, other_window);
+                    if mandatory.contains(&task.id) && mandatory.contains(&dependency) {
+                        dropped_edges.insert((task.id.clone(), dependency.clone()));
+                        diagnostics.push(DiagnosticBody { code: "routine_occurrence_edge_dropped".into(), message: format!("Routine occurrence `{}` has a stale Static edge to `{dependency}`; both retain their fixed placement",task.id) });
+                    } else { add_static_conflict(&mut conflicts, &task.id, window, &dependency, other_window); }
                 }
             }
         }
@@ -556,6 +575,12 @@ async fn build_request_from_store_with_context(
         code: "static_task_collision".into(),
         message: format!("Static Tasks `{first}` and `{second}` have conflicting fixed placements or dependencies"),
     }));
+    for task in task_bodies.iter_mut().chain(non_capacity_tasks.iter_mut()) {
+        task.depends_on.retain(|parent| !dropped_edges.contains(&(task.id.clone(), parent.clone())));
+    }
+    let (covered_static_tasks, carrier_windows) = committed_clusters(&mut task_bodies, &mandatory, &mut diagnostics);
+    for task in &covered_static_tasks { absent_static_windows.insert(task.id.clone(), task.window.clone().unwrap()); }
+    let fixed: Vec<_> = task_bodies.iter().filter(|t| t.static_anchor.is_some()).filter_map(|t|t.window.clone()).collect();
     // Keep original dependencies through every exclusion, including the fixpoint.
     let planned_ids: HashSet<_> = task_bodies.iter().map(|task| task.id.clone()).collect();
     let mut removed = HashSet::new();
@@ -579,12 +604,15 @@ async fn build_request_from_store_with_context(
         } else if window.end <= window.start
             || window.end - window.start < task_duration_model(task).placement_seconds() {
             Some("task_unplaceable")
+        } else if mandatory.contains(&task.id) && !has_free_gap(task.window.as_ref().unwrap(), &fixed, task_duration_model(task).placement_seconds()) {
+            Some("routine_no_free_time")
         } else { None };
         if let Some(code) = code {
             removed.insert(task.id.clone());
-            diagnostics.push(DiagnosticBody { code: code.into(), message: if dependency_outside_horizon {
-                format!("Task `{}` has a Static prerequisite ending outside the horizon", task.id)
-            } else { format!("Task `{}` cannot fit its allowed occupancy window at placement duration", task.id) } });
+            let reason = if dependency_outside_horizon { "a Static prerequisite ends outside the horizon" }
+                else if code == "routine_no_free_time" { "fixed commitments leave no free time in its allowed range" }
+                else { "it cannot fit its allowed occupancy window at placement duration" };
+            diagnostics.push(exclusion_diagnostic(&task.id, mandatory.contains(&task.id), code, reason));
             return false;
         }
         true
@@ -594,8 +622,7 @@ async fn build_request_from_store_with_context(
         task_bodies.retain(|task| {
             if task.static_anchor.is_none() && task.depends_on.iter().any(|id| removed.contains(id)) {
                 removed.insert(task.id.clone());
-                diagnostics.push(DiagnosticBody { code: "prerequisite_unplaceable".into(),
-                    message: format!("Task `{}` depends on an unplaceable Task", task.id) });
+                diagnostics.push(exclusion_diagnostic(&task.id, mandatory.contains(&task.id), "prerequisite_unplaceable", "it depends on an unplaceable Task"));
                 false
             } else { true }
         });
@@ -609,11 +636,12 @@ async fn build_request_from_store_with_context(
     }
 
     let preferences = active_task_preferences(pool).await?;
-    let eligible = task_bodies.iter().map(|task| task.id.clone()).collect::<Vec<_>>();
+    for task in &task_bodies { if mandatory.contains(&task.id) && task.static_anchor.is_none() { time_window.end = time_window.end.max(task.window.as_ref().unwrap().end); } }
+    let eligible = task_bodies.iter().filter(|task| !mandatory.contains(&task.id)).map(|task| task.id.clone()).collect::<Vec<_>>();
     let priorities = super::task_priority::layer_preferences(&eligible, &preferences);
     let priority_order = priorities.order_keys();
     let values: HashMap<_, _> = priorities.tasks.iter().map(|task| (task.task_id.as_str(), task.value)).collect();
-    for task in &mut task_bodies { task.value = values[task.id.as_str()]; }
+    for task in &mut task_bodies { task.value = if mandatory.contains(&task.id) { 0.0 } else { values[task.id.as_str()] }; }
     diagnostics.extend(priorities.cycles.iter().map(|members| DiagnosticBody {
         code: "preference_cycle".into(),
         message: format!("Preference cycle among Tasks [{}]; please resolve this high-priority consistency error", members.join(", ")),
@@ -629,7 +657,7 @@ async fn build_request_from_store_with_context(
     let task_graph = if has_static_conflicts(&diagnostics) {
         // Conflicts must return all diagnostics even if their dependency graph cycles.
         TaskGraphBody { topological_order: Vec::new(), edges: Vec::new() }
-    } else { task_graph(&task_bodies, &priority_order, &deadlines)? };
+    } else { task_graph(&task_bodies, &priority_order, &deadlines, &mandatory)? };
     let request_id = UbuId::new(ObjectType::Plan).to_string();
     let rng_seed = stable_seed(&request_id, &time_window, &task_graph.topological_order);
     let affect_profile = build_affect_profile(pool).await?;
@@ -657,6 +685,8 @@ async fn build_request_from_store_with_context(
         invalid_tasks,
         diagnostics,
         non_capacity_tasks,
+        covered_static_tasks,
+        carrier_windows,
     })
 }
 
@@ -668,14 +698,15 @@ async fn persist_kernel_plan(
     request: &PlanningRequestBody,
     metadata: PersistPlanMetadata,
     frozen_steps: Vec<ScheduledTaskBody>,
-    non_capacity_tasks: &[TaskSpecBody],
+    direct: &DirectPlacements<'_>,
 ) -> Result<PlanBody> {
     let now = UbuTimestamp::now_utc().to_string();
     let titles = task_titles(state.inner().store.pool(), &state.inner().category_palette).await?;
     let steps = merge_steps(frozen_steps, kernel_plan.steps.iter()
-        .map(|task| scheduled_task_body(task, &titles, request))
+        .map(|task| restored_task_body(task, &titles, request, direct.carriers))
         .collect::<Result<Vec<_>>>()?.into_iter()
-        .chain(direct_static_steps(non_capacity_tasks, &titles)?));
+        .chain(direct_static_steps(direct.non_capacity, &titles, false)?)
+        .chain(direct_static_steps(direct.covered, &titles, true)?));
 
     let plan = PlanBody {
         id: plan_id.to_owned(),
@@ -795,7 +826,7 @@ fn scheduled_task_body(
 /// Non-capacity steps do not enter the kernel: robustness, probability and
 /// legitimization describe capacity work only. Risk and plan-quality analysis
 /// sees these steps through the merged candidate bodies.
-fn direct_static_steps(tasks: &[TaskSpecBody], titles: &HashMap<String, TaskDisplay>) -> Result<Vec<ScheduledTaskBody>> {
+fn direct_static_steps(tasks: &[TaskSpecBody], titles: &HashMap<String, TaskDisplay>, occupies_capacity: bool) -> Result<Vec<ScheduledTaskBody>> {
     tasks.iter().map(|task| {
         let window = task.window.as_ref().expect("direct Static Task has a window");
         let display = titles.get(&task.id);
@@ -805,7 +836,7 @@ fn direct_static_steps(tasks: &[TaskSpecBody], titles: &HashMap<String, TaskDisp
             start_at: crate::planning_time::timestamp_at(window.start)?,
             end_at: crate::planning_time::timestamp_at(window.end)?,
             start: window.start, end: window.end, depends_on: task.depends_on.clone(),
-            static_anchor: true, placement_authority: "user_override".into(), occupies_capacity: false,
+            static_anchor: true, placement_authority: "user_override".into(), occupies_capacity,
             category_tag: display.and_then(|d| d.category_tag.clone()),
             gcal_color_id: display.and_then(|d| d.gcal_color_id.clone()),
         })
@@ -831,12 +862,13 @@ fn kernel_candidate_body(
     candidate: &PlanCandidate,
     titles: &HashMap<String, TaskDisplay>,
     request: &PlanningRequestBody,
-    non_capacity_tasks: &[TaskSpecBody],
+    direct: &DirectPlacements<'_>,
 ) -> Result<PlanCandidateBody> {
     let steps = merge_steps(Vec::new(), candidate.schedule.steps.iter()
-        .map(|task| scheduled_task_body(task, titles, request))
+        .map(|task| restored_task_body(task, titles, request, direct.carriers))
         .collect::<Result<Vec<_>>>()?.into_iter()
-        .chain(direct_static_steps(non_capacity_tasks, titles)?));
+        .chain(direct_static_steps(direct.non_capacity, titles, false)?)
+        .chain(direct_static_steps(direct.covered, titles, true)?));
 
     Ok(PlanCandidateBody {
         candidate_id: candidate.candidate_id.clone(),
@@ -960,8 +992,8 @@ fn timestamp_seconds(value: &str) -> Result<u64> {
     Ok(seconds as u64)
 }
 
-fn task_graph(tasks: &[TaskSpecBody], priorities: &BTreeMap<String, u32>, deadlines: &HashMap<String, u64>) -> Result<TaskGraphBody> {
-    let key = |id: &String| (priorities[id], deadlines.get(id).copied().unwrap_or(u64::MAX), id.clone());
+fn task_graph(tasks: &[TaskSpecBody], priorities: &BTreeMap<String, u32>, deadlines: &HashMap<String, u64>, mandatory: &HashSet<String>) -> Result<TaskGraphBody> {
+    let key = |id: &String| (if mandatory.contains(id) { 0 } else { 1 }, priorities.get(id).copied().unwrap_or(0), deadlines.get(id).copied().unwrap_or(u64::MAX), id.clone());
     let mut children: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut indegree: BTreeMap<String, usize> = BTreeMap::new();
     let mut edges = Vec::new();
@@ -981,12 +1013,12 @@ fn task_graph(tasks: &[TaskSpecBody], priorities: &BTreeMap<String, u32>, deadli
         }
     }
 
-    let mut ready: BTreeSet<(u32, u64, String)> = indegree
+    let mut ready: BTreeSet<(u8, u32, u64, String)> = indegree
         .iter()
         .filter_map(|(task_id, count)| (*count == 0).then(|| key(task_id)))
         .collect();
     let mut topological_order = Vec::with_capacity(tasks.len());
-    while let Some((_, _, task_id)) = ready.pop_first() {
+    while let Some((_, _, _, task_id)) = ready.pop_first() {
         topological_order.push(task_id.clone());
         if let Some(next_tasks) = children.get(&task_id) {
             for next in next_tasks {
@@ -1615,6 +1647,8 @@ pub struct StorePlanningRequest {
     pub invalid_tasks: Vec<InvalidTaskBody>,
     pub diagnostics: Vec<DiagnosticBody>,
     pub non_capacity_tasks: Vec<TaskSpecBody>,
+    pub covered_static_tasks: Vec<TaskSpecBody>,
+    pub carrier_windows: HashMap<String, TimeWindowBody>,
 }
 
 pub fn has_static_conflicts(diagnostics: &[DiagnosticBody]) -> bool {
@@ -1859,4 +1893,70 @@ mod precondition_mode_tests {
         assert!(partition.invalid.is_empty());
         assert_eq!(partition.blocked.len(), 1);
     }
+}
+
+struct DirectPlacements<'a> {
+    non_capacity: &'a [TaskSpecBody],
+    covered: &'a [TaskSpecBody],
+    carriers: &'a HashMap<String, TimeWindowBody>,
+}
+fn restored_task_body(task: &ScheduledTask, titles: &HashMap<String,TaskDisplay>, request: &PlanningRequestBody, carriers: &HashMap<String,TimeWindowBody>) -> Result<ScheduledTaskBody> {
+    let mut step = scheduled_task_body(task,titles,request)?;
+    if let Some(window) = carriers.get(&task.task_id) {
+        step.start = window.start; step.end = window.end;
+        step.start_at = crate::planning_time::timestamp_at(window.start)?;
+        step.end_at = crate::planning_time::timestamp_at(window.end)?;
+    }
+    Ok(step)
+}
+fn exclusion_diagnostic(id: &str, mandatory: bool, code: &str, reason: &str) -> DiagnosticBody {
+    if mandatory { DiagnosticBody { code: "mandatory_occurrence_unplaceable".into(), message: format!("Mandatory routine occurrence `{id}` was left out of the Plan: {reason}; do it late, skip it, or change other commitments") } }
+    else { DiagnosticBody {code:code.into(), message:format!("Task `{id}` {reason}")} }
+}
+fn has_free_gap(window: &TimeWindowBody, fixed: &[TimeWindowBody], duration: u64) -> bool {
+    let mut intervals: Vec<_> = fixed.iter().filter(|w| w.start < window.end && w.end > window.start).collect();
+    intervals.sort_by_key(|w|(w.start,w.end));
+    let mut cursor=window.start;
+    for interval in intervals {
+        if interval.start.saturating_sub(cursor)>=duration {return true;}
+        cursor=cursor.max(interval.end);
+    }
+    window.end.saturating_sub(cursor)>=duration
+}
+/// Reserve each connected committed-time span once, retaining individual Calendar windows.
+fn committed_clusters(tasks: &mut Vec<TaskSpecBody>, mandatory: &HashSet<String>, diagnostics: &mut Vec<DiagnosticBody>) -> (Vec<TaskSpecBody>,HashMap<String,TimeWindowBody>) {
+    fn root(parents:&mut [usize], mut n:usize)->usize {
+        while parents[n]!=n {parents[n]=parents[parents[n]];n=parents[n];} n
+    }
+    let mut parents:Vec<_>=(0..tasks.len()).collect();
+    for i in 0..tasks.len() {
+        if tasks[i].static_anchor.is_none() {continue;}
+        for j in i+1..tasks.len() {
+            if tasks[j].static_anchor.is_none() || (!mandatory.contains(&tasks[i].id) && !mandatory.contains(&tasks[j].id)) {continue;}
+            let a=tasks[i].window.as_ref().unwrap();let b=tasks[j].window.as_ref().unwrap();
+            if a.start<b.end && a.end>b.start {let x=root(&mut parents,i);let y=root(&mut parents,j);parents[x]=y;}
+        }
+    }
+    let mut groups=BTreeMap::<usize,Vec<usize>>::new();
+    for i in 0..tasks.len() {groups.entry(root(&mut parents,i)).or_default().push(i);}
+    let mut covered=Vec::new();let mut carriers=HashMap::new();let mut removed=HashSet::new();let mut warnings=Vec::new();
+    for mut group in groups.into_values().filter(|g|g.len()>1) {
+        group.sort_by_key(|&i| {let w=tasks[i].window.as_ref().unwrap();(w.start,std::cmp::Reverse(w.end),tasks[i].id.clone())});
+        let carrier=group[0];let members:HashSet<_>=group.iter().map(|&i|tasks[i].id.clone()).collect();
+        let mut occurrences:Vec<_>=members.iter().filter(|id|mandatory.contains(*id)).cloned().collect();occurrences.sort();
+        let commitment=group.iter().map(|&i|&tasks[i]).filter(|t|!mandatory.contains(&t.id)).min_by_key(|t|(t.window.as_ref().unwrap().start,t.id.clone()));
+        if let Some(commitment)=commitment {
+            for id in &occurrences {warnings.push(DiagnosticBody {code:"routine_occurrence_overlaps_commitment".into(),message:format!("Routine occurrence `{id}` shares its time with commitment `{}`; both stay on the Calendar and the whole span is busy",commitment.id)});}
+        }
+        if occurrences.len()>1 {warnings.push(DiagnosticBody {code:"routine_occurrences_overlap".into(),message:format!("Routine occurrences {} overlap; routines are not meant to overlap and their definitions need review",occurrences.iter().map(|id|format!("`{id}`")).collect::<Vec<_>>().join(", "))});}
+        let start=tasks[carrier].window.as_ref().unwrap().start;
+        let end=group.iter().map(|&i|tasks[i].window.as_ref().unwrap().end).max().unwrap();
+        let dependencies:BTreeSet<_>=group.iter().flat_map(|&i|tasks[i].depends_on.iter()).filter(|id|!members.contains(*id)).cloned().collect();
+        carriers.insert(tasks[carrier].id.clone(),tasks[carrier].window.clone().unwrap());
+        for &i in &group[1..] {covered.push(tasks[i].clone());removed.insert(tasks[i].id.clone());}
+        tasks[carrier].duration=end-start;tasks[carrier].window=Some(TimeWindowBody{start,end});tasks[carrier].static_anchor=Some(StaticAnchorBody{start});tasks[carrier].depends_on=dependencies.into_iter().collect();
+    }
+    tasks.retain(|t|!removed.contains(&t.id));
+    warnings.sort_by(|a,b|(&a.code,&a.message).cmp(&(&b.code,&b.message)));diagnostics.extend(warnings);
+    (covered,carriers)
 }

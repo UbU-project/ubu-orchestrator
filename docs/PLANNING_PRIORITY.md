@@ -25,7 +25,8 @@ The lowest endpoint is assigned explicitly to avoid rounding below 0.1. Both
 kernel conversion sites send `priority: 1.0`, so Stage 3 does not count rank twice.
 Caller-supplied request values default to 1.0 and must be finite and nonnegative.
 
-Kahn's ready set orders by `(priority_order, latest_finish, task_id)`. Ranked Tasks
+Kahn's ready set orders occurrences by `(0, 0, latest_finish, task_id)` and other
+Tasks by `(1, priority_order, latest_finish, task_id)`. Ranked Tasks
 use bucket `p`. Unranked Tasks use `m - 1` when `m >= 2`, and otherwise `m`.
 The deadline is the allowed range's latest finish; Tasks without a range use
 `u64::MAX`. With neither Preferences nor ranges this preserves Task-ID ordering.
@@ -45,3 +46,12 @@ Known limitation: packing failures that no fill rule or look-ahead resolves stil
 fail the whole Plan until partial placement (`UBU-Q0155`). This does not add
 Preference capture, routine inheritance, Objective-derived value, or learned
 priorities.
+
+Routine occurrences are mandatory. They never enter Preference layering or
+`task_priorities`; a Preference naming an occurrence does not contribute. Their
+kernel value is exactly 0.0. The ready order puts them before every priority
+bucket and drives the greedy path. The default chunked strategy uses its own
+fills and places value-0.0 units after valued units within a chunk; look-ahead
+usually preserves feasibility. Packing failures still fail the whole Plan.
+Treating mandatory occurrences as assignment constraints needs the kernel marker
+that belongs with future partial placement (UBU-D0288/UBU-D0289).

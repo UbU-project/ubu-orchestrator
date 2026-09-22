@@ -47,6 +47,7 @@ pub enum RiskCategory {
     PostPlanDepletion,
     LowCoverage,
     SkeletonFailure,
+    RoutineTriage,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
