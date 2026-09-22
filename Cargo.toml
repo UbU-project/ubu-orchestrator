@@ -7,6 +7,8 @@ repository = "https://github.com/UbU-project/ubu-orchestrator"
 description = "Local async orchestration service for UbU Phase 1 dogfooding."
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono-tz = "0.9"
 axum = "0.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

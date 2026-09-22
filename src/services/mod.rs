@@ -12,3 +12,4 @@ pub mod report_service;
 pub mod task_priority;
 
 pub mod quick_ubu_import;
+pub mod routine_instantiation;
