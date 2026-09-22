@@ -17,9 +17,9 @@ changing its checkout. Devshell, UI and design have no ticket changes.
 |---|---|
 | ubu-schemas | `eb2614a31a3e44991bd86c971cb87aa2c4760c35` |
 | ubu-core | `358086dba4575984beccdaa7f5cc0d457a276fe9` |
-| ubu-store | `0b455526b022b9d450a513ddbf55e59b3e3fc4db` |
-| ubu-github-adapter | `36161252a1e7615251d642bea2061abb4e8b48c5` |
-| ubu-planning-kernel | `807a704ae35ac077e22c50d5514e3f59118d4e89` |
+| ubu-store | `685b68e19d57014f7be355993286562644a80a2d` |
+| ubu-github-adapter | `5664000e823aee6f35439d4ef15f218285768bb4` |
+| ubu-planning-kernel | `e8045e2cefb6ccb0f8e20ce0ba22f2d20bfd5990` |
 
 ## Tests
 
@@ -132,15 +132,15 @@ before that locked check, without changing any registry dependency version.
 
 ```text
 ubu_core v0.1.0 (https://github.com/UbU-project/ubu-core?rev=358086dba4575984beccdaa7f5cc0d457a276fe9#358086db)
-├── ubu_github_adapter v0.1.0 (https://github.com/UbU-project/ubu-github-adapter?rev=36161252a1e7615251d642bea2061abb4e8b48c5#36161252)
+├── ubu_github_adapter v0.1.0 (https://github.com/UbU-project/ubu-github-adapter?rev=5664000e823aee6f35439d4ef15f218285768bb4#5664000e)
 │   └── ubu_orchestrator v0.1.0 (/home/sean/ubu-phase1b/ubu-orchestrator)
 ├── ubu_orchestrator v0.1.0 (/home/sean/ubu-phase1b/ubu-orchestrator)
-├── ubu_planning_core v0.1.0 (https://github.com/UbU-project/ubu-planning-kernel?rev=807a704ae35ac077e22c50d5514e3f59118d4e89#807a704a)
+├── ubu_planning_core v0.1.0 (https://github.com/UbU-project/ubu-planning-kernel?rev=e8045e2cefb6ccb0f8e20ce0ba22f2d20bfd5990#e8045e2c)
 │   ├── ubu_orchestrator v0.1.0 (/home/sean/ubu-phase1b/ubu-orchestrator)
-│   └── ubu_planning_cpu v0.1.0 (https://github.com/UbU-project/ubu-planning-kernel?rev=807a704ae35ac077e22c50d5514e3f59118d4e89#807a704a)
+│   └── ubu_planning_cpu v0.1.0 (https://github.com/UbU-project/ubu-planning-kernel?rev=e8045e2cefb6ccb0f8e20ce0ba22f2d20bfd5990#e8045e2c)
 │       └── ubu_orchestrator v0.1.0 (/home/sean/ubu-phase1b/ubu-orchestrator)
-├── ubu_planning_cpu v0.1.0 (https://github.com/UbU-project/ubu-planning-kernel?rev=807a704ae35ac077e22c50d5514e3f59118d4e89#807a704a) (*)
-└── ubu_store v0.1.0 (https://github.com/UbU-project/ubu-store?rev=0b455526b022b9d450a513ddbf55e59b3e3fc4db#0b455526)
+├── ubu_planning_cpu v0.1.0 (https://github.com/UbU-project/ubu-planning-kernel?rev=e8045e2cefb6ccb0f8e20ce0ba22f2d20bfd5990#e8045e2c) (*)
+└── ubu_store v0.1.0 (https://github.com/UbU-project/ubu-store?rev=685b68e19d57014f7be355993286562644a80a2d#685b68e1)
     └── ubu_orchestrator v0.1.0 (/home/sean/ubu-phase1b/ubu-orchestrator)
 ```
 
@@ -255,8 +255,13 @@ Preference. Update those consumers and regenerate UI types separately.
 
 - P1B-16_prompt.md:12: the design checkout was newer; read the specified commit
   directly rather than moving the read-only checkout.
-- P1B-16_prompt.md:338,342: O is verification-only, recorded by the N commit;
-  no empty O commit. N also records the final unpatched Cargo.lock Git sources.
+- P1B-16_prompt.md:338,342: N records verification; O additionally commits the
+  lockfile cleanup in store, adapter and kernel, then repins those cleanup revisions
+  in orchestrator (Cargo.toml:25). After removing patches, Cargo regenerated each
+  downstream Cargo.lock with the committed core source. Restoring those generated
+  changes did not leave clean trees, so the Git sources are retained in one O
+  commit per affected repo. No source or registry dependency changed; the final
+  unpatched locked build was repeated against the cleanup revisions.
 - ubu-core/src/store/mutation_envelope.rs:500: `cargo fmt` incidentally reformatted
   one existing test constructor into two lines; no behavior changed. It was already
   pushed with D when noticed, so the no-force-push policy was preserved.
