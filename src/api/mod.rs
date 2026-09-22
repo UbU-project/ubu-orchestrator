@@ -12,3 +12,5 @@ pub mod reports;
 pub mod user_action;
 
 pub mod quick_ubu;
+
+pub mod routines;

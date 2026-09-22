@@ -756,6 +756,27 @@
         }
       }
     },
+    "/routines": {
+      "get": {
+        "tags": [
+          "crate::api::routines"
+        ],
+        "summary": "Read-only: expiration is reflected in the summary without changing Tasks or Logs.",
+        "operationId": "summaries",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoutineSummaryResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/task/{task_id}/action": {
       "post": {
         "tags": [
@@ -1938,6 +1959,21 @@
           "precondition": {},
           "task_id": {
             "type": "string"
+          }
+        }
+      },
+      "LastRoutineOccurrence": {
+        "type": "object",
+        "required": [
+          "local_date",
+          "outcome"
+        ],
+        "properties": {
+          "local_date": {
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/RoutineOutcome"
           }
         }
       },
@@ -3296,6 +3332,7 @@
         "type": "string",
         "enum": [
           "complete",
+          "skip",
           "override",
           "snooze"
         ]
@@ -3482,7 +3519,8 @@
           "destructive_pressure",
           "post_plan_depletion",
           "low_coverage",
-          "skeleton_failure"
+          "skeleton_failure",
+          "routine_triage"
         ]
       },
       "RiskFinding": {
@@ -3541,6 +3579,83 @@
           },
           "level": {
             "$ref": "#/components/schemas/RiskLevel"
+          }
+        }
+      },
+      "RoutineOutcome": {
+        "type": "string",
+        "enum": [
+          "done",
+          "skipped",
+          "missed",
+          "pending"
+        ]
+      },
+      "RoutineSummary": {
+        "type": "object",
+        "required": [
+          "objective_id",
+          "title",
+          "done",
+          "skipped",
+          "missed",
+          "pending",
+          "current_streak"
+        ],
+        "properties": {
+          "current_streak": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "done": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "last_occurrence": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LastRoutineOccurrence"
+              }
+            ]
+          },
+          "missed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "objective_id": {
+            "type": "string"
+          },
+          "pending": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "skipped": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "RoutineSummaryResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "routines"
+        ],
+        "properties": {
+          "routines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RoutineSummary"
+            }
+          },
+          "schema_version": {
+            "type": "string"
           }
         }
       },

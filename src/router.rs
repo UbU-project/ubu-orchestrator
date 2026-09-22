@@ -17,6 +17,7 @@ command bridge.
 */
 pub fn build_router(state: AppState) -> Router {
     Router::new()
+        .route("/routines", get(api::routines::summaries))
         .route("/health", get(api::health::health))
         .route("/import/quick-ubu", post(api::quick_ubu::import_quick_ubu))
         .route("/advisory/queue", get(api::advisory::queue))

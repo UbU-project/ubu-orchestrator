@@ -4,6 +4,7 @@ use utoipa::OpenApi;
 #[derive(OpenApi)]
 #[openapi(
     paths(
+        crate::api::routines::summaries,
         crate::api::advisory::queue,
         crate::api::advisory::candidate,
         crate::api::advisory::admit,
@@ -36,6 +37,10 @@ use utoipa::OpenApi;
         crate::api::reports::human_complete
     ),
     components(schemas(
+        crate::api::routines::RoutineSummaryResponse,
+        crate::api::routines::RoutineSummary,
+        crate::api::routines::LastRoutineOccurrence,
+        crate::api::routines::RoutineOutcome,
         crate::api::quick_ubu::QuickUbuImportRequest,
         crate::api::quick_ubu::QuickUbuImportResponse,
         crate::api::quick_ubu::ImportCounts,

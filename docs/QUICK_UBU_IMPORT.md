@@ -10,7 +10,8 @@ quick-ubu snapshot /path/to/snapshot.json --from-json /path/to/legacy-store.json
 POST `/import/quick-ubu` with `{"snapshot_path":"/path/to/snapshot.json",
 "timezone":"America/New_York","dry_run":false}`. The server reads that local
 path. The timezone defaults to America/New_York and is checked for shape only;
-real timezone resolution and occurrence creation arrive with P1B-19.
+planning resolves real timezones and materializes occurrences as described in
+[ROUTINES.md](ROUTINES.md).
 
 | Source | Mainline |
 |---|---|
@@ -38,7 +39,7 @@ deferral/commitment metadata, and task-level reminders are not imported.
 
 | Reason | Treatment |
 |---|---|
-| routine_occurrence, orphaned_routine_occurrence | Skip Task; P1B-19 derives mainline occurrences |
+| routine_occurrence, orphaned_routine_occurrence | Skip Task; planning derives mainline occurrences |
 | completed, past_static_window | Skip Task |
 | invalid_local_range | Skip routine |
 | negative_reminder | Drop reminder, retain routine |
