@@ -190,7 +190,7 @@ async fn kernel_legitimization_detects_seconds_of_staleness() {
             fixed("2026-06-10T09:00:30Z", "2026-06-10T09:05:00Z"),
         )
         .await;
-        admit_preference(&state, "affect_freshness_seconds", json!(60)).await;
+        admit_setting(&state, "affect_freshness_seconds", json!(60)).await;
         admit_snapshot(
             &state,
             observed,
@@ -578,8 +578,8 @@ async fn admit_task(state: &AppState, title: &str, extra: Value) -> String {
     id
 }
 
-async fn admit_preference(state: &AppState, name: &str, value: Value) -> String {
-    let id = UbuId::new(ObjectType::Preference).to_string();
+async fn admit_setting(state: &AppState, name: &str, value: Value) -> String {
+    let id = UbuId::new(ObjectType::Setting).to_string();
     let now = UbuTimestamp::now_utc().to_string();
     let envelope = state
         .envelope_for(
@@ -595,7 +595,7 @@ async fn admit_preference(state: &AppState, name: &str, value: Value) -> String 
         &envelope,
         NewObjectRecord {
             id: id.clone(),
-            object_type: ObjectType::Preference.as_str().to_owned(),
+            object_type: ObjectType::Setting.as_str().to_owned(),
             version: 1,
             status: "active".to_owned(),
             compartment_label: "test".to_owned(),
@@ -618,7 +618,7 @@ async fn admit_preference(state: &AppState, name: &str, value: Value) -> String 
         },
     )
     .await
-    .expect("preference admitted");
+    .expect("setting admitted");
     id
 }
 

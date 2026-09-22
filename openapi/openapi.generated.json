@@ -1295,7 +1295,7 @@
         "required": [
           "schema_version",
           "objective_ids",
-          "preference_ids",
+          "setting_ids",
           "universe_state_id",
           "imported_tasks",
           "diagnostics"
@@ -1316,14 +1316,14 @@
               "type": "string"
             }
           },
-          "preference_ids": {
+          "schema_version": {
+            "type": "string"
+          },
+          "setting_ids": {
             "type": "array",
             "items": {
               "type": "string"
             }
-          },
-          "schema_version": {
-            "type": "string"
           },
           "universe_state_id": {
             "type": "string"

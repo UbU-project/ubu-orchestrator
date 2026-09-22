@@ -431,12 +431,12 @@ async fn zero_rollouts_surface_not_estimated_without_fabricated_probability() {
 }
 
 #[tokio::test]
-async fn store_backed_request_uses_affect_preferences_and_fresh_snapshot() {
+async fn store_backed_request_uses_affect_settings_and_fresh_snapshot() {
     let state = test_state().await;
     admit_task(&state, "Plan with affect", json!({"duration_minutes": 15})).await;
-    admit_preference(&state, "acceptable_energy_floor", json!("high")).await;
-    admit_preference(&state, "tolerable_stress_ceiling", json!(6.0)).await;
-    admit_preference(&state, "tolerable_intensity_ceiling", json!("moderate")).await;
+    admit_setting(&state, "acceptable_energy_floor", json!("high")).await;
+    admit_setting(&state, "tolerable_stress_ceiling", json!(6.0)).await;
+    admit_setting(&state, "tolerable_intensity_ceiling", json!("moderate")).await;
     store_calendar_window(&state, "2026-06-10T15:00:00Z", "2026-06-10T16:00:00Z").await;
     admit_snapshot(
         &state,
@@ -509,7 +509,7 @@ async fn stale_affect_snapshot_is_not_presented_as_current() {
         json!({"duration_minutes": 15}),
     )
     .await;
-    admit_preference(&state, "affect_freshness_seconds", json!(60)).await;
+    admit_setting(&state, "affect_freshness_seconds", json!(60)).await;
     store_calendar_window(&state, "2026-06-10T15:00:00Z", "2026-06-10T16:00:00Z").await;
     admit_snapshot(
         &state,
@@ -919,8 +919,8 @@ async fn admit_universe_state(state: &AppState, facts: Value) -> String {
     id
 }
 
-async fn admit_preference(state: &AppState, name: &str, value: Value) -> String {
-    let id = UbuId::new(ObjectType::Preference).to_string();
+async fn admit_setting(state: &AppState, name: &str, value: Value) -> String {
+    let id = UbuId::new(ObjectType::Setting).to_string();
     let now = UbuTimestamp::now_utc().to_string();
     let envelope = state.envelope_for(
         [(UbuId::parse(&id).unwrap(), ubu_core::VersionRef::Absent)].into_iter().collect(),
@@ -931,7 +931,7 @@ async fn admit_preference(state: &AppState, name: &str, value: Value) -> String 
         &envelope,
         NewObjectRecord {
             id: id.clone(),
-            object_type: ObjectType::Preference.as_str().to_owned(),
+            object_type: ObjectType::Setting.as_str().to_owned(),
             version: 1,
             status: "active".to_owned(),
             compartment_label: "test".to_owned(),
@@ -954,7 +954,7 @@ async fn admit_preference(state: &AppState, name: &str, value: Value) -> String 
         },
     )
     .await
-    .expect("preference admitted");
+    .expect("setting admitted");
     id
 }
 

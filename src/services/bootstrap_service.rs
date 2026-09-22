@@ -45,7 +45,7 @@ pub async fn seed(state: AppState, request: BootstrapSeedRequest) -> Result<Boot
     ensure_github_token_available(&state).await?;
 
     let objective_id = admit_objective(&state, &request).await?;
-    let preference_ids = admit_preferences(&state, &request).await?;
+    let setting_ids = admit_settings(&state, &request).await?;
 
     let imported_tasks = import_service::import_live(
         state.clone(),
@@ -61,7 +61,7 @@ pub async fn seed(state: AppState, request: BootstrapSeedRequest) -> Result<Boot
     Ok(BootstrapSeedResponse {
         schema_version: BOOTSTRAP_SCHEMA_VERSION.to_owned(),
         objective_ids: vec![objective_id],
-        preference_ids,
+        setting_ids,
         universe_state_id,
         imported_tasks,
         diagnostics: vec![BootstrapDiagnostic {
@@ -135,7 +135,7 @@ async fn reject_if_already_seeded(state: &AppState) -> Result<()> {
         WHERE object_type IN (?, ?) AND payload_json LIKE ?",
     )
     .bind(ObjectType::Objective.as_str())
-    .bind(ObjectType::Preference.as_str())
+    .bind(ObjectType::Setting.as_str())
     .bind(bootstrap_source_needle)
     .fetch_one(state.inner().store.pool())
     .await
@@ -194,11 +194,11 @@ async fn admit_objective(state: &AppState, request: &BootstrapSeedRequest) -> Re
     Ok(objective_id)
 }
 
-async fn admit_preferences(
+async fn admit_settings(
     state: &AppState,
     request: &BootstrapSeedRequest,
 ) -> Result<Vec<String>> {
-    let mut preferences = vec![
+    let mut settings = vec![
         (
             "work_style",
             json!(work_style_value(request.answers.work_style)),
@@ -215,18 +215,18 @@ async fn admit_preferences(
         ),
     ];
     if let Some(value) = request.answers.acceptable_energy_floor.as_deref() {
-        preferences.push(("acceptable_energy_floor", json!(value.trim())));
+        settings.push(("acceptable_energy_floor", json!(value.trim())));
     }
     if let Some(value) = request.answers.tolerable_stress_ceiling.as_deref() {
-        preferences.push(("tolerable_stress_ceiling", json!(value.trim())));
+        settings.push(("tolerable_stress_ceiling", json!(value.trim())));
     }
     if let Some(value) = request.answers.tolerable_intensity_ceiling.as_deref() {
-        preferences.push(("tolerable_intensity_ceiling", json!(value.trim())));
+        settings.push(("tolerable_intensity_ceiling", json!(value.trim())));
     }
 
-    let mut admitted = Vec::with_capacity(preferences.len());
-    for (name, value) in preferences {
-        admitted.push(admit_preference(state, name, value).await?);
+    let mut admitted = Vec::with_capacity(settings.len());
+    for (name, value) in settings {
+        admitted.push(admit_setting(state, name, value).await?);
     }
 
     Ok(admitted)
@@ -297,17 +297,17 @@ async fn admit_universe_state(state: &AppState, request: &BootstrapSeedRequest) 
     Ok(universe_state_id)
 }
 
-async fn admit_preference(state: &AppState, name: &str, value: Value) -> Result<String> {
-    let preference_id = UbuId::new(ObjectType::Preference).to_string();
+async fn admit_setting(state: &AppState, name: &str, value: Value) -> Result<String> {
+    let setting_id = UbuId::new(ObjectType::Setting).to_string();
     let now = UbuTimestamp::now_utc().to_string();
     let record = NewObjectRecord {
-        id: preference_id.clone(),
-        object_type: ObjectType::Preference.as_str().to_owned(),
+        id: setting_id.clone(),
+        object_type: ObjectType::Setting.as_str().to_owned(),
         version: 1,
         status: "active".to_owned(),
         compartment_label: "bootstrap".to_owned(),
         payload: json!({
-            "id": preference_id,
+            "id": setting_id,
             "name": name,
             "value": value,
             "authority_source": authority_source_wire(AuthoritySource::User)?,
@@ -328,7 +328,7 @@ async fn admit_preference(state: &AppState, name: &str, value: Value) -> Result<
         .await
         .map_err(AppError::from)?;
 
-    Ok(preference_id)
+    Ok(setting_id)
 }
 
 fn bootstrap_provenance(created_at: &str) -> Value {

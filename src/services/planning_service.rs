@@ -1093,25 +1093,25 @@ struct AffectResolution {
 }
 
 async fn build_affect_profile(pool: &sqlx::SqlitePool) -> Result<AffectProfileBody> {
-    let preferences = active_preferences(pool).await?;
-    let energy_defaulted = !has_any_preference(
-        &preferences,
+    let settings = active_settings(pool).await?;
+    let energy_defaulted = !has_any_setting(
+        &settings,
         &[
             "acceptable_energy_floor",
             "affect_energy_floor",
             "energy_floor",
         ],
     );
-    let stress_defaulted = !has_any_preference(
-        &preferences,
+    let stress_defaulted = !has_any_setting(
+        &settings,
         &[
             "tolerable_stress_ceiling",
             "affect_stress_ceiling",
             "stress_ceiling",
         ],
     );
-    let intensity_defaulted = !has_any_preference(
-        &preferences,
+    let intensity_defaulted = !has_any_setting(
+        &settings,
         &[
             "tolerable_intensity_ceiling",
             "tolerable_mood_intensity_ceiling",
@@ -1125,8 +1125,8 @@ async fn build_affect_profile(pool: &sqlx::SqlitePool) -> Result<AffectProfileBo
         "energy".to_owned(),
         affect_tolerance(
             AffectDirectionBody::HigherIsBetter,
-            preference_location(
-                &preferences,
+            setting_location(
+                &settings,
                 &[
                     "acceptable_energy_floor",
                     "affect_energy_floor",
@@ -1134,15 +1134,15 @@ async fn build_affect_profile(pool: &sqlx::SqlitePool) -> Result<AffectProfileBo
                 ],
                 4.0,
             ),
-            preference_freshness_seconds(&preferences, "energy"),
+            setting_freshness_seconds(&settings, "energy"),
         ),
     );
     dimensions.insert(
         "stress".to_owned(),
         affect_tolerance(
             AffectDirectionBody::LowerIsBetter,
-            preference_location(
-                &preferences,
+            setting_location(
+                &settings,
                 &[
                     "tolerable_stress_ceiling",
                     "affect_stress_ceiling",
@@ -1150,15 +1150,15 @@ async fn build_affect_profile(pool: &sqlx::SqlitePool) -> Result<AffectProfileBo
                 ],
                 7.0,
             ),
-            preference_freshness_seconds(&preferences, "stress"),
+            setting_freshness_seconds(&settings, "stress"),
         ),
     );
     dimensions.insert(
         "mood_intensity".to_owned(),
         affect_tolerance(
             AffectDirectionBody::LowerIsBetter,
-            preference_location(
-                &preferences,
+            setting_location(
+                &settings,
                 &[
                     "tolerable_intensity_ceiling",
                     "tolerable_mood_intensity_ceiling",
@@ -1167,7 +1167,7 @@ async fn build_affect_profile(pool: &sqlx::SqlitePool) -> Result<AffectProfileBo
                 ],
                 8.0,
             ),
-            preference_freshness_seconds(&preferences, "mood_intensity"),
+            setting_freshness_seconds(&settings, "mood_intensity"),
         ),
     );
 
@@ -1181,33 +1181,33 @@ async fn build_affect_profile(pool: &sqlx::SqlitePool) -> Result<AffectProfileBo
     Ok(profile)
 }
 
-async fn active_preferences(pool: &sqlx::SqlitePool) -> Result<HashMap<String, Value>> {
+async fn active_settings(pool: &sqlx::SqlitePool) -> Result<HashMap<String, Value>> {
     let rows = sqlx::query(
         "SELECT payload_json, version FROM objects
         WHERE object_type = ? AND status = ?
         ORDER BY updated_at DESC",
     )
-    .bind(ObjectType::Preference.as_str())
+    .bind(ObjectType::Setting.as_str())
     .bind("active")
     .fetch_all(pool)
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
-    let mut preferences = HashMap::new();
+    let mut settings = HashMap::new();
     for row in rows {
         let payload_json: String = row
             .try_get("payload_json")
             .map_err(|e| AppError::Internal(e.to_string()))?;
         let payload: Value = serde_json::from_str(&payload_json)
-            .map_err(|e| AppError::Internal(format!("failed to deserialize preference: {e}")))?;
+            .map_err(|e| AppError::Internal(format!("failed to deserialize setting: {e}")))?;
         let Some(name) = payload.get("name").and_then(Value::as_str) else {
             continue;
         };
-        preferences
+        settings
             .entry(name.to_owned())
             .or_insert_with(|| payload.get("value").cloned().unwrap_or(Value::Null));
     }
-    Ok(preferences)
+    Ok(settings)
 }
 
 fn affect_tolerance(
@@ -1224,18 +1224,18 @@ fn affect_tolerance(
     }
 }
 
-fn has_any_preference(preferences: &HashMap<String, Value>, names: &[&str]) -> bool {
-    names.iter().any(|name| preferences.contains_key(*name))
+fn has_any_setting(settings: &HashMap<String, Value>, names: &[&str]) -> bool {
+    names.iter().any(|name| settings.contains_key(*name))
 }
 
-fn preference_location(
-    preferences: &HashMap<String, Value>,
+fn setting_location(
+    settings: &HashMap<String, Value>,
     names: &[&str],
     default_location: f64,
 ) -> f64 {
     names
         .iter()
-        .find_map(|name| preferences.get(*name).and_then(location_value))
+        .find_map(|name| settings.get(*name).and_then(location_value))
         .unwrap_or(default_location)
 }
 
@@ -1259,14 +1259,14 @@ fn finite_0_to_10(value: f64) -> Option<f64> {
     (value.is_finite() && (0.0..=10.0).contains(&value)).then_some(value)
 }
 
-fn preference_freshness_seconds(
-    preferences: &HashMap<String, Value>,
+fn setting_freshness_seconds(
+    settings: &HashMap<String, Value>,
     dimension: &str,
 ) -> Option<u64> {
     let per_dimension = format!("{dimension}_freshness_seconds");
-    preferences
+    settings
         .get(&per_dimension)
-        .or_else(|| preferences.get("affect_freshness_seconds"))
+        .or_else(|| settings.get("affect_freshness_seconds"))
         .and_then(u64_value)
 }
 

@@ -96,7 +96,7 @@ fn default_attention_preference() -> AttentionPreference {
 pub struct BootstrapSeedResponse {
     pub schema_version: String,
     pub objective_ids: Vec<String>,
-    pub preference_ids: Vec<String>,
+    pub setting_ids: Vec<String>,
     pub universe_state_id: String,
     pub imported_tasks: crate::api::github::ImportResponse,
     pub diagnostics: Vec<BootstrapDiagnostic>,

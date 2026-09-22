@@ -38,7 +38,7 @@ async fn seed_admits_bootstrap_state_and_imports_selected_repo_tasks() {
     let body = json_body(response).await;
     assert_eq!(body["schema_version"], BOOTSTRAP_SCHEMA_VERSION);
     assert_eq!(body["objective_ids"].as_array().unwrap().len(), 1);
-    assert_eq!(body["preference_ids"].as_array().unwrap().len(), 3);
+    assert_eq!(body["setting_ids"].as_array().unwrap().len(), 3);
     let universe_state_id = body["universe_state_id"]
         .as_str()
         .expect("universe_state_id");
@@ -56,7 +56,7 @@ async fn seed_admits_bootstrap_state_and_imports_selected_repo_tasks() {
             .expect("objects query");
 
     let mut objective_count = 0;
-    let mut preference_count = 0;
+    let mut setting_count = 0;
     let mut task_count = 0;
     let mut universe_state_count = 0;
     for row in rows {
@@ -70,8 +70,8 @@ async fn seed_admits_bootstrap_state_and_imports_selected_repo_tasks() {
                 assert_eq!(payload["provenance"]["authority_source"], "user");
                 assert_eq!(payload["provenance"]["source"]["source_kind"], "bootstrap");
             }
-            "Preference" => {
-                preference_count += 1;
+            "Setting" => {
+                setting_count += 1;
                 assert_eq!(payload["authority_source"], "user");
                 assert_eq!(payload["provenance"]["authority_source"], "user");
                 assert_eq!(payload["provenance"]["source"]["source_kind"], "bootstrap");
@@ -118,7 +118,7 @@ async fn seed_admits_bootstrap_state_and_imports_selected_repo_tasks() {
     }
 
     assert_eq!(objective_count, 1);
-    assert_eq!(preference_count, 3);
+    assert_eq!(setting_count, 3);
     assert_eq!(task_count, 1);
     assert_eq!(universe_state_count, 1);
 
@@ -167,7 +167,7 @@ async fn seed_rejects_second_run_without_duplicating_bootstrap_objects() {
 
     let row = sqlx::query(
         "SELECT COUNT(*) AS count FROM objects
-        WHERE object_type IN ('Objective', 'Preference', 'UniverseState')",
+        WHERE object_type IN ('Objective', 'Setting', 'UniverseState')",
     )
     .fetch_one(state.inner().store.pool())
     .await
