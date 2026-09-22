@@ -45,6 +45,9 @@ pub async fn record_task_action(
             .await?,
         );
         true
+    } else if matches!(request.action, RecordedTaskActionKind::Skip) {
+        apply_skipped_transition(&state, &mut task, effective_time).await?;
+        true
     } else {
         false
     };
@@ -122,6 +125,15 @@ pub async fn append_action(
     action: TaskActionKind,
     request: UserActionRequest,
 ) -> Result<LogEntryResponse> {
+    if UbuId::parse(&task_id).is_ok() {
+        if let Some(record) = queries::get_current_state(state.inner().store.pool(), &task_id).await? {
+            let payload: serde_json::Value = serde_json::from_str(&record.payload_json)
+                .map_err(|e| AppError::Internal(e.to_string()))?;
+            if record.object_type == ObjectType::Task.as_str() && payload.get("occurrence").is_some_and(|v| !v.is_null()) {
+                return Err(AppError::bad_request_diagnostic("use_recorded_action", "Routine occurrences require POST /task/:id/action"));
+            }
+        }
+    }
     let log_id = UbuId::new(ObjectType::LogEntry).to_string();
     let now = UbuTimestamp::now_utc().to_string();
     let event_type = action_event_type(action);
@@ -229,10 +241,10 @@ async fn apply_completed_transition(
     authority_source: AuthoritySource,
     effective_time: UbuTimestamp,
 ) -> Result<()> {
-    if task.status != "active" {
+    if task.status != "active" && !(task.status == "failed" && task.payload.get("occurrence").is_some_and(|v| !v.is_null())) {
         return Err(AppError::bad_request_diagnostic(
             "invalid_task_state",
-            "complete can only transition an active Task",
+            "complete requires an active Task or a missed routine occurrence",
         ));
     }
     let envelope = state.envelope_for(
@@ -262,6 +274,26 @@ async fn apply_completed_transition(
     task.status = admitted.status;
     task.version = admitted.version;
     task.payload = payload;
+    Ok(())
+}
+
+async fn apply_skipped_transition(state: &AppState, task: &mut TaskForTransition, now: UbuTimestamp) -> Result<()> {
+    if !task.payload.get("occurrence").is_some_and(|v| !v.is_null()) {
+        return Err(AppError::bad_request_diagnostic("not_a_routine_occurrence", "skip only applies to a routine occurrence"));
+    }
+    if !matches!(task.status.as_str(), "active" | "failed") {
+        return Err(AppError::bad_request_diagnostic("invalid_task_state", "skip requires an active or missed routine occurrence"));
+    }
+    let envelope = state.envelope_for([(UbuId::parse(&task.id)?, observed_version(task.version)?)].into_iter().collect(), AuthoritySource::User, now)?;
+    let mut payload = task.payload.clone();
+    payload["status"] = json!("moot");
+    payload["moot_reason_code"] = json!("user_declared_moot");
+    let admitted = queries::admit_object(state.inner().store.pool(), &envelope, NewObjectRecord {
+        id: task.id.clone(), object_type: ObjectType::Task.as_str().into(), version: task.version,
+        status: "moot".into(), compartment_label: task.compartment_label.clone(), payload: payload.clone(),
+        created_at: task.created_at.clone(), updated_at: now.to_string(),
+    }).await?;
+    task.status = admitted.status; task.version = admitted.version; task.payload = payload;
     Ok(())
 }
 
@@ -362,7 +394,7 @@ fn validate_schema_version(schema_version: Option<&str>) -> Result<()> {
 
 fn authority_for_recorded_action(action: RecordedTaskActionKind) -> AuthoritySource {
     match action {
-        RecordedTaskActionKind::Complete | RecordedTaskActionKind::Snooze => AuthoritySource::User,
+        RecordedTaskActionKind::Complete | RecordedTaskActionKind::Skip | RecordedTaskActionKind::Snooze => AuthoritySource::User,
         RecordedTaskActionKind::Override => AuthoritySource::UserOverride,
     }
 }
@@ -376,6 +408,7 @@ fn authority_source_wire(authority_source: AuthoritySource) -> Result<String> {
 fn recorded_action_wire(action: RecordedTaskActionKind) -> &'static str {
     match action {
         RecordedTaskActionKind::Complete => "complete",
+        RecordedTaskActionKind::Skip => "skip",
         RecordedTaskActionKind::Override => "override",
         RecordedTaskActionKind::Snooze => "snooze",
     }
@@ -384,6 +417,7 @@ fn recorded_action_wire(action: RecordedTaskActionKind) -> &'static str {
 fn recorded_decision_wire(action: RecordedTaskActionKind) -> &'static str {
     match action {
         RecordedTaskActionKind::Complete => "task_completed",
+        RecordedTaskActionKind::Skip => "occurrence_skipped",
         RecordedTaskActionKind::Override => "recommendation_rejected",
         RecordedTaskActionKind::Snooze => "defer",
     }

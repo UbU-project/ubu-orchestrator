@@ -51,6 +51,7 @@ pub struct UserActionRequest {
 #[serde(rename_all = "snake_case")]
 pub enum RecordedTaskActionKind {
     Complete,
+    Skip,
     Override,
     Snooze,
 }

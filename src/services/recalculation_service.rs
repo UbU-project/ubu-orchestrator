@@ -184,8 +184,9 @@ async fn append_recalculation_log(state: &AppState, request: &RecalculationReque
 async fn frozen_task_ids(state: &AppState, prior_plan_id: &str) -> Result<HashSet<String>> {
     let pool = state.inner().store.pool();
     let mut frozen = HashSet::new();
+    let mut settled_occurrences = HashSet::new();
 
-    let rows = sqlx::query("SELECT id, status FROM objects WHERE object_type = ?")
+    let rows = sqlx::query("SELECT id, status, json_extract(payload_json,'$.occurrence') AS occurrence FROM objects WHERE object_type = ?")
         .bind(ObjectType::Task.as_str())
         .fetch_all(pool)
         .await
@@ -197,6 +198,8 @@ async fn frozen_task_ids(state: &AppState, prior_plan_id: &str) -> Result<HashSe
         let status: String = row
             .try_get("status")
             .map_err(|e| AppError::Internal(e.to_string()))?;
+        let occurrence: Option<String> = row.try_get("occurrence").map_err(|e| AppError::Internal(e.to_string()))?;
+        if status != "active" && occurrence.is_some() { settled_occurrences.insert(id.clone()); }
         if matches!(
             status.as_str(),
             "completed" | "failed" | "moot" | "in_progress"
@@ -255,6 +258,8 @@ async fn frozen_task_ids(state: &AppState, prior_plan_id: &str) -> Result<HashSe
         frozen.retain(|task_id| planned_ids.contains(task_id));
     }
 
+    // Settled occurrences must disappear from repair, even if old Logs froze them.
+    frozen.retain(|id| !settled_occurrences.contains(id));
     Ok(frozen)
 }
 
