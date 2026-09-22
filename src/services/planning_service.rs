@@ -78,7 +78,9 @@ pub async fn generate(
 
     validate_task_models(&planning_request)?;
     let kernel_request = PlanningRequest::from(planning_request.clone());
-    let adapter = CpuPlannerAdapter;
+    let adapter = CpuPlannerAdapter {
+        strategy: state.inner().planner_strategy,
+    };
     add_empty_capacity_diagnostic(&planning_request, &mut diagnostics);
     let mut candidates = if has_static_conflicts(&diagnostics) || planning_request.tasks.is_empty() {
         Vec::new()

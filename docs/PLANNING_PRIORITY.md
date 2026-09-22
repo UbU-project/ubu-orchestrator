@@ -35,8 +35,13 @@ bucket, bucket count, normalized rank (`p / (m - 1)`, or 0 for one bucket), and
 value. Unranked Tasks have no bucket or normalized rank. It is never persisted
 in the Plan; caller-supplied requests omit the empty explanation.
 
-Known limitation: greedy placement can still fail the whole request if a
-higher-priority wide-range Task occupies the slot needed by a narrow-range Task.
-Chunked search (`UBU-D0279`/`UBU-D0280`) and partial placement (`UBU-Q0155`) are
-follow-up work. This ticket does not add Preference capture, routine inheritance,
-Objective-derived value, or learned priorities.
+The default chunked sweep (`UBU-D0279`/`UBU-D0280`) rescues the case where
+priority-first placement would let a wide-range Task occupy the only slot of a
+narrow-range Task. It compares value-first, most-constrained-first, and
+value-density fills and retains the greedy benchmark as a candidate.
+`UBU_PLANNER_STRATEGY=greedy` restores the earlier first-fit behavior.
+
+Known limitation: packing failures that no fill rule or look-ahead resolves still
+fail the whole Plan until partial placement (`UBU-Q0155`). This does not add
+Preference capture, routine inheritance, Objective-derived value, or learned
+priorities.

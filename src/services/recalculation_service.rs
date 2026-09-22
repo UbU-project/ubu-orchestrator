@@ -76,7 +76,9 @@ pub async fn recalculate_from_request(
             repair_scope, prior_plan_id: prior_plan.id, plan: None, diagnostics,
         });
     }
-    let adapter = CpuPlannerAdapter;
+    let adapter = CpuPlannerAdapter {
+        strategy: state.inner().planner_strategy,
+    };
     let repair_response = adapter.repair(planning_service::repair_kernel_request(
         &repair_request_body.request,
     ));

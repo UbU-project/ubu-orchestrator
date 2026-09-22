@@ -23,6 +23,11 @@ Dynamic placement starts no earlier than now even when a selected scope starts
 earlier. Static Tasks in progress stay whole. Repair also floors its adjusted
 horizon start at now and retains the existing frozen-step adjustment.
 
+`UBU_PLANNER_STRATEGY` selects `chunked` (default) or `greedy` for both planning
+and repair. Any other value is a startup configuration error naming the variable.
+Tests can use `ServerConfig::with_planner_strategy(raw)` without changing process
+environment variables.
+
 Only horizon construction and next-action selection use the injectable planning
 clock. Envelope, log and record timestamps continue to use their existing clocks.
 Next action skips ended placements and reports `stale_calendar` when all current
@@ -43,10 +48,10 @@ Dynamic dependents of these removed Tasks are excluded to a fixpoint with
 Tasks break that chain. Preconditions, lifecycle and frozen repair exclusions
 retain their existing edge-dropping behavior.
 
-Known limitations: individually oversized Tasks are now excluded, while greedy
-packing failures can still fail the whole request. In particular, a higher-priority
-wide-range Task may take the slot needed by a narrow-range Task. Chunked search
-(`UBU-D0279`/`UBU-D0280`) and partial placement (`UBU-Q0155`) address that later.
+Known limitations: individually oversized Tasks are excluded. The default chunked
+sweep rescues priority-first narrow-slot failures, but packing failures that no
+fill rule or look-ahead resolves still fail the whole request until partial
+placement (`UBU-Q0155`).
 Kernel repair also preserves prior Static placements even when their window
 changes. No Calendar rows or horizon UI are introduced here.
 

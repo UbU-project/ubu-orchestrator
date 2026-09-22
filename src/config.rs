@@ -39,6 +39,14 @@ pub struct ServerConfig {
     device_registration_path: Option<PathBuf>,
     category_palette_path: Option<PathBuf>,
     planning_horizon_seconds: Option<String>,
+    planner_strategy: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PlannerStrategyChoice {
+    #[default]
+    Chunked,
+    Greedy,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,17 +98,36 @@ impl ServerConfig {
             db_path: env::var("UBU_DB_PATH").unwrap_or_else(|_| "ubu-orchestrator.db".to_owned()),
             device_registration_path: env::var_os("UBU_DEVICE_REGISTRATION").map(PathBuf::from),
             category_palette_path: env::var_os("UBU_CATEGORY_PALETTE_PATH").map(PathBuf::from),
+            planner_strategy: env::var_os("UBU_PLANNER_STRATEGY")
+                .map(|value| value.to_string_lossy().into_owned()),
             planning_horizon_seconds: env::var_os("UBU_PLANNING_HORIZON_SECONDS")
                 .map(|value| value.to_string_lossy().into_owned()),
         }
     }
 
     pub fn planning_horizon_seconds(&self) -> Result<u64, crate::errors::StartupError> {
-        let Some(value) = &self.planning_horizon_seconds else { return Ok(86400); };
+        let Some(value) = &self.planning_horizon_seconds else {
+            return Ok(86400);
+        };
         value.parse::<u64>().ok().filter(|span| (1..=2678400).contains(span)
             && value.bytes().all(|byte| byte.is_ascii_digit()))
             .ok_or_else(|| crate::errors::StartupError(format!(
                 "invalid UBU_PLANNING_HORIZON_SECONDS `{value}`: expected an integer from 1 to 2678400")))
+    }
+
+    pub fn planner_strategy(&self) -> Result<PlannerStrategyChoice, crate::errors::StartupError> {
+        match self.planner_strategy.as_deref() {
+            None | Some("chunked") => Ok(PlannerStrategyChoice::Chunked),
+            Some("greedy") => Ok(PlannerStrategyChoice::Greedy),
+            Some(value) => Err(crate::errors::StartupError(format!(
+                "invalid UBU_PLANNER_STRATEGY `{value}`: expected chunked or greedy"
+            ))),
+        }
+    }
+
+    pub fn with_planner_strategy(mut self, raw: impl Into<String>) -> Self {
+        self.planner_strategy = Some(raw.into());
+        self
     }
 
     pub fn bind_addr(&self) -> SocketAddr {
@@ -180,13 +207,29 @@ mod registration_path_tests {
         for (database, expected) in [
             ("ubu-orchestrator.db", "ubu-device-registration.json"),
             ("/tmp/ubu/state.db", "/tmp/ubu/ubu-device-registration.json"),
-            ("sqlite:///tmp/ubu/state.db?mode=rwc", "/tmp/ubu/ubu-device-registration.json"),
-            ("sqlite:/tmp/ubu/state.db", "/tmp/ubu/ubu-device-registration.json"),
+            (
+                "sqlite:///tmp/ubu/state.db?mode=rwc",
+                "/tmp/ubu/ubu-device-registration.json",
+            ),
+            (
+                "sqlite:/tmp/ubu/state.db",
+                "/tmp/ubu/ubu-device-registration.json",
+            ),
         ] {
-            assert_eq!(config.clone().with_db_path(database).device_registration_path(), PathBuf::from(expected));
+            assert_eq!(
+                config
+                    .clone()
+                    .with_db_path(database)
+                    .device_registration_path(),
+                PathBuf::from(expected)
+            );
         }
-        assert_eq!(config.with_db_path("/tmp/different/state.db")
-            .with_device_registration_path("operator/device.json").device_registration_path(),
-            PathBuf::from("operator/device.json"));
+        assert_eq!(
+            config
+                .with_db_path("/tmp/different/state.db")
+                .with_device_registration_path("operator/device.json")
+                .device_registration_path(),
+            PathBuf::from("operator/device.json")
+        );
     }
 }

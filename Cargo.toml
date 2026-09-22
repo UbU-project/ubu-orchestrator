@@ -21,8 +21,8 @@ utoipa = { version = "5", features = ["axum_extras"] }
 ubu_core = { git = "https://github.com/UbU-project/ubu-core", rev = "358086dba4575984beccdaa7f5cc0d457a276fe9" }
 ubu_store = { git = "https://github.com/UbU-project/ubu-store", rev = "685b68e19d57014f7be355993286562644a80a2d" }
 ubu_github_adapter = { git = "https://github.com/UbU-project/ubu-github-adapter", rev = "5664000e823aee6f35439d4ef15f218285768bb4" }
-ubu_planning_core = { git = "https://github.com/UbU-project/ubu-planning-kernel", rev = "e8045e2cefb6ccb0f8e20ce0ba22f2d20bfd5990", package = "ubu_planning_core" }
-ubu_planning_cpu = { git = "https://github.com/UbU-project/ubu-planning-kernel", rev = "e8045e2cefb6ccb0f8e20ce0ba22f2d20bfd5990", package = "ubu_planning_cpu" }
+ubu_planning_core = { git = "https://github.com/UbU-project/ubu-planning-kernel", rev = "8e22b57c1d85d0a3ed179c76e8382cec3aba3d35", package = "ubu_planning_core" }
+ubu_planning_cpu = { git = "https://github.com/UbU-project/ubu-planning-kernel", rev = "8e22b57c1d85d0a3ed179c76e8382cec3aba3d35", package = "ubu_planning_cpu" }
 
 
 [dev-dependencies]
