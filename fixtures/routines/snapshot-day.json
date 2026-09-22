@@ -1,0 +1,250 @@
+{
+  "snapshot_version": 1,
+  "store": {
+    "routines": {
+      "00000000-0000-4000-8000-000000000101": {
+        "id": "00000000-0000-4000-8000-000000000101",
+        "title": "Check-in 1",
+        "recurrence": {
+          "Weekly": {
+            "weekdays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Fri"
+            ]
+          }
+        },
+        "start_time": "09:00:00",
+        "duration": [
+          300,
+          0
+        ],
+        "dynamic": true,
+        "transparent": true,
+        "reminders": [
+          0
+        ],
+        "after": [],
+        "latest_tod": "11:45:00"
+      },
+      "00000000-0000-4000-8000-000000000102": {
+        "id": "00000000-0000-4000-8000-000000000102",
+        "title": "Check-in 2",
+        "recurrence": {
+          "Weekly": {
+            "weekdays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Fri"
+            ]
+          }
+        },
+        "start_time": "12:00:00",
+        "duration": [
+          300,
+          0
+        ],
+        "dynamic": true,
+        "transparent": true,
+        "reminders": [
+          0
+        ],
+        "after": [
+          {
+            "template_id": "00000000-0000-4000-8000-000000000101",
+            "offset": [
+              3600,
+              0
+            ]
+          }
+        ],
+        "latest_tod": "14:00:00"
+      },
+      "00000000-0000-4000-8000-000000000103": {
+        "id": "00000000-0000-4000-8000-000000000103",
+        "title": "Check-in 3",
+        "recurrence": {
+          "Weekly": {
+            "weekdays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Fri"
+            ]
+          }
+        },
+        "start_time": "14:00:00",
+        "duration": [
+          300,
+          0
+        ],
+        "dynamic": true,
+        "transparent": true,
+        "reminders": [
+          0
+        ],
+        "after": [
+          {
+            "template_id": "00000000-0000-4000-8000-000000000102",
+            "offset": [
+              3600,
+              0
+            ]
+          }
+        ],
+        "latest_tod": "17:00:00"
+      },
+      "00000000-0000-4000-8000-000000000104": {
+        "id": "00000000-0000-4000-8000-000000000104",
+        "title": "Evening block",
+        "recurrence": "Daily",
+        "start_time": "17:30:00",
+        "duration": [
+          1800,
+          0
+        ],
+        "dynamic": false,
+        "transparent": false,
+        "reminders": [
+          0
+        ],
+        "after": []
+      },
+      "00000000-0000-4000-8000-000000000105": {
+        "id": "00000000-0000-4000-8000-000000000105",
+        "title": "Evening chore",
+        "recurrence": "Daily",
+        "start_time": "17:45:00",
+        "duration": [
+          300,
+          0
+        ],
+        "dynamic": false,
+        "transparent": false,
+        "reminders": [
+          0
+        ],
+        "after": []
+      },
+      "00000000-0000-4000-8000-000000000110": {
+        "id": "00000000-0000-4000-8000-000000000110",
+        "title": "Evening tail",
+        "recurrence": "Daily",
+        "start_time": "17:50:00",
+        "duration": [
+          900,
+          0
+        ],
+        "dynamic": false,
+        "transparent": false,
+        "reminders": [
+          0
+        ],
+        "after": []
+      },
+      "00000000-0000-4000-8000-000000000106": {
+        "id": "00000000-0000-4000-8000-000000000106",
+        "title": "Night chore A",
+        "recurrence": "Daily",
+        "start_time": "22:15:00",
+        "duration": [
+          60,
+          0
+        ],
+        "dynamic": false,
+        "transparent": false,
+        "reminders": [
+          0
+        ],
+        "after": []
+      },
+      "00000000-0000-4000-8000-000000000107": {
+        "id": "00000000-0000-4000-8000-000000000107",
+        "title": "Night chore B",
+        "recurrence": "Daily",
+        "start_time": "22:15:00",
+        "duration": [
+          300,
+          0
+        ],
+        "dynamic": false,
+        "transparent": false,
+        "reminders": [
+          0
+        ],
+        "after": []
+      },
+      "00000000-0000-4000-8000-000000000108": {
+        "id": "00000000-0000-4000-8000-000000000108",
+        "title": "Transparent reminder",
+        "recurrence": "Daily",
+        "start_time": "08:43:00",
+        "duration": [
+          120,
+          0
+        ],
+        "dynamic": false,
+        "transparent": true,
+        "reminders": [
+          0
+        ],
+        "after": []
+      },
+      "00000000-0000-4000-8000-000000000109": {
+        "id": "00000000-0000-4000-8000-000000000109",
+        "title": "Afternoon chore",
+        "recurrence": "Daily",
+        "start_time": "15:30:00",
+        "duration": [
+          600,
+          0
+        ],
+        "dynamic": false,
+        "transparent": false,
+        "reminders": [
+          0
+        ],
+        "after": []
+      }
+    },
+    "tasks": {
+      "00000000-0000-4000-8000-000000000201": {
+        "id": "00000000-0000-4000-8000-000000000201",
+        "title": "Pinned meeting",
+        "status": "Backlog",
+        "est_duration": [
+          3600,
+          0
+        ],
+        "blocked_by": [
+          "00000000-0000-4000-8000-000000000202"
+        ],
+        "tags": [],
+        "pinned": {
+          "start": "2026-09-22T19:00:00Z",
+          "end": "2026-09-22T20:00:00Z"
+        }
+      },
+      "00000000-0000-4000-8000-000000000202": {
+        "id": "00000000-0000-4000-8000-000000000202",
+        "title": "Backlog task",
+        "status": "Backlog",
+        "est_duration": [
+          3600,
+          0
+        ],
+        "blocked_by": [],
+        "tags": []
+      }
+    },
+    "objectives": {},
+    "bundles": {},
+    "preferences": []
+  },
+  "task_origins": {
+    "00000000-0000-4000-8000-000000000201": "manual",
+    "00000000-0000-4000-8000-000000000202": "manual"
+  }
+}

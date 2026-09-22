@@ -30,6 +30,7 @@ pub struct OrchestratorState {
     pub desktop_session_token: Mutex<Option<SecretToken>>,
     pub bootstrap_started: Mutex<bool>,
     pub quick_ubu_import_lock: Mutex<()>,
+    pub routine_materialization_lock: Mutex<()>,
     pub bootstrap_answers: Mutex<Vec<String>>,
 }
 
@@ -92,6 +93,7 @@ impl AppState {
                 desktop_session_token: Mutex::new(None),
                 bootstrap_started: Mutex::new(false),
                 quick_ubu_import_lock: Mutex::new(()),
+                routine_materialization_lock: Mutex::new(()),
                 bootstrap_answers: Mutex::new(Vec::new()),
             }),
         })
