@@ -627,6 +627,13 @@ async fn build_request_from_store_with_context(
         }
         true
     });
+    let unseatable = unseatable_mandatory(&task_bodies, &mandatory, &fixed);
+    task_bodies.retain(|task| {
+        if !unseatable.contains(&task.id) { return true; }
+        removed.insert(task.id.clone());
+        diagnostics.push(exclusion_diagnostic(&task.id, true, "routine_no_free_time", "the other routine occurrences due in its allowed range use the free time first"));
+        false
+    });
     loop {
         let before = removed.len();
         task_bodies.retain(|task| {
@@ -1924,15 +1931,43 @@ fn exclusion_diagnostic(id: &str, mandatory: bool, code: &str, reason: &str) -> 
     if mandatory { DiagnosticBody { code: "mandatory_occurrence_unplaceable".into(), message: format!("Mandatory routine occurrence `{id}` was left out of the Plan: {reason}; do it late, skip it, or change other commitments") } }
     else { DiagnosticBody {code:code.into(), message:format!("Task `{id}` {reason}")} }
 }
-fn has_free_gap(window: &TimeWindowBody, fixed: &[TimeWindowBody], duration: u64) -> bool {
-    let mut intervals: Vec<_> = fixed.iter().filter(|w| w.start < window.end && w.end > window.start).collect();
-    intervals.sort_by_key(|w|(w.start,w.end));
-    let mut cursor=window.start;
+fn earliest_fit(window: &TimeWindowBody, occupied: &[TimeWindowBody], duration: u64) -> Option<TimeWindowBody> {
+    let mut intervals: Vec<_> = occupied.iter().filter(|w| w.start < window.end && w.end > window.start).collect();
+    intervals.sort_by_key(|w| (w.start, w.end));
+    let mut cursor = window.start;
     for interval in intervals {
-        if interval.start.saturating_sub(cursor)>=duration {return true;}
-        cursor=cursor.max(interval.end);
+        if let Some(end) = cursor.checked_add(duration).filter(|end| *end <= interval.start.min(window.end)) {
+            return Some(TimeWindowBody { start: cursor, end });
+        }
+        cursor = cursor.max(interval.end);
     }
-    window.end.saturating_sub(cursor)>=duration
+    cursor.checked_add(duration).filter(|end| *end <= window.end).map(|end| TimeWindowBody { start: cursor, end })
+}
+fn has_free_gap(window: &TimeWindowBody, fixed: &[TimeWindowBody], duration: u64) -> bool {
+    earliest_fit(window, fixed, duration).is_some()
+}
+fn unseatable_mandatory(tasks: &[TaskSpecBody], mandatory: &HashSet<String>, fixed: &[TimeWindowBody]) -> HashSet<String> {
+    let mut pending: Vec<_> = tasks.iter().filter(|t| mandatory.contains(&t.id) && t.static_anchor.is_none()).collect();
+    pending.sort_by_key(|t| (t.window.as_ref().map_or(u64::MAX, |w| w.end), &t.id));
+    let mut occupied = fixed.to_vec();
+    let mut ends: HashMap<_, _> = tasks.iter().filter(|t| t.static_anchor.is_some()).filter_map(|t| t.window.as_ref().map(|w| (t.id.clone(), w.end))).collect();
+    let dynamic_ids: HashSet<_> = pending.iter().map(|t| t.id.clone()).collect();
+    let mut failed = HashSet::new();
+    while let Some(index) = pending.iter().position(|task| task.depends_on.iter().filter(|dep| dynamic_ids.contains(*dep)).all(|dep| ends.contains_key(dep) || failed.contains(dep))) {
+        let task = pending.remove(index);
+        if task.depends_on.iter().any(|dep| failed.contains(dep)) {
+            failed.insert(task.id.clone());
+            continue;
+        }
+        let Some(mut window) = task.window.clone() else { failed.insert(task.id.clone()); continue; };
+        for dep in &task.depends_on { if let Some(end) = ends.get(dep) { window.start = window.start.max(*end); } }
+        if let Some(interval) = earliest_fit(&window, &occupied, task_duration_model(task).placement_seconds()) {
+            ends.insert(task.id.clone(), interval.end);
+            occupied.push(interval);
+        } else { failed.insert(task.id.clone()); }
+    }
+    // Unsettled cycles remain in the request for the existing graph validation.
+    failed
 }
 /// Reserve each connected committed-time span once, retaining individual Calendar windows.
 fn committed_clusters(tasks: &mut Vec<TaskSpecBody>, mandatory: &HashSet<String>, diagnostics: &mut Vec<DiagnosticBody>) -> (Vec<TaskSpecBody>,HashMap<String,TimeWindowBody>) {
