@@ -203,8 +203,25 @@ fn derive_reports(
         input.request,
         &mut findings,
     );
-    // No compact-calendar coverage estimate exists in this response, so low_coverage is
-    // deliberately omitted instead of being inferred from rollout probability.
+    if let Some(coverage) = input.selected_candidate.and_then(|candidate| candidate.coverage.as_ref()).filter(|coverage| coverage.below_threshold) {
+        let boundary = coverage.boundaries.iter().max_by(|left, right| {
+            left.uncovered_mass.total_cmp(&right.uncovered_mass)
+                .then(left.start.cmp(&right.start))
+                .then(left.task_id.cmp(&right.task_id))
+        });
+        let seconds = input.request.horizon_policy.reactive_horizon_seconds;
+        let horizon = if seconds <= 90 * 60 { format!("{} minutes", seconds.div_ceil(60)) }
+            else { format!("{} hours", seconds as f64 / 3600.0) };
+        let mut detail = format!("this Plan holds for {:.0}% of the ways the next {horizon} could go, below the {:.0}% it aims for", coverage.estimate * 100.0, coverage.threshold_used * 100.0);
+        if let Some(boundary) = boundary { detail.push_str(&format!("; most of the rest stops at {}", boundary.summary)); }
+        findings.push(RiskFinding {
+            category: RiskCategory::LowCoverage,
+            severity: if coverage.estimate < coverage.threshold_used / 2.0 { RiskLevel::High } else { RiskLevel::Medium },
+            blocking: false,
+            detail,
+            subject_ref: boundary.map(|boundary| boundary.task_id.clone()),
+        });
+    }
 
     let level = findings
         .iter()
