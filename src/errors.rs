@@ -27,6 +27,12 @@ pub enum AppError {
         code: String,
         message: String,
     },
+    #[error("{summary}")]
+    Diagnostics {
+        status: StatusCode,
+        summary: String,
+        items: Vec<(String, String)>,
+    },
     #[error("not found: {0}")]
     NotFound(String),
     #[error("upstream service error: {0}")]
@@ -38,6 +44,10 @@ pub enum AppError {
 }
 
 impl AppError {
+    pub fn bad_request_diagnostics(summary: impl Into<String>, items: Vec<(String, String)>) -> Self {
+        Self::Diagnostics { status: StatusCode::BAD_REQUEST, summary: summary.into(), items }
+    }
+
     pub fn bad_request_diagnostic(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self::Diagnostic {
             status: StatusCode::BAD_REQUEST,
@@ -100,7 +110,7 @@ impl IntoResponse for AppError {
             Self::UnsupportedProposal { .. } => StatusCode::UNPROCESSABLE_ENTITY,
             Self::TargetNotFound { .. } => StatusCode::NOT_FOUND,
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
-            Self::Diagnostic { status, .. } => *status,
+            Self::Diagnostic { status, .. } | Self::Diagnostics { status, .. } => *status,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::Upstream(_) => StatusCode::BAD_GATEWAY,
             Self::Core(_) | Self::Store(_) | Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -119,6 +129,7 @@ impl IntoResponse for AppError {
                 code: code.clone(),
                 message: message.clone(),
             }],
+            Self::Diagnostics { items, .. } => items.iter().map(|(code, message)| ApiDiagnostic { code: code.clone(), message: message.clone() }).collect(),
             _ => Vec::new(),
         };
 
