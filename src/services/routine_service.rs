@@ -212,18 +212,20 @@ fn payload(
     task.validate()?;
     serde_json::to_value(task).map_err(internal)
 }
-pub async fn materialize(
-    state: &AppState,
-    horizon: &TimeWindowBody,
-    now: u64,
-) -> Result<RoutineContext> {
-    let _import = state.inner().quick_ubu_import_lock.lock().await;
-    let _materialize = state.inner().routine_materialization_lock.lock().await;
-    let pool = state.inner().store.pool();
-    let instant = UbuTimestamp::parse(&timestamp_at(now)?)?;
-    let mut context = RoutineContext::default();
+pub(crate) struct LiveRoutines {
+    pub definitions: Vec<RoutineDefinition>,
+    pub labels: BTreeMap<String, String>,
+    pub unevaluable: HashSet<String>,
+    pub diagnostics: Vec<DiagnosticBody>,
+    pub titles: BTreeMap<String, String>,
+}
+
+/// Callers hold their own locks; acquiring the import lock here would deadlock.
+pub(crate) async fn live_definitions(pool: &sqlx::SqlitePool) -> Result<LiveRoutines> {
     let rows=sqlx::query_as::<_,ObjectRecord>("SELECT * FROM objects WHERE object_type='Objective' AND json_extract(payload_json,'$.recurrence') IS NOT NULL").fetch_all(pool).await.map_err(internal)?;
     let mut definitions = Vec::new();
+    let mut titles = BTreeMap::new();
+    let mut diagnostics = Vec::new();
     let mut labels = BTreeMap::new();
     let mut unevaluable = HashSet::new();
     for row in rows {
@@ -244,6 +246,7 @@ pub async fn materialize(
                     if schedule.timezone.parse::<chrono_tz::Tz>().is_err() {
                         unevaluable.insert(row.id.clone());
                     }
+                    titles.insert(row.id.clone(), objective.title.clone());
                     labels.insert(row.id.clone(), row.compartment_label);
                     definitions.push(RoutineDefinition {
                         objective_id: objective.id,
@@ -255,13 +258,40 @@ pub async fn materialize(
             Ok(_) => {}
             Err(e) => {
                 unevaluable.insert(row.id.clone());
-                context.diagnostics.push(diagnostic(
+                diagnostics.push(diagnostic(
                     "routine_objective_invalid",
                     format!("Routine Objective `{}` is invalid: {e}", row.id),
                 ));
             }
         }
     }
+    Ok(LiveRoutines {
+        definitions,
+        labels,
+        unevaluable,
+        diagnostics,
+        titles,
+    })
+}
+
+pub async fn materialize(
+    state: &AppState,
+    horizon: &TimeWindowBody,
+    now: u64,
+) -> Result<RoutineContext> {
+    let _import = state.inner().quick_ubu_import_lock.lock().await;
+    let _materialize = state.inner().routine_materialization_lock.lock().await;
+    let pool = state.inner().store.pool();
+    let instant = UbuTimestamp::parse(&timestamp_at(now)?)?;
+    let mut context = RoutineContext::default();
+    let LiveRoutines {
+        definitions,
+        labels,
+        unevaluable,
+        diagnostics,
+        ..
+    } = live_definitions(pool).await?;
+    context.diagnostics = diagnostics;
     let active=sqlx::query_as::<_,ObjectRecord>("SELECT * FROM objects WHERE object_type='Task' AND status='active' AND json_extract(payload_json,'$.occurrence') IS NOT NULL").fetch_all(pool).await.map_err(internal)?;
     // One evidence query across active occurrences; materializer and recalculation Logs do not protect edits.
     let evidence:HashSet<String>=sqlx::query_scalar::<_,String>("SELECT DISTINCT o.id FROM objects o JOIN logs l JOIN json_each(l.object_refs_json) refs ON refs.value=o.id WHERE o.object_type='Task' AND o.status='active' AND json_extract(o.payload_json,'$.occurrence') IS NOT NULL AND l.event_type!='recalculation_requested' AND json_type(l.payload_json,'$.routine_outcome') IS NULL").fetch_all(pool).await.map_err(internal)?.into_iter().collect();
