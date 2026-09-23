@@ -2603,6 +2603,8 @@
       "PlanningResponseBody": {
         "type": "object",
         "required": [
+          "status",
+          "unplaced_tasks",
           "schema_version",
           "request_id",
           "diagnostics"
@@ -2688,10 +2690,19 @@
               }
             ]
           },
+          "status": {
+            "type": "string"
+          },
           "task_priorities": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/TaskPriorityBody"
+            }
+          },
+          "unplaced_tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UnplacedTaskBody"
             }
           }
         }
@@ -3520,7 +3531,8 @@
           "post_plan_depletion",
           "low_coverage",
           "skeleton_failure",
-          "routine_triage"
+          "routine_triage",
+          "unplaced_work"
         ]
       },
       "RiskFinding": {
@@ -3655,6 +3667,29 @@
             }
           },
           "schema_version": {
+            "type": "string"
+          }
+        }
+      },
+      "SafeAlternativeBody": {
+        "type": "object",
+        "required": [
+          "action",
+          "label",
+          "requires_user_input",
+          "resulting_change_summary"
+        ],
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "requires_user_input": {
+            "type": "boolean"
+          },
+          "resulting_change_summary": {
             "type": "string"
           }
         }
@@ -3998,6 +4033,9 @@
           "id": {
             "type": "string"
           },
+          "mandatory": {
+            "type": "boolean"
+          },
           "static_anchor": {
             "oneOf": [
               {
@@ -4057,6 +4095,50 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          }
+        }
+      },
+      "UnplacedTaskBody": {
+        "type": "object",
+        "required": [
+          "task_id",
+          "summary",
+          "reason",
+          "deferred_by_task_refs",
+          "affected_dependent_task_refs",
+          "explanation",
+          "safe_alternatives"
+        ],
+        "properties": {
+          "affected_dependent_task_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "deferred_by_task_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "explanation": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "safe_alternatives": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SafeAlternativeBody"
+            }
+          },
+          "summary": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
           }
         }
       },
