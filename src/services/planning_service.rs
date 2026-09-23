@@ -123,6 +123,7 @@ pub async fn generate(
                 let (risk_report, plan_quality) = planning_analysis::analyze(
                     state.inner().store.pool(),
                     PlanningAnalysisInput {
+                        unplaced_tasks: &unplaced_tasks,
                         plan_ref: &canonical_plan_id,
                         selected_candidate: Some(&selected_candidate),
                         legitimization: legitimization.as_ref(),
@@ -172,6 +173,7 @@ pub async fn generate(
                 let (risk_report, _plan_quality) = planning_analysis::analyze(
                     state.inner().store.pool(),
                     PlanningAnalysisInput {
+                        unplaced_tasks: &unplaced_tasks,
                         plan_ref: &planning_request.request_id,
                         selected_candidate: None,
                         legitimization: None,

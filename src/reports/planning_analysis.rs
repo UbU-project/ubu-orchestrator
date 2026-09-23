@@ -7,7 +7,7 @@ use ubu_core::UbuTimestamp;
 
 use crate::api::planning::{
     DiagnosticBody, LegitimizationReportBody, PlanCandidateBody, PlanningRequestBody,
-    ScheduledTaskBody,
+    ScheduledTaskBody, UnplacedTaskBody,
 };
 use crate::api::reports::{
     CheckpointCoverage, FailurePattern, HumanCompletePlanQualityResponse, PostPlanStateDelta,
@@ -24,6 +24,7 @@ pub struct PlanningAnalysisInput<'a> {
     pub selected_candidate: Option<&'a PlanCandidateBody>,
     pub legitimization: Option<&'a LegitimizationReportBody>,
     pub diagnostics: &'a [DiagnosticBody],
+    pub unplaced_tasks: &'a [UnplacedTaskBody],
     pub request: &'a PlanningRequestBody,
 }
 
@@ -108,6 +109,12 @@ fn derive_reports(
     };
 
     let mut findings = Vec::new();
+    for entry in input.unplaced_tasks {
+        findings.push(RiskFinding {
+            category: RiskCategory::UnplacedWork, severity: RiskLevel::Medium, blocking: false,
+            detail: entry.explanation.clone(), subject_ref: Some(entry.task_id.clone()),
+        });
+    }
     for diagnostic in input.diagnostics.iter().filter(|d| matches!(d.code.as_str(), "mandatory_occurrence_unplaceable" | "routine_occurrence_overlaps_commitment" | "routine_occurrences_overlap")) {
         findings.push(RiskFinding { category: RiskCategory::RoutineTriage, severity: RiskLevel::Medium, blocking: false, detail: diagnostic.message.clone(), subject_ref: diagnostic.message.split('`').nth(1).map(str::to_owned) });
     }
@@ -652,6 +659,7 @@ mod tests {
         };
         let (risk, quality) = derive_reports(
             PlanningAnalysisInput {
+                unplaced_tasks: &[],
                 plan_ref: "plan",
                 selected_candidate: Some(&candidate),
                 legitimization: None,
@@ -689,6 +697,7 @@ mod tests {
         };
         let (_, quality) = derive_reports(
             PlanningAnalysisInput {
+                unplaced_tasks: &[],
                 plan_ref: "plan",
                 selected_candidate: Some(&candidate),
                 legitimization: None,
@@ -728,6 +737,7 @@ mod tests {
 
         let (risk, _) = derive_reports(
             PlanningAnalysisInput {
+                unplaced_tasks: &[],
                 plan_ref: "request",
                 selected_candidate: None,
                 legitimization: None,
