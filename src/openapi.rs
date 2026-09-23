@@ -97,6 +97,8 @@ use utoipa::OpenApi;
         crate::api::planning::SemiLegitimizationSummaryBody,
         crate::api::planning::ScheduledTaskBody,
         crate::api::planning::DiagnosticBody,
+        crate::api::planning::UnplacedTaskBody,
+        crate::api::planning::SafeAlternativeBody,
         crate::api::recalculation::RecalculationRequest,
         crate::api::recalculation::RecalculationTriggerTypeBody,
         crate::api::recalculation::ObjectRefBody,

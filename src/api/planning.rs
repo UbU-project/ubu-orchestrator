@@ -201,6 +201,8 @@ pub struct TaskSpecBody {
     pub duration: u64,
     #[serde(default = "default_task_value")]
     pub value: f64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mandatory: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_estimate: Option<DurationEstimateBody>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -298,6 +300,8 @@ pub struct AffectObservationBody {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct PlanningResponseBody {
+    pub status: String,
+    pub unplaced_tasks: Vec<UnplacedTaskBody>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub task_priorities: Vec<TaskPriorityBody>,
     pub schema_version: String,
@@ -503,6 +507,36 @@ pub struct DiagnosticBody {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct UnplacedTaskBody {
+    pub task_id: String,
+    pub summary: String,
+    pub reason: String,
+    pub deferred_by_task_refs: Vec<String>,
+    pub affected_dependent_task_refs: Vec<String>,
+    pub explanation: String,
+    pub safe_alternatives: Vec<SafeAlternativeBody>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SafeAlternativeBody {
+    pub action: String,
+    pub label: String,
+    pub requires_user_input: bool,
+    pub resulting_change_summary: String,
+}
+
+impl From<ubu_planning_core::SafeAlternative> for SafeAlternativeBody {
+    fn from(value: ubu_planning_core::SafeAlternative) -> Self {
+        Self {
+            action: serde_json::to_value(value.action).expect("serializable action").as_str().expect("action string").to_owned(),
+            label: value.label,
+            requires_user_input: value.requires_user_input,
+            resulting_change_summary: value.resulting_change_summary,
+        }
+    }
+}
+
 impl From<PlanningRequestBody> for PlanningRequest {
     fn from(value: PlanningRequestBody) -> Self {
         let tasks = value
@@ -525,6 +559,7 @@ impl From<PlanningRequestBody> for PlanningRequest {
                     .collect(),
                 value: task.value,
                 priority: 1.0,
+                mandatory: task.mandatory,
                 depends_on: task.depends_on,
                 window: task.window.map(|window| TimeWindow {
                     start: window.start,

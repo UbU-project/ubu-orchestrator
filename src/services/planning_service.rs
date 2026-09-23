@@ -29,7 +29,7 @@ use crate::api::planning::{
     PlanCandidateBody, PlanningHorizonBody, PlanningModeBody, PlanningRequestBody, PlanningResponseBody,
     ProbabilityQualityBody, RepairContextBody, RepairScopeBody, ScheduledTaskBody,
     ScoringPolicyBody, StaticAnchorBody, TaskGraphBody, TaskGraphEdgeBody, TaskSpecBody,
-    TimeWindowBody, TaskPriorityBody,
+    TimeWindowBody, TaskPriorityBody, UnplacedTaskBody,
 };
 use crate::errors::{AppError, Result};
 use crate::reports::planning_analysis::{self, PlanningAnalysisInput};
@@ -87,14 +87,26 @@ pub async fn generate(
         strategy: state.inner().planner_strategy,
     };
     add_empty_capacity_diagnostic(&planning_request, &mut diagnostics);
+    let mut kernel_unplaced = Vec::new();
     let mut candidates = if has_static_conflicts(&diagnostics) || planning_request.tasks.is_empty() {
         Vec::new()
     } else {
         let response = adapter.plan(kernel_request.clone());
+        kernel_unplaced = response.unplaced_tasks;
         diagnostics.extend(diagnostics_from_kernel(response.diagnostics));
         response.plan_candidates
     };
     diagnostics.extend(precondition_diagnostics(&blocked_tasks, &invalid_tasks));
+    let titles = task_titles(state.inner().store.pool(), &state.inner().category_palette).await?;
+    let unplaced_tasks = kernel_unplaced.iter().map(|entry| UnplacedTaskBody {
+        task_id: entry.task_ref.clone(),
+        summary: titles.get(&entry.task_ref).map_or_else(|| entry.task_ref.clone(), |t| t.title.clone()),
+        reason: serde_json::to_value(entry.reason).expect("serializable reason").as_str().expect("reason string").to_owned(),
+        deferred_by_task_refs: entry.deferred_by_task_refs.clone(),
+        affected_dependent_task_refs: entry.affected_dependent_task_refs.clone(),
+        explanation: entry.user_facing_summary.clone(),
+        safe_alternatives: entry.safe_alternatives.clone().into_iter().map(Into::into).collect(),
+    }).collect::<Vec<_>>();
     let selected_index = candidates.iter().position(|candidate| candidate.rank == 1);
     let canonical_plan_id = UbuId::new(ObjectType::Plan).to_string();
     let (plan, selected_candidate, alternatives, legitimization, risk_report, plan_quality) =
@@ -110,7 +122,6 @@ pub async fn generate(
                     full_legitimization.report,
                     planning_request.affect_warning.clone(),
                 ));
-                let titles = task_titles(state.inner().store.pool(), &state.inner().category_palette).await?;
                 let selected_candidate =
                     kernel_candidate_body(&selected, &titles, &planning_request, &direct)?;
                 let alternatives = candidates
@@ -190,6 +201,8 @@ pub async fn generate(
         };
 
     Ok(PlanningResponseBody {
+        status: if plan.is_none() { "rejected" } else if unplaced_tasks.is_empty() { "ok" } else { "partial" }.into(),
+        unplaced_tasks,
         task_priorities,
         schema_version: PLANNING_SCHEMA_VERSION.to_owned(),
         request_id: planning_request.request_id,
@@ -472,6 +485,7 @@ async fn build_request_from_store_with_context(
 
     // Resolve H using the existing fallback before applying participation rules.
     let mut task_bodies = task_rows.iter().map(|task| TaskSpecBody {
+        mandatory: false,
                 value: 1.0,        id: task.id.clone(), duration: duration_seconds(&task.payload),
         duration_estimate: None, correlation_groups: Vec::new(),
         depends_on: Vec::new(), window: None, static_anchor: None,
@@ -511,6 +525,7 @@ async fn build_request_from_store_with_context(
             if outside_horizon { continue; }
             participating.push((task, window, capacity));
             let spec = TaskSpecBody {
+                mandatory: mandatory.contains(&task.id),
                 value: 1.0,                id: task.id.clone(), duration: window.end - window.start,
                 duration_estimate: None, correlation_groups: Vec::new(),
                 depends_on: dependency_ids(&task.payload), window: Some(window.clone()),
@@ -537,6 +552,7 @@ async fn build_request_from_store_with_context(
                 } else { window.end = window.end.min(end); }
             }
             task_bodies.push(TaskSpecBody {
+                mandatory: mandatory.contains(&task.id),
                 value: 1.0,                id: task.id.clone(), duration: duration_seconds(&task.payload),
                 duration_estimate: task_duration_estimate(&task.payload)?,
                 correlation_groups: task_correlation_groups(&task.payload)?,
@@ -1166,6 +1182,7 @@ fn validate_task_models(request: &PlanningRequestBody) -> Result<()> {
                 .collect(),
             value: task.value,
             priority: 1.0,
+            mandatory: task.mandatory,
             depends_on: task.depends_on.clone(),
             window: None,
             static_anchor: None,

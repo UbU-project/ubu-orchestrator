@@ -387,7 +387,7 @@ async fn corrupt_admitted_preference_is_an_internal_error() {
 }
 
 #[tokio::test]
-async fn chunked_rescues_priority_taking_the_narrow_slot_and_greedy_still_fails() {
+async fn chunked_rescues_priority_taking_the_narrow_slot_and_greedy_omits_it() {
     for strategy in [None, Some("greedy")] {
         let mut config = ServerConfig::from_env();
         if let Some(raw) = strategy {
@@ -421,8 +421,11 @@ async fn chunked_rescues_priority_taking_the_narrow_slot_and_greedy_still_fails(
                 step(&response, &b)["start"].as_u64().unwrap() >= seconds("2026-06-10T09:10:00Z")
             );
         } else {
-            assert!(response["plan"].is_null());
-            diagnostic(&response, &a, "SkeletonFailure");
+            assert_eq!(response["status"], "partial");
+            assert!(response["unplaced_tasks"].as_array().unwrap().iter().any(|u| u["task_id"] == a));
+            assert!(response["plan"].is_object(), "{response}");
+            assert!(response["plan"]["steps"].as_array().unwrap().iter().all(|s| s["task_id"] != a));
+            assert_eq!(step(&response, &b)["task_id"], b);
         }
     }
 }
@@ -458,8 +461,9 @@ async fn recalculation_uses_configured_strategy_after_priority_changes() {
                 step(&response, &b)["start"].as_u64().unwrap() >= seconds("2026-06-10T09:10:00Z")
             );
         } else {
-            assert!(response["plan"].is_null());
-            diagnostic(&response, &a, "SkeletonFailure");
+            assert!(response["plan"].is_object(), "{response}");
+            assert!(response["plan"]["steps"].as_array().unwrap().iter().all(|s| s["task_id"] != a));
+            assert_eq!(step(&response, &b)["task_id"], b);
         }
     }
 }
