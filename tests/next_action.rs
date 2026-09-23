@@ -468,3 +468,162 @@ async fn json_body(response: axum::response::Response) -> Value {
         .to_bytes();
     serde_json::from_slice(&bytes).expect("json")
 }
+
+#[tokio::test]
+async fn calendar_steps_over_completed_and_skipped_tasks_without_writing() {
+    async fn action(state: &AppState, id: &str, action: &str) {
+        let response = ubu_orchestrator::build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/task/{id}/action"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({"schema_version":"ubu.orchestrator.task_action.v1","action":action})
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "{}",
+            json_body(response).await
+        );
+    }
+    async fn footprint(state: &AppState) -> (Vec<String>, i64, i64) {
+        let pool = state.inner().store.pool();
+        let plans = sqlx::query_scalar("SELECT payload_json FROM plans ORDER BY id")
+            .fetch_all(pool)
+            .await
+            .unwrap();
+        let logs = sqlx::query_scalar("SELECT count(*) FROM logs")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        let mutations = sqlx::query_scalar("SELECT count(*) FROM mutation_envelopes")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        (plans, logs, mutations)
+    }
+    let state = test_state().await;
+    let first = admit_task(&state, "First", None, None, Vec::new(), true, "first").await;
+    let second = admit_task(&state, "Second", None, None, Vec::new(), true, "second").await;
+    let third = admit_task(&state, "Third", None, None, Vec::new(), true, "third").await;
+    let outside = admit_task(
+        &state,
+        "Outside Plan",
+        None,
+        Some(0),
+        Vec::new(),
+        true,
+        "outside",
+    )
+    .await;
+    // The recorded skip API requires an occurrence; admit synthetic occurrence metadata.
+    let objective = admit_objective(&state, "Synthetic routine").await;
+    let row = queries::get_current_state(state.inner().store.pool(), &second)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut payload: Value = serde_json::from_str(&row.payload_json).unwrap();
+    payload["occurrence"] = json!({"routine_objective_id":objective,"local_date":"1970-01-01","key":format!("{objective}/s1/1970-01-01T00:03:20/static/t1")});
+    let now = UbuTimestamp::now_utc();
+    let envelope = state
+        .envelope_for(
+            [(
+                UbuId::parse(&second).unwrap(),
+                ubu_core::VersionRef::Version(row.version as u64),
+            )]
+            .into_iter()
+            .collect(),
+            ubu_core::AuthoritySource::User,
+            now,
+        )
+        .unwrap();
+    queries::admit_object(
+        state.inner().store.pool(),
+        &envelope,
+        NewObjectRecord {
+            id: second.clone(),
+            object_type: row.object_type,
+            version: row.version,
+            status: row.status,
+            compartment_label: row.compartment_label,
+            payload,
+            created_at: row.created_at,
+            updated_at: now.to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    store_plan(
+        &state,
+        vec![(&third, 300, 330), (&first, 100, 130), (&second, 200, 230)],
+        "passed",
+        "enforce",
+        None,
+    )
+    .await;
+    action(&state, &first, "complete").await;
+    action(&state, &second, "skip").await;
+    let before = footprint(&state).await;
+    let r = next_action_body(state.clone()).await;
+    assert_eq!(r["recommendation"]["task_id"], third);
+    assert_ne!(r["recommendation"]["task_id"], outside);
+    assert_eq!(
+        r["recommendation"]["selection"]["rule"],
+        "legitimized_calendar_first_placement"
+    );
+    assert!(r["diagnostics"].as_array().unwrap().is_empty());
+    assert!(r["recommendation"]["explanation"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("selected the first actionable Task placement"));
+    assert_eq!(before, footprint(&state).await);
+    action(&state, &third, "complete").await;
+    let before = footprint(&state).await;
+    let r = next_action_body(state.clone()).await;
+    assert!(r["recommendation"].is_null());
+    assert_eq!(r["diagnostics"].as_array().unwrap().len(), 1);
+    assert_eq!(r["diagnostics"][0]["code"], "no_ready_task");
+    assert_eq!(r["diagnostics"][0]["blocked_task_count"], 3);
+    assert_eq!(
+        r["diagnostics"][0]["sampled_task_ids"],
+        json!([first, second, third])
+    );
+    assert_eq!(
+        r["diagnostics"][0]["message"],
+        "the current legitimized Calendar has no remaining placement for an active Task"
+    );
+    assert_eq!(before, footprint(&state).await);
+    // Duplicate placements count once; unknown admitted IDs count as blocked,
+    // with no more than five samples in placement order.
+    let missing: Vec<_> = (0..6)
+        .map(|_| UbuId::new(ObjectType::Task).to_string())
+        .collect();
+    let mut placements = vec![
+        (first.as_str(), 100, 130),
+        (first.as_str(), 140, 160),
+        (second.as_str(), 200, 230),
+        (third.as_str(), 300, 330),
+    ];
+    placements.extend(
+        missing
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (id.as_str(), 400 + i as u64 * 100, 430 + i as u64 * 100)),
+    );
+    store_plan(&state, placements, "passed", "enforce", None).await;
+    let before = footprint(&state).await;
+    let r = next_action_body(state.clone()).await;
+    assert_eq!(r["diagnostics"][0]["blocked_task_count"], 9);
+    assert_eq!(
+        r["diagnostics"][0]["sampled_task_ids"],
+        json!([first, second, third, missing[0], missing[1]])
+    );
+    assert_eq!(before, footprint(&state).await);
+}

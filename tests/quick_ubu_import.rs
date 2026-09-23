@@ -322,3 +322,226 @@ async fn concurrent_reimports_share_source_identity() {
     );
     assert_eq!(ledger(&state).await, 12);
 }
+
+fn daily(n: u8, title: &str, start: &str, duration: u64) -> Value {
+    json!({"id":uid(n),"title":title,"recurrence":"Daily","start_time":start,"duration":[duration,0],"dynamic":false,"transparent":false,"reminders":[0],"after":[]})
+}
+fn routine_snapshot(routines: Vec<Value>) -> Value {
+    let routines: serde_json::Map<String, Value> = routines
+        .into_iter()
+        .map(|r| (r["id"].as_str().unwrap().to_owned(), r))
+        .collect();
+    json!({"snapshot_version":1,"store":{"routines":routines,"tasks":{},"objectives":{},"bundles":{},"preferences":[]},"task_origins":{}})
+}
+async fn rejected(state: &AppState, snapshot: &Value, dry_run: bool) -> Value {
+    let file = SnapshotFile::new(&snapshot.to_string());
+    let (status, body) = post(state, json!({"snapshot_path":file.0,"dry_run":dry_run})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|d| d["code"] == "overlapping_routines"),
+        "{body}"
+    );
+    body
+}
+#[tokio::test]
+async fn overlapping_routines_reject_atomically_with_grouped_details() {
+    let state = state().await;
+    let snapshot = routine_snapshot(vec![
+        daily(41, "Morning A", "07:00:00", 1800),
+        daily(42, "Morning B", "07:15:00", 600),
+    ]);
+    let before: i64 = sqlx::query_scalar("SELECT count(*) FROM objects")
+        .fetch_one(state.inner().store.pool())
+        .await
+        .unwrap();
+    let before_ledger = ledger(&state).await;
+    let response = rejected(&state, &snapshot, false).await;
+    println!(
+        "P1B19A_REJECTION_BEGIN\n{}\nP1B19A_REJECTION_END",
+        serde_json::to_string_pretty(&response).unwrap()
+    );
+    assert_eq!(response["error"],"1 overlapping routine pair in 1 group; nothing was imported. Routines must not overlap: stagger their start times, shorten one, or make one transparent.");
+    assert_eq!(response["diagnostics"].as_array().unwrap().len(), 1);
+    let message = response["diagnostics"][0]["message"].as_str().unwrap();
+    assert!(message.starts_with("Routines overlap each other, first 2026-09-22:"));
+    for expected in [
+        uid(41),
+        uid(42),
+        "(Morning A) 07:00:00-07:30:00".into(),
+        "(Morning B) 07:15:00-07:25:00".into(),
+        "(1 pair, up to 366 dates in the next year)".into(),
+    ] {
+        assert!(message.contains(&expected), "{message}");
+    }
+    rejected(&state, &snapshot, true).await;
+    let after: i64 = sqlx::query_scalar("SELECT count(*) FROM objects")
+        .fetch_one(state.inner().store.pool())
+        .await
+        .unwrap();
+    assert_eq!(before, after);
+    assert_eq!(before_ledger, ledger(&state).await);
+    // A complete graph of seven routines is one group, not 21 user-facing causes.
+    let clique = routine_snapshot(
+        (50..57)
+            .map(|n| daily(n, "Shared time", "08:05:00", 600))
+            .collect(),
+    );
+    let r = rejected(&state, &clique, false).await;
+    assert!(r["error"]
+        .as_str()
+        .unwrap()
+        .starts_with("21 overlapping routine pairs in 1 group;"));
+    assert_eq!(r["diagnostics"].as_array().unwrap().len(), 1);
+    // One self-overlap and a self-overlap inside a larger component use distinct wording.
+    let marathon = daily(60, "Marathon", "09:00:00", 36 * 3600);
+    let r = rejected(&state, &routine_snapshot(vec![marathon.clone()]), false).await;
+    assert!(r["diagnostics"][0]["message"]
+        .as_str()
+        .unwrap()
+        .starts_with(&format!(
+            "Routine `{}` (Marathon) 09:00:00-21:00:00 runs into its own next occurrence",
+            uid(60)
+        )));
+    let r = rejected(
+        &state,
+        &routine_snapshot(vec![marathon, daily(61, "Chore", "10:00:00", 600)]),
+        false,
+    )
+    .await;
+    assert!(r["diagnostics"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains(&format!(
+            " ; `{}` (Marathon) also runs into its own next occurrence",
+            uid(60)
+        )));
+    // The report is bounded at 25 groups plus the omitted-group count.
+    let groups = routine_snapshot(
+        (0..26)
+            .flat_map(|i| {
+                let start = format!("{:02}:{:02}:00", i / 2, (i % 2) * 30);
+                vec![
+                    daily(100 + i * 2, "Pair A", &start, 60),
+                    daily(101 + i * 2, "Pair B", &start, 60),
+                ]
+            })
+            .collect(),
+    );
+    let r = rejected(&state, &groups, false).await;
+    assert!(r["error"]
+        .as_str()
+        .unwrap()
+        .starts_with("26 overlapping routine pairs in 26 groups;"));
+    assert_eq!(r["diagnostics"].as_array().unwrap().len(), 26);
+    assert_eq!(
+        r["diagnostics"][25]["message"],
+        "and 1 more overlapping group"
+    );
+}
+#[tokio::test]
+async fn touching_transparent_and_shared_planned_ranges_import() {
+    let state = state().await;
+    let mut transparent = daily(44, "Transparent", "07:10:00", 600);
+    transparent["transparent"] = json!(true);
+    let mut planned_a = daily(45, "Planned A", "07:10:00", 300);
+    planned_a["dynamic"] = json!(true);
+    planned_a["latest_tod"] = json!("07:30:00");
+    let mut planned_b = planned_a.clone();
+    planned_b["id"] = json!(uid(46));
+    planned_b["title"] = json!("Planned B");
+    let snapshot = routine_snapshot(vec![
+        daily(41, "A", "06:30:00", 1800),
+        daily(42, "B", "07:00:00", 1800),
+        daily(43, "C", "07:30:00", 600),
+        transparent,
+        planned_a,
+        planned_b,
+    ]);
+    counts(&import(&state, &snapshot, false).await, "routines", 6, 0, 0);
+}
+#[tokio::test]
+async fn gate_checks_stale_live_routines_and_replaces_by_objective_id() {
+    let state = state().await;
+    let a = daily(41, "Stored routine", "07:00:00", 1800);
+    import(&state, &routine_snapshot(vec![a.clone()]), false).await;
+    let old = object(&state, &uid(41)).await;
+    let id = old["id"].as_str().unwrap();
+    let b = daily(42, "New routine", "07:15:00", 600);
+    let response = rejected(&state, &routine_snapshot(vec![b.clone()]), false).await;
+    let message = response["diagnostics"][0]["message"].as_str().unwrap();
+    assert!(message.contains(&format!("`{id}` (Stored routine)")));
+    assert!(message.contains(&format!("`{}` (New routine)", uid(42))));
+    assert_eq!(object(&state, &uid(41)).await, old);
+    let mut a = a;
+    a["start_time"] = json!("07:30:00");
+    let fixed = routine_snapshot(vec![a, b]);
+    let r = import(&state, &fixed, false).await;
+    counts(&r, "routines", 1, 1, 0);
+    assert_eq!(object(&state, &uid(41)).await["id"], old["id"]);
+    // A mainline-diverged Objective must not be revived by the gate's prospective set.
+    let row = ubu_store::queries::get_current_state(state.inner().store.pool(), id)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut p: Value = serde_json::from_str(&row.payload_json).unwrap();
+    p["status"] = json!("satisfied");
+    let now = UbuTimestamp::parse(NOW).unwrap();
+    let env = state
+        .envelope_for(
+            [(
+                UbuId::parse(id).unwrap(),
+                ubu_core::VersionRef::Version(row.version as u64),
+            )]
+            .into_iter()
+            .collect(),
+            ubu_core::AuthoritySource::User,
+            now,
+        )
+        .unwrap();
+    ubu_store::queries::admit_object(
+        state.inner().store.pool(),
+        &env,
+        ubu_store::models::object_record::NewObjectRecord {
+            id: id.into(),
+            object_type: row.object_type,
+            version: row.version,
+            status: "satisfied".into(),
+            compartment_label: row.compartment_label,
+            payload: p,
+            created_at: row.created_at,
+            updated_at: now.to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    let mut snapshot = fixed;
+    snapshot["store"]["routines"][uid(41)]["start_time"] = json!("07:15:00");
+    let r = import(&state, &snapshot, false).await;
+    assert!(r["diverged"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["id"] == id));
+    assert_eq!(object(&state, &uid(41)).await["status"], "satisfied");
+}
+#[tokio::test]
+async fn dst_only_overlap_imports_but_ordinary_overnight_overlap_rejects() {
+    let state = state().await;
+    let mut snapshot = routine_snapshot(vec![
+        daily(41, "Sleep", "22:30:00", 8 * 3600),
+        daily(42, "Morning chore", "07:00:00", 600),
+    ]);
+    counts(&import(&state, &snapshot, false).await, "routines", 2, 0, 0);
+    let before = object(&state, &uid(42)).await;
+    snapshot["store"]["routines"][uid(42)]["start_time"] = json!("06:29:00");
+    let r = rejected(&state, &snapshot, false).await;
+    assert!(r["diagnostics"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("364 dates"));
+    assert_eq!(object(&state, &uid(42)).await, before);
+}

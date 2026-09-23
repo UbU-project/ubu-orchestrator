@@ -727,3 +727,91 @@ async fn f10_late_event_and_sleep_keep_true_windows_and_reserve_whole_night() {
     assert!(diagnostics(&r, "static_task_collision").is_empty());
     no_blocking(&r);
 }
+
+#[tokio::test]
+async fn directly_admitted_overlap_cluster_keeps_true_windows_and_blocks_its_union() {
+    let state = state().await;
+    let now = UbuTimestamp::parse(NOW).unwrap();
+    let mut ids = Vec::new();
+    for (title, start, seconds) in [
+        ("Direct A", "10:00:00", 1800),
+        ("Direct B", "10:15:00", 600),
+        ("Direct C", "10:25:00", 1200),
+    ] {
+        let id = UbuId::new(ObjectType::Objective);
+        let p = json!({"id":id,"title":title,"status":"active","mode":"evergreen","recurrence":{"timezone":"America/New_York","rule":{"kind":"daily"},"schedule_version":1},"routine_instance_template":{"title":title,"nominal_start":start,"placement":"static","duration_estimate":{"type":"fixed","seconds":seconds},"template_version":1},"provenance":{"created_at":now,"authority_source":"user"}});
+        let env = state
+            .envelope_for(
+                [(id.clone(), VersionRef::Absent)].into_iter().collect(),
+                AuthoritySource::User,
+                now,
+            )
+            .unwrap();
+        queries::admit_object(
+            state.inner().store.pool(),
+            &env,
+            NewObjectRecord {
+                id: id.to_string(),
+                object_type: "Objective".into(),
+                version: 1,
+                status: "active".into(),
+                compartment_label: "test".into(),
+                payload: p,
+                created_at: now.to_string(),
+                updated_at: now.to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        ids.push(id.to_string());
+    }
+    // Include unrelated work to prove the portion after the carrier ends stays busy.
+    let task = UbuId::new(ObjectType::Task);
+    let env = state
+        .envelope_for(
+            [(task.clone(), VersionRef::Absent)].into_iter().collect(),
+            AuthoritySource::User,
+            now,
+        )
+        .unwrap();
+    queries::admit_object(state.inner().store.pool(),&env,NewObjectRecord{id:task.to_string(),object_type:"Task".into(),version:1,status:"active".into(),compartment_label:"test".into(),payload:json!({"id":task,"title":"Unrelated work","status":"active","duration_estimate":{"type":"fixed","seconds":1800},"allowed_time_range":{"earliest_start":"2026-09-22T14:00:00Z","latest_finish":"2026-09-22T16:00:00Z"},"provenance":{"created_at":now,"authority_source":"user"}}),created_at:now.to_string(),updated_at:now.to_string()}).await.unwrap();
+    let r = generate(&state).await;
+    let rows = all_occurrences(&state).await;
+    let task_ids: Vec<_> = ids
+        .iter()
+        .map(|id| {
+            rows.iter()
+                .find(|row| payload(row)["occurrence"]["routine_objective_id"] == *id)
+                .unwrap()
+                .id
+                .clone()
+        })
+        .collect();
+    for (id, start, end) in [
+        (&task_ids[0], "14:00", "14:30"),
+        (&task_ids[1], "14:15", "14:25"),
+        (&task_ids[2], "14:25", "14:45"),
+    ] {
+        let s = step(&r, id);
+        assert_window(
+            s,
+            &format!("{DAY}T{start}:00Z"),
+            &format!("{DAY}T{end}:00Z"),
+        );
+        assert_eq!(s["occupies_capacity"], true);
+    }
+    no_other_overlap(
+        &r,
+        &task_ids,
+        "2026-09-22T14:00:00Z",
+        "2026-09-22T14:45:00Z",
+    );
+    assert!(step(&r, task.as_str())["start"].as_u64().unwrap() >= sec("2026-09-22T14:45:00Z"));
+    let warnings = diagnostics(&r, "routine_occurrences_overlap");
+    assert_eq!(warnings.len(), 1);
+    for id in task_ids {
+        assert!(warnings[0]["message"].as_str().unwrap().contains(&id));
+    }
+    assert!(diagnostics(&r, "static_task_collision").is_empty());
+    no_blocking(&r);
+}
