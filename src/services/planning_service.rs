@@ -29,7 +29,7 @@ use crate::api::planning::{
     PlanCandidateBody, PlanningHorizonBody, PlanningModeBody, PlanningRequestBody, PlanningResponseBody,
     ProbabilityQualityBody, RepairContextBody, RepairScopeBody, ScheduledTaskBody,
     ScoringPolicyBody, StaticAnchorBody, TaskGraphBody, TaskGraphEdgeBody, TaskSpecBody,
-    TimeWindowBody, TaskPriorityBody, UnplacedTaskBody,
+    TimeWindowBody, TaskPriorityBody, UnplacedTaskBody, HorizonPolicyBody, CoverageBody, CoverageBoundaryBody,
 };
 use crate::errors::{AppError, Result};
 use crate::reports::planning_analysis::{self, PlanningAnalysisInput};
@@ -683,6 +683,7 @@ async fn build_request_from_store_with_context(
     Ok(StorePlanningRequest {
         task_priorities: priorities.tasks,
         request: PlanningRequestBody {
+            horizon_policy: HorizonPolicyBody::default(),
             schema_version: Some(PLANNING_SCHEMA_VERSION.to_owned()),
             request_id,
             mode,
@@ -887,7 +888,35 @@ fn kernel_candidate_body(
         .chain(direct_static_steps(direct.non_capacity, titles, false)?)
         .chain(direct_static_steps(direct.covered, titles, true)?));
 
+    let coverage = candidate.coverage.as_ref().map(|coverage| -> Result<CoverageBody> {
+        let summary = &coverage.outcome_continuation_summary;
+        Ok(CoverageBody {
+            scope: serde_json::to_value(coverage.coverage_scope).expect("serializable coverage scope").as_str().expect("scope string").to_owned(),
+            estimate: coverage.coverage_estimate,
+            uncovered_mass: coverage.uncovered_mass_estimate,
+            threshold_used: coverage.coverage_threshold_used,
+            below_threshold: coverage.coverage_below_threshold,
+            confidence_low: coverage.coverage_confidence.lower,
+            confidence_high: coverage.coverage_confidence.upper,
+            n_rollouts: coverage.coverage_confidence.n_rollouts,
+            quantization_rule: summary.quantization_rule.clone(),
+            covered_outcome_count: summary.covered_outcome_count,
+            uncovered_outcome_count: summary.uncovered_outcome_count,
+            boundaries: summary.boundaries.iter().map(|boundary| {
+                Ok(CoverageBoundaryBody {
+                    task_id: boundary.boundary_task_ref.clone(),
+                    summary: titles.get(&boundary.boundary_task_ref).map_or_else(|| boundary.boundary_task_ref.clone(), |display| display.title.clone()),
+                    start: boundary.boundary_start,
+                    start_at: crate::planning_time::timestamp_at(boundary.boundary_start)?,
+                    covered_outcome_count: boundary.covered_outcome_count,
+                    uncovered_outcome_count: boundary.uncovered_outcome_count,
+                    uncovered_mass: boundary.uncovered_mass,
+                })
+            }).collect::<Result<Vec<_>>>()?,
+        })
+    }).transpose()?;
     Ok(PlanCandidateBody {
+        coverage,
         candidate_id: candidate.candidate_id.clone(),
         rank: candidate.rank,
         candidate_role: candidate_role_body(candidate.candidate_role),
@@ -1842,6 +1871,7 @@ impl From<StaticAnchorBody> for ubu_planning_core::StaticAnchor {
 pub fn repair_kernel_request(request: &PlanningRequestBody) -> RepairRequest {
     let planning_request = PlanningRequest::from(request.clone());
     RepairRequest {
+        horizon_policy: planning_request.horizon_policy,
         schema_version: request.schema_version.clone(),
         request_id: request.request_id.clone(),
         candidate: KernelPlan {

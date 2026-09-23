@@ -1572,6 +1572,112 @@
         },
         "additionalProperties": false
       },
+      "CoverageBody": {
+        "type": "object",
+        "required": [
+          "scope",
+          "estimate",
+          "uncovered_mass",
+          "threshold_used",
+          "below_threshold",
+          "confidence_low",
+          "confidence_high",
+          "n_rollouts",
+          "quantization_rule",
+          "covered_outcome_count",
+          "uncovered_outcome_count",
+          "boundaries"
+        ],
+        "properties": {
+          "below_threshold": {
+            "type": "boolean"
+          },
+          "boundaries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CoverageBoundaryBody"
+            }
+          },
+          "confidence_high": {
+            "type": "number",
+            "format": "double"
+          },
+          "confidence_low": {
+            "type": "number",
+            "format": "double"
+          },
+          "covered_outcome_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "estimate": {
+            "type": "number",
+            "format": "double"
+          },
+          "n_rollouts": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "quantization_rule": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "threshold_used": {
+            "type": "number",
+            "format": "double"
+          },
+          "uncovered_mass": {
+            "type": "number",
+            "format": "double"
+          },
+          "uncovered_outcome_count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "CoverageBoundaryBody": {
+        "type": "object",
+        "required": [
+          "task_id",
+          "summary",
+          "start",
+          "start_at",
+          "covered_outcome_count",
+          "uncovered_outcome_count",
+          "uncovered_mass"
+        ],
+        "properties": {
+          "covered_outcome_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "start": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "start_at": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "uncovered_mass": {
+            "type": "number",
+            "format": "double"
+          },
+          "uncovered_outcome_count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
       "DiagnosticBody": {
         "type": "object",
         "required": [
@@ -1767,6 +1873,20 @@
           },
           "version": {
             "type": "string"
+          }
+        }
+      },
+      "HorizonPolicyBody": {
+        "type": "object",
+        "properties": {
+          "branch_coverage_target": {
+            "type": "number",
+            "format": "double"
+          },
+          "reactive_horizon_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -2420,6 +2540,16 @@
           "candidate_role": {
             "$ref": "#/components/schemas/CandidateRoleBody"
           },
+          "coverage": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CoverageBody"
+              }
+            ]
+          },
           "display_probability": {
             "type": [
               "number",
@@ -2532,6 +2662,9 @@
           },
           "compute_budget": {
             "$ref": "#/components/schemas/ComputeBudgetBody"
+          },
+          "horizon_policy": {
+            "$ref": "#/components/schemas/HorizonPolicyBody"
           },
           "mode": {
             "$ref": "#/components/schemas/PlanningModeBody"

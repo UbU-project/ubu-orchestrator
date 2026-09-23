@@ -603,6 +603,7 @@ mod tests {
 
     fn candidate(steps: Vec<ScheduledTaskBody>, margin: f64) -> PlanCandidateBody {
         PlanCandidateBody {
+            coverage: None,
             candidate_id: "candidate".to_owned(),
             rank: 1,
             candidate_role: CandidateRoleBody::HighestUtility,

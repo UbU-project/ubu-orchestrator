@@ -45,6 +45,8 @@ pub struct PlanningHorizonBody {
 /// retain the caller's unit-agnostic kernel coordinates.
 pub struct PlanningRequestBody {
     #[serde(default)]
+    pub horizon_policy: HorizonPolicyBody,
+    #[serde(default)]
     pub schema_version: Option<String>,
     pub request_id: String,
     #[serde(default = "default_planning_mode")]
@@ -363,6 +365,8 @@ pub struct PlanBody {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct PlanCandidateBody {
+    #[serde(default)]
+    pub coverage: Option<CoverageBody>,
     pub candidate_id: String,
     pub rank: usize,
     pub candidate_role: CandidateRoleBody,
@@ -537,6 +541,51 @@ impl From<ubu_planning_core::SafeAlternative> for SafeAlternativeBody {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct HorizonPolicyBody {
+    #[serde(default = "default_reactive_horizon_seconds")]
+    pub reactive_horizon_seconds: u64,
+    #[serde(default = "default_branch_coverage_target")]
+    pub branch_coverage_target: f64,
+}
+fn default_reactive_horizon_seconds() -> u64 { ubu_planning_core::DEFAULT_REACTIVE_HORIZON_SECONDS }
+fn default_branch_coverage_target() -> f64 { ubu_planning_core::DEFAULT_BRANCH_COVERAGE_TARGET }
+impl Default for HorizonPolicyBody {
+    fn default() -> Self {
+        Self { reactive_horizon_seconds: default_reactive_horizon_seconds(), branch_coverage_target: default_branch_coverage_target() }
+    }
+}
+impl From<HorizonPolicyBody> for ubu_planning_core::HorizonPolicy {
+    fn from(value: HorizonPolicyBody) -> Self {
+        Self { reactive_horizon_seconds: value.reactive_horizon_seconds, branch_coverage_target: value.branch_coverage_target }
+    }
+}
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CoverageBody {
+    pub scope: String,
+    pub estimate: f64,
+    pub uncovered_mass: f64,
+    pub threshold_used: f64,
+    pub below_threshold: bool,
+    pub confidence_low: f64,
+    pub confidence_high: f64,
+    pub n_rollouts: usize,
+    pub quantization_rule: String,
+    pub covered_outcome_count: usize,
+    pub uncovered_outcome_count: usize,
+    pub boundaries: Vec<CoverageBoundaryBody>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CoverageBoundaryBody {
+    pub task_id: String,
+    pub summary: String,
+    pub start: u64,
+    pub start_at: String,
+    pub covered_outcome_count: usize,
+    pub uncovered_outcome_count: usize,
+    pub uncovered_mass: f64,
+}
+
 impl From<PlanningRequestBody> for PlanningRequest {
     fn from(value: PlanningRequestBody) -> Self {
         let tasks = value
@@ -582,6 +631,7 @@ impl From<PlanningRequestBody> for PlanningRequest {
                     .unwrap_or_else(|| PLANNING_SCHEMA_VERSION.to_owned()),
             ),
             request_id: value.request_id,
+            horizon_policy: value.horizon_policy.into(),
             mode: planning_mode(value.mode),
             rng_seed: value.rng_seed.unwrap_or_default(),
             n_rollouts: value.compute_budget.n_rollouts.min(MAX_N_ROLLOUTS),
