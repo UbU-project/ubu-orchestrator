@@ -285,3 +285,137 @@ pub fn instantiate(defs: &[RoutineDefinition], start: u64, end: u64) -> Instanti
     }
     out
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OverlapSide {
+    pub objective_id: UbuId,
+    pub window: (String, String),
+    pub local_date: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoutineOverlap {
+    pub first: OverlapSide,
+    pub second: OverlapSide,
+    pub dates: usize,
+    pub self_overlap: bool,
+    pub dst_only: bool,
+}
+fn local_instant(seconds: u64, zone: Tz) -> Option<chrono::NaiveDateTime> {
+    i64::try_from(seconds)
+        .ok()
+        .and_then(|s| chrono::DateTime::<Utc>::from_timestamp(s, 0))
+        .map(|t| t.with_timezone(&zone).naive_local())
+}
+fn overlap_side(occurrence: &Occurrence, zone: Tz) -> OverlapSide {
+    let clock = |seconds| {
+        local_instant(seconds, zone)
+            .map(|t| t.format("%H:%M:%S").to_string())
+            .unwrap_or_else(|| "out-of-range".into())
+    };
+    OverlapSide {
+        objective_id: occurrence.objective_id.clone(),
+        window: (clock(occurrence.start), clock(occurrence.end)),
+        local_date: occurrence.local_date.clone(),
+    }
+}
+fn only_dst(first: &Occurrence, second: &Occurrence, first_zone: Tz, second_zone: Tz) -> bool {
+    if first_zone != second_zone {
+        return false;
+    }
+    // Use actual, already-lowered starts, with scalar duration on the local clock.
+    let nominal = |o: &Occurrence, zone| {
+        let start = local_instant(o.start, zone)?;
+        let duration = i64::try_from(o.template.duration_estimate.scalar_seconds())
+            .ok()
+            .and_then(chrono::TimeDelta::try_seconds)?;
+        Some((start, start.checked_add_signed(duration)?))
+    };
+    match (nominal(first, first_zone), nominal(second, second_zone)) {
+        (Some((a, b)), Some((c, d))) => b <= c || d <= a,
+        _ => false, // Unrepresentable local spans cannot earn the DST exemption.
+    }
+}
+
+/// Check capacity Static occurrences starting in the span. Retain one date per
+/// unordered Objective pair rather than a potentially year-sized date set.
+pub fn static_overlaps(
+    defs: &[RoutineDefinition],
+    start: u64,
+    end: u64,
+) -> (Vec<RoutineOverlap>, Vec<DiagnosticBody>) {
+    let expanded = instantiate(defs, start, end);
+    let zones: BTreeMap<_, _> = defs
+        .iter()
+        .filter_map(|d| {
+            d.schedule
+                .timezone
+                .parse::<Tz>()
+                .ok()
+                .map(|zone| (d.objective_id.clone(), zone))
+        })
+        .collect();
+    let mut occurrences: Vec<_> = expanded
+        .occurrences
+        .iter()
+        .filter(|o| {
+            o.start >= start
+                && o.start < end
+                && o.template.placement == ubu_core::core::RoutinePlacement::Static
+                && o.template.occupies_capacity
+        })
+        .collect();
+    occurrences.sort_by(|a, b| (a.start, a.end, &a.key).cmp(&(b.start, b.end, &b.key)));
+    let mut open: Vec<&Occurrence> = Vec::new();
+    let mut pairs = BTreeMap::<(UbuId, UbuId), (RoutineOverlap, String)>::new();
+    for current in occurrences {
+        open.retain(|other| other.end > current.start);
+        for &earlier in &open {
+            let key = if earlier.objective_id <= current.objective_id {
+                (earlier.objective_id.clone(), current.objective_id.clone())
+            } else {
+                (current.objective_id.clone(), earlier.objective_id.clone())
+            };
+            let (pair, last_date) = pairs.entry(key).or_insert_with(|| {
+                (
+                    RoutineOverlap {
+                        first: overlap_side(earlier, zones[&earlier.objective_id]),
+                        second: overlap_side(current, zones[&current.objective_id]),
+                        dates: 0,
+                        self_overlap: earlier.objective_id == current.objective_id,
+                        dst_only: true,
+                    },
+                    String::new(),
+                )
+            });
+            // Long multi-day occurrences can revisit older open instances; never
+            // count their dates again after a newer date has already been seen.
+            if earlier.local_date > *last_date {
+                pair.dates += 1;
+                last_date.clone_from(&earlier.local_date);
+            }
+            if pair.dst_only {
+                pair.dst_only = only_dst(
+                    earlier,
+                    current,
+                    zones[&earlier.objective_id],
+                    zones[&current.objective_id],
+                );
+            }
+        }
+        open.push(current);
+    }
+    let mut overlaps: Vec<_> = pairs.into_values().map(|(pair, _)| pair).collect();
+    overlaps.sort_by(|a, b| {
+        (
+            &a.first.local_date,
+            &a.first.objective_id,
+            &a.second.objective_id,
+        )
+            .cmp(&(
+                &b.first.local_date,
+                &b.first.objective_id,
+                &b.second.objective_id,
+            ))
+    });
+    (overlaps, expanded.diagnostics)
+}

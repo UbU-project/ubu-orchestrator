@@ -210,3 +210,96 @@ fn cycles_include_downstream_and_unknown_zones() {
     assert!(out.occurrences.is_empty());
     assert_eq!(out.diagnostics[0].code, "routine_timezone_unknown");
 }
+
+fn overlaps(
+    defs: &[RoutineDefinition],
+    start: &str,
+) -> Vec<ubu_orchestrator::services::routine_instantiation::RoutineOverlap> {
+    let start = sec(start);
+    ubu_orchestrator::services::routine_instantiation::static_overlaps(
+        defs,
+        start,
+        start + 366 * 86400,
+    )
+    .0
+}
+#[test]
+fn static_overlap_dates_windows_and_start_filter() {
+    let a = def("Morning A", "07:00:00", None, 1800);
+    let b = def("Morning B", "07:15:00", None, 600);
+    let pairs = overlaps(&[a.clone(), b.clone()], "2026-09-22T09:00:00Z");
+    assert_eq!(pairs.len(), 1);
+    let pair = &pairs[0];
+    assert_eq!(pair.dates, 366);
+    assert!(!pair.dst_only);
+    assert!(!pair.self_overlap);
+    assert_eq!(pair.first.window, ("07:00:00".into(), "07:30:00".into()));
+    assert_eq!(pair.second.window, ("07:15:00".into(), "07:25:00".into()));
+    assert_eq!(pair.first.objective_id, a.objective_id);
+    assert_eq!(pair.second.objective_id, b.objective_id);
+    let pairs = overlaps(&[a, b], "2026-09-22T12:30:00Z");
+    assert_eq!(pairs[0].first.local_date, "2026-09-23");
+}
+#[test]
+fn touching_transparent_and_planned_routines_do_not_overlap() {
+    let a = def("A", "06:30:00", None, 1800);
+    let b = def("B", "07:00:00", None, 1800);
+    let c = def("C", "07:30:00", None, 600);
+    let mut transparent = def("Transparent", "07:10:00", None, 600);
+    transparent.template.occupies_capacity = false;
+    let planned = def("Planned", "07:10:00", Some("07:30:00"), 600);
+    assert!(overlaps(&[a, b, c, transparent, planned], "2026-09-22T09:00:00Z").is_empty());
+}
+#[test]
+fn overnight_overlap_distinguishes_dst_only_and_ordinary_local_collisions() {
+    let sleep = def("Sleep", "22:30:00", None, 8 * 3600);
+    let mut chore = def("Chore", "07:00:00", None, 600);
+    let pairs = overlaps(&[sleep.clone(), chore.clone()], "2026-09-22T09:00:00Z");
+    assert_eq!(pairs.len(), 1);
+    assert_eq!(pairs[0].dates, 1);
+    assert!(pairs[0].dst_only);
+    assert_eq!(pairs[0].first.local_date, "2027-03-13");
+    assert_eq!(pairs[0].second.local_date, "2027-03-14");
+    assert_eq!(
+        pairs[0].first.window,
+        ("22:30:00".into(), "07:30:00".into())
+    );
+    chore.template.nominal_start = "06:29:00".into();
+    let pairs = overlaps(&[sleep.clone(), chore.clone()], "2026-09-22T09:00:00Z");
+    assert!(!pairs[0].dst_only);
+    assert_eq!(pairs[0].dates, 364);
+    chore.template.nominal_start = "04:45:00".into();
+    chore.template.duration_estimate = ubu_core::core::TaskDurationEstimate::Fixed { seconds: 300 };
+    let pairs = overlaps(&[sleep, chore], "2026-09-22T09:00:00Z");
+    assert_eq!(pairs[0].dates, 366);
+    assert!(!pairs[0].dst_only);
+    assert_ne!(pairs[0].first.local_date, pairs[0].second.local_date);
+    // A transparent predecessor lowers a midnight anchor to 07:00. The DST
+    // exemption must examine that lowered start, not the template's midnight.
+    let sleep = def("Sleep", "22:30:00", None, 8 * 3600);
+    let mut predecessor = def("Floor", "06:00:00", None, 3600);
+    predecessor.template.occupies_capacity = false;
+    let mut lowered = def("Lowered", "00:00:00", None, 600);
+    after(&mut lowered, &predecessor, 0);
+    let pairs = overlaps(&[sleep, predecessor, lowered], "2026-09-22T09:00:00Z");
+    assert_eq!(pairs.len(), 1);
+    assert!(pairs[0].dst_only);
+    assert_eq!(pairs[0].second.window.0, "07:00:00");
+}
+#[test]
+fn cross_zone_and_self_overlaps_are_not_exempt() {
+    let a = def("New York", "12:00:00", None, 3600);
+    let mut b = def("London", "17:30:00", None, 600);
+    b.schedule.timezone = "Europe/London".into();
+    let pairs = overlaps(&[a, b], "2026-09-22T09:00:00Z");
+    assert_eq!(pairs.len(), 1);
+    assert!(!pairs[0].dst_only);
+    assert!(pairs[0].dates > 340);
+    let marathon = def("Marathon", "09:00:00", None, 36 * 3600);
+    let pairs = overlaps(&[marathon.clone()], "2026-09-22T09:00:00Z");
+    assert_eq!(pairs.len(), 1);
+    assert!(pairs[0].self_overlap);
+    assert_eq!(pairs[0].first.objective_id, marathon.objective_id);
+    assert_eq!(pairs[0].first.objective_id, pairs[0].second.objective_id);
+    assert!(!pairs[0].dst_only);
+}
