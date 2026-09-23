@@ -100,7 +100,11 @@ members. Covered steps keep `occupies_capacity: true`; every candidate and saved
 Plan restores the carrier's true window. Warnings identify overlapping routines
 (`routine_occurrences_overlap`) and every occurrence sharing a cluster with a
 one-off commitment (`routine_occurrence_overlaps_commitment`). Routine-definition
-overlap rejection belongs to P1B-19a. Two overlapping one-off Statics still cause
+overlap rejection now happens at import over the prospective live set, as described
+in [QUICK_UBU_IMPORT.md](QUICK_UBU_IMPORT.md). Planning's `routine_occurrences_overlap`
+is the safety net for an error state the importer refuses to create; direct store
+admission, pre-existing state, and DST-only collisions can still reach planning.
+Two overlapping one-off Statics still cause
 `static_task_collision`. Stale precedence edges between Static occurrences are
 dropped with `routine_occurrence_edge_dropped`; fixed placements remain intact.
 

@@ -73,3 +73,30 @@ nothing. Dropped-field reports can recur on an otherwise unchanged import.
 Repeated Preference source pairs map once, in source order; subsequent entries
 are reported as `invalid: duplicate preference source identity`. Concurrent
 imports sharing the application state are serialized to preserve source identity.
+
+## Routine overlap gate
+
+Before mapping Tasks or Preferences or writing anything, the importer evaluates
+the routine set the snapshot would leave live over 366 days from the planning
+clock's now. Two capacity-occupying Static occurrences overlap if their intervals
+intersect; touching endpoints are allowed. Planned ranges, transparent Statics,
+and one-off commitments are not checked. Instantiation diagnostics never reject;
+unknown zones and unevaluable Objectives are unchecked. Enablement windows that
+open beyond this one-year span are not covered.
+
+The gate includes live routines absent from this snapshot: import reports those
+as stale but never retires them. To fix an overlap with one, put that routine back
+in the snapshot at a non-overlapping time. Mapped routines replace stored ones by
+Objective ID; a mainline-diverged inactive row is never replaced or reactivated.
+
+Overlaps caused only by a DST shift are exempt when both schedules resolve to the
+same zone and their nominal local intervals never overlap. Those intervals use
+the already-after-lowered local start plus scalar duration, not the template's
+original anchor. A single ordinary local collision makes the pair an error.
+Cross-zone pairs are never exempt. Overnight and self-overlaps are checked.
+
+Rejection is HTTP 400 with `overlapping_routines` causes grouped by connected
+routines, local windows, first collision date, pair counts, and date counts.
+At most 25 groups are shown, followed by an omitted-group count when needed.
+The entire file is rejected without writes, including under `dry_run`. Stagger
+start times, shorten a routine, or make it transparent before retrying.

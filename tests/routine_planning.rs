@@ -296,8 +296,8 @@ async fn f1_routine_day_preserves_committed_time_mandatory_order_and_idempotency
         .contains(&json!(ids[&101])));
     for (n, start, end) in [
         (104, "21:30", "22:00"),
-        (105, "21:45", "21:50"),
-        (110, "21:50", "22:05"),
+        (105, "22:00", "22:05"),
+        (110, "22:05", "22:20"),
         (109, "19:30", "19:40"),
     ] {
         let s = step(&r, &ids[&n]);
@@ -312,7 +312,7 @@ async fn f1_routine_day_preserves_committed_time_mandatory_order_and_idempotency
         &r,
         &[ids[&104].clone(), ids[&105].clone(), ids[&110].clone()],
         "2026-09-22T21:30:00Z",
-        "2026-09-22T22:05:00Z",
+        "2026-09-22T22:20:00Z",
     );
     assert_window(
         step(&r, &ids[&106]),
@@ -321,8 +321,8 @@ async fn f1_routine_day_preserves_committed_time_mandatory_order_and_idempotency
     );
     assert_window(
         step(&r, &ids[&107]),
-        "2026-09-23T02:15:00Z",
-        "2026-09-23T02:20:00Z",
+        "2026-09-23T02:16:00Z",
+        "2026-09-23T02:21:00Z",
     );
     assert_eq!(step(&r, &ids[&108])["occupies_capacity"], false);
     let meeting = source(&state, 201).await.id;
@@ -341,7 +341,7 @@ async fn f1_routine_day_preserves_committed_time_mandatory_order_and_idempotency
     );
     assert!(diagnostics(&r, "static_task_collision").is_empty());
     assert!(!diagnostics(&r, "routine_occurrence_overlaps_commitment").is_empty());
-    assert_eq!(diagnostics(&r, "routine_occurrences_overlap").len(), 2);
+    assert!(diagnostics(&r, "routine_occurrences_overlap").is_empty());
     no_blocking(&r);
     assert!(r["risk_report"]["findings"]
         .as_array()

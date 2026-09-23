@@ -116,7 +116,7 @@
         "id": "00000000-0000-4000-8000-000000000105",
         "title": "Evening chore",
         "recurrence": "Daily",
-        "start_time": "17:45:00",
+        "start_time": "18:00:00",
         "duration": [
           300,
           0
@@ -132,7 +132,7 @@
         "id": "00000000-0000-4000-8000-000000000110",
         "title": "Evening tail",
         "recurrence": "Daily",
-        "start_time": "17:50:00",
+        "start_time": "18:05:00",
         "duration": [
           900,
           0
@@ -164,7 +164,7 @@
         "id": "00000000-0000-4000-8000-000000000107",
         "title": "Night chore B",
         "recurrence": "Daily",
-        "start_time": "22:15:00",
+        "start_time": "22:16:00",
         "duration": [
           300,
           0

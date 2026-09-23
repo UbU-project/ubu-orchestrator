@@ -397,6 +397,7 @@ pub async fn import(
             payload["routine_instance_template"]["after"] = json!(after);
         }
     }
+    reject_routine_overlaps(&state, &routines, &existing, now).await?;
     let mut tasks = BTreeMap::new();
     for t in snapshot.store.tasks.values() {
         match task_payload(
@@ -635,4 +636,181 @@ pub async fn import(
         }
     }
     Ok(response)
+}
+
+/// Evaluate the live set this import would leave, before mapping or writing any
+/// Tasks or Preferences. The caller already holds quick_ubu_import_lock.
+async fn reject_routine_overlaps(
+    state: &AppState,
+    routines: &BTreeMap<String, Value>,
+    existing: &BTreeMap<(String, String), (ObjectRecord, Value)>,
+    now: UbuTimestamp,
+) -> Result<()> {
+    use super::routine_instantiation::{static_overlaps, RoutineDefinition};
+    let live = super::routine_service::live_definitions(state.inner().store.pool()).await?;
+    let mut names: BTreeMap<_, _> = live
+        .titles
+        .into_iter()
+        .map(|(id, title)| {
+            let name = format!("`{id}` ({title})");
+            (id, name)
+        })
+        .collect();
+    let mut definitions = BTreeMap::new();
+    for definition in live.definitions {
+        definitions.insert(definition.objective_id.to_string(), definition);
+    }
+    for (source, payload) in routines {
+        if existing
+            .get(&(ObjectType::Objective.as_str().into(), source.clone()))
+            .is_some_and(|(row, _)| row.status != "active")
+        {
+            continue;
+        }
+        // A mapped Objective has already passed core validation. Reparse after
+        // the second-pass wiring so lowering sees the complete prospective graph.
+        let Ok(objective) = serde_json::from_value::<Objective>(payload.clone()) else {
+            continue;
+        };
+        let (Some(schedule), Some(template)) =
+            (objective.recurrence, objective.routine_instance_template)
+        else {
+            continue;
+        };
+        let id = objective.id.to_string();
+        names.insert(id.clone(), format!("`{source}` ({})", objective.title));
+        definitions.insert(
+            id,
+            RoutineDefinition {
+                objective_id: objective.id,
+                schedule,
+                template,
+            },
+        );
+    }
+    let start = u64::try_from(now.inner().unix_timestamp())
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let (pairs, _) = static_overlaps(
+        &definitions.into_values().collect::<Vec<_>>(),
+        start,
+        start.saturating_add(366 * 86400),
+    );
+    let pairs: Vec<_> = pairs.into_iter().filter(|pair| !pair.dst_only).collect();
+    if pairs.is_empty() {
+        return Ok(());
+    }
+    Err(overlap_rejection(&pairs, &names))
+}
+
+fn overlap_rejection(
+    pairs: &[super::routine_instantiation::RoutineOverlap],
+    names: &BTreeMap<String, String>,
+) -> AppError {
+    fn root(parents: &mut [usize], mut n: usize) -> usize {
+        while parents[n] != n {
+            parents[n] = parents[parents[n]];
+            n = parents[n];
+        }
+        n
+    }
+    fn count(n: usize, noun: &str) -> String {
+        format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
+    }
+    let ids: BTreeSet<_> = pairs
+        .iter()
+        .flat_map(|p| [p.first.objective_id.clone(), p.second.objective_id.clone()])
+        .collect();
+    let indices: BTreeMap<_, _> = ids.into_iter().enumerate().map(|(i, id)| (id, i)).collect();
+    let mut parents: Vec<_> = (0..indices.len()).collect();
+    for pair in pairs {
+        let a = root(&mut parents, indices[&pair.first.objective_id]);
+        let b = root(&mut parents, indices[&pair.second.objective_id]);
+        parents[a.max(b)] = a.min(b);
+    }
+    let mut components = BTreeMap::<usize, Vec<_>>::new();
+    for pair in pairs {
+        components
+            .entry(root(&mut parents, indices[&pair.first.objective_id]))
+            .or_default()
+            .push(pair);
+    }
+    let mut groups = Vec::new();
+    for pairs in components.into_values() {
+        let date = pairs
+            .iter()
+            .map(|p| p.first.local_date.as_str())
+            .min()
+            .unwrap();
+        let dates = pairs.iter().map(|p| p.dates).max().unwrap();
+        // The first pair mentioning a member supplies its representative window.
+        let mut members = BTreeMap::new();
+        let mut self_overlaps = BTreeSet::new();
+        for pair in &pairs {
+            for side in [&pair.first, &pair.second] {
+                members.entry(side.objective_id.clone()).or_insert(side);
+            }
+            if pair.self_overlap {
+                self_overlaps.insert(pair.first.objective_id.clone());
+            }
+        }
+        let smallest = members.first_key_value().unwrap().0.clone();
+        let mut members: Vec<_> = members.into_values().collect();
+        members.sort_by(|a, b| (&a.window, &a.objective_id).cmp(&(&b.window, &b.objective_id)));
+        let member = |s: &super::routine_instantiation::OverlapSide| {
+            format!(
+                "{} {}-{}",
+                names[s.objective_id.as_str()],
+                s.window.0,
+                s.window.1
+            )
+        };
+        let message = if members.len() == 1 {
+            format!(
+                "Routine {} runs into its own next occurrence, first {date} ({} in the next year)",
+                member(members[0]),
+                count(dates, "date")
+            )
+        } else {
+            let mut text = format!(
+                "Routines overlap each other, first {date}: {} ({}, up to {} in the next year)",
+                members
+                    .iter()
+                    .map(|s| member(s))
+                    .collect::<Vec<_>>()
+                    .join("; "),
+                count(pairs.len(), "pair"),
+                count(dates, "date")
+            );
+            for id in self_overlaps {
+                text.push_str(&format!(
+                    " ; {} also runs into its own next occurrence",
+                    names[id.as_str()]
+                ));
+            }
+            text
+        };
+        groups.push((date.to_owned(), smallest, message));
+    }
+    groups.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+    let summary=format!("{} in {}; nothing was imported. Routines must not overlap: stagger their start times, shorten one, or make one transparent.",count(pairs.len(),"overlapping routine pair"),count(groups.len(),"group"));
+    let mut items: Vec<_> = groups
+        .iter()
+        .take(25)
+        .map(|(_, _, message)| ("overlapping_routines".into(), message.clone()))
+        .collect();
+    if groups.len() > 25 {
+        items.push((
+            "overlapping_routines".into(),
+            format!(
+                "and {} more overlapping {}",
+                groups.len() - 25,
+                if groups.len() - 25 == 1 {
+                    "group"
+                } else {
+                    "groups"
+                }
+            ),
+        ));
+    }
+    AppError::bad_request_diagnostics(summary, items)
 }
