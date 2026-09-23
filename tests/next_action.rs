@@ -121,7 +121,7 @@ async fn next_action_selects_first_legitimized_calendar_placement() {
     assert!(body["recommendation"]["explanation"]["message"]
         .as_str()
         .unwrap()
-        .contains("first Task placement in the current legitimized Calendar"));
+        .contains("first actionable Task placement in the current legitimized Calendar"));
 }
 
 #[tokio::test]

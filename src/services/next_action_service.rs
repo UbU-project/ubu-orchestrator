@@ -90,50 +90,40 @@ pub async fn get_next_action(
         .collect::<Vec<_>>();
 
     if let Some(plan) = current_calendar.as_ref() {
-        let Some(first_placement) = plan.steps.iter()
-            .filter(|step| i128::from(step.end) > i128::from(now))
-            .min_by(|left, right| {
-            left.start
-                .cmp(&right.start)
-                .then_with(|| left.end.cmp(&right.end))
-                .then_with(|| left.task_id.cmp(&right.task_id))
-        }) else {
-            return Ok(surface_reports(
-                diagnostic_response(NextActionDiagnostic {
-                    code: NextActionDiagnosticCode::NoReadyTask,
-                    message: "the current legitimized Calendar has no Task placements".to_owned(),
-                    blocked_task_count: 0,
-                    sampled_task_ids: Vec::new(),
-                }),
-                current_calendar.as_ref(),
-            ));
-        };
-
-        let Some(task) = active_tasks
-            .iter()
-            .find(|task| task.record.id == first_placement.task_id)
-        else {
-            return Ok(surface_reports(diagnostic_response(NextActionDiagnostic {
-                code: NextActionDiagnosticCode::NoReadyTask,
-                message: "the first placement in the current legitimized Calendar is not an active admitted Task"
-                    .to_owned(),
-                blocked_task_count: 1,
-                sampled_task_ids: vec![first_placement.task_id.clone()],
-            }), current_calendar.as_ref()));
-        };
-
-        return recommendation_response(
-            pool,
-            task,
-            NextActionSelection {
-                rule: "legitimized_calendar_first_placement".to_owned(),
-                priority: explicit_priority(&task.payload),
-                tiebreak: "start ascending, then end ascending, then task_id ascending".to_owned(),
-            },
-            plan.legitimization.as_ref().and_then(calendar_warning),
-        )
-        .await
-        .map(|response| surface_reports(response, current_calendar.as_ref()));
+        let mut remaining: Vec<_> = plan.steps.iter()
+            .filter(|step| i128::from(step.end) > i128::from(now)).collect();
+        remaining.sort_by(|left, right| (left.start, left.end, &left.task_id)
+            .cmp(&(right.start, right.end, &right.task_id)));
+        let active_ids: HashSet<_> = active_tasks.iter().map(|task| task.record.id.as_str()).collect();
+        let selected = remaining.iter().find(|step| active_ids.contains(step.task_id.as_str()));
+        if let Some(task) = selected.and_then(|step| active_tasks.iter().find(|task| task.record.id == step.task_id)) {
+            return recommendation_response(
+                pool,
+                task,
+                NextActionSelection {
+                    rule: "legitimized_calendar_first_placement".to_owned(),
+                    priority: explicit_priority(&task.payload),
+                    tiebreak: "start ascending, then end ascending, then task_id ascending".to_owned(),
+                },
+                plan.legitimization.as_ref().and_then(calendar_warning),
+            )
+            .await
+            .map(|response| surface_reports(response, current_calendar.as_ref()));
+        }
+        let mut seen = HashSet::new();
+        let blocked: Vec<_> = remaining.iter()
+            .filter(|step| !active_ids.contains(step.task_id.as_str()) && seen.insert(step.task_id.clone()))
+            .map(|step| step.task_id.clone()).collect();
+        return Ok(surface_reports(diagnostic_response(NextActionDiagnostic {
+            code: NextActionDiagnosticCode::NoReadyTask,
+            message: if remaining.is_empty() {
+                "the current legitimized Calendar has no Task placements"
+            } else {
+                "the current legitimized Calendar has no remaining placement for an active Task"
+            }.to_owned(),
+            blocked_task_count: blocked.len(),
+            sampled_task_ids: blocked.into_iter().take(5).collect(),
+        }), current_calendar.as_ref()));
     }
 
     candidates.sort_by(|(left, _), (right, _)| {
@@ -513,7 +503,7 @@ fn explanation(
         .map(|warning| format!(" {warning}"))
         .unwrap_or_default();
     let selection_text = if from_calendar {
-        "selected the first Task placement in the current legitimized Calendar"
+        "selected the first actionable Task placement in the current legitimized Calendar"
     } else {
         "selected a ready Task"
     };
