@@ -98,15 +98,7 @@ pub async fn generate(
     };
     diagnostics.extend(precondition_diagnostics(&blocked_tasks, &invalid_tasks));
     let titles = task_titles(state.inner().store.pool(), &state.inner().category_palette).await?;
-    let unplaced_tasks = kernel_unplaced.iter().map(|entry| UnplacedTaskBody {
-        task_id: entry.task_ref.clone(),
-        summary: titles.get(&entry.task_ref).map_or_else(|| entry.task_ref.clone(), |t| t.title.clone()),
-        reason: serde_json::to_value(entry.reason).expect("serializable reason").as_str().expect("reason string").to_owned(),
-        deferred_by_task_refs: entry.deferred_by_task_refs.clone(),
-        affected_dependent_task_refs: entry.affected_dependent_task_refs.clone(),
-        explanation: entry.user_facing_summary.clone(),
-        safe_alternatives: entry.safe_alternatives.clone().into_iter().map(Into::into).collect(),
-    }).collect::<Vec<_>>();
+    let unplaced_tasks = unplaced_bodies(&kernel_unplaced, &diagnostics, &titles);
     let selected_index = candidates.iter().position(|candidate| candidate.rank == 1);
     let canonical_plan_id = UbuId::new(ObjectType::Plan).to_string();
     let (plan, selected_candidate, alternatives, legitimization, risk_report, plan_quality) =
@@ -1976,4 +1968,36 @@ fn committed_clusters(tasks: &mut Vec<TaskSpecBody>, mandatory: &HashSet<String>
     tasks.retain(|t|!removed.contains(&t.id));
     warnings.sort_by(|a,b|(&a.code,&a.message).cmp(&(&b.code,&b.message)));diagnostics.extend(warnings);
     (covered,carriers)
+}
+
+fn unplaced_bodies(kernel_unplaced: &[ubu_planning_core::UnplacedTask], diagnostics: &[DiagnosticBody], titles: &HashMap<String, TaskDisplay>) -> Vec<UnplacedTaskBody> {
+    let mut result = kernel_unplaced.iter().map(|entry| UnplacedTaskBody {
+        task_id: entry.task_ref.clone(),
+        summary: titles.get(&entry.task_ref).map_or_else(|| entry.task_ref.clone(), |t| t.title.clone()),
+        reason: serde_json::to_value(entry.reason).expect("serializable reason").as_str().expect("reason string").to_owned(),
+        deferred_by_task_refs: entry.deferred_by_task_refs.clone(),
+        affected_dependent_task_refs: entry.affected_dependent_task_refs.clone(),
+        explanation: entry.user_facing_summary.clone(),
+        safe_alternatives: entry.safe_alternatives.clone().into_iter().map(Into::into).collect(),
+    }).collect::<Vec<_>>();
+    let mut seen: HashSet<_> = result.iter().map(|u| u.task_id.clone()).collect();
+    for diagnostic in diagnostics {
+        let reason = match diagnostic.code.as_str() {
+            "task_unplaceable" | "dependency_outside_horizon" => ubu_planning_core::UnplacedReason::OutsideAllowedWindow,
+            "prerequisite_unplaceable" => ubu_planning_core::UnplacedReason::DeferredDependency,
+            _ => continue,
+        };
+        let Some(id) = diagnostic.message.split('`').nth(1) else { continue; };
+        if !seen.insert(id.to_owned()) { continue; }
+        result.push(UnplacedTaskBody {
+            task_id: id.to_owned(),
+            summary: titles.get(id).map_or_else(|| id.to_owned(), |t| t.title.clone()),
+            reason: serde_json::to_value(reason).expect("serializable reason").as_str().expect("reason string").to_owned(),
+            deferred_by_task_refs: Vec::new(),
+            affected_dependent_task_refs: Vec::new(),
+            explanation: diagnostic.message.clone(),
+            safe_alternatives: ubu_planning_core::safe_alternatives(reason).into_iter().map(Into::into).collect(),
+        });
+    }
+    result
 }
