@@ -55,6 +55,10 @@ struct Routine {
     reminders: Vec<i64>,
     #[serde(default)]
     after: Vec<After>,
+    #[serde(default)]
+    establishes: Vec<String>,
+    #[serde(default)]
+    requires: Vec<Requires>,
 }
 #[derive(Deserialize)]
 enum Recurrence {
@@ -68,6 +72,14 @@ enum Recurrence {
 struct After {
     template_id: String,
     offset: (i64, i32),
+    #[serde(default)]
+    maximum: Option<(i64, i32)>,
+}
+#[derive(Deserialize)]
+struct Requires {
+    fact: String,
+    #[serde(default)]
+    offset: Option<(i64, i32)>,
     #[serde(default)]
     maximum: Option<(i64, i32)>,
 }
