@@ -1976,6 +1976,14 @@ fn earliest_fit(window: &TimeWindowBody, occupied: &[TimeWindowBody], duration: 
 fn has_free_gap(window: &TimeWindowBody, fixed: &[TimeWindowBody], duration: u64) -> bool {
     earliest_fit(window, fixed, duration).is_some()
 }
+/// Equal spans carry no "during" relationship and remain collisions.
+fn contains(outer: &TimeWindowBody, inner: &TimeWindowBody) -> bool {
+    outer.start <= inner.start && outer.end >= inner.end
+        && (outer.start < inner.start || outer.end > inner.end)
+}
+fn nested(a: &TimeWindowBody, b: &TimeWindowBody) -> bool {
+    contains(a, b) || contains(b, a)
+}
 fn unseatable_mandatory(tasks: &[TaskSpecBody], mandatory: &HashSet<String>, fixed: &[TimeWindowBody]) -> HashSet<String> {
     let mut pending: Vec<_> = tasks.iter().filter(|t| mandatory.contains(&t.id) && t.static_anchor.is_none()).collect();
     pending.sort_by_key(|t| (t.window.as_ref().map_or(u64::MAX, |w| w.end), &t.id));
