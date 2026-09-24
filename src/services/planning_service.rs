@@ -564,10 +564,9 @@ async fn build_request_from_store_with_context(
     let mut dropped_edges = HashSet::new();
     for (i, (task, window, capacity)) in participating.iter().enumerate() {
         for (other, other_window, other_capacity) in participating.iter().skip(i + 1) {
-            if *capacity && *other_capacity && window.start < other_window.end && window.end > other_window.start {
-                if !mandatory.contains(&task.id) && !mandatory.contains(&other.id) {
-                    add_static_conflict(&mut conflicts, &task.id, window, &other.id, other_window);
-                }
+            if *capacity && *other_capacity && window.start < other_window.end && window.end > other_window.start
+                && !mandatory.contains(&task.id) && !mandatory.contains(&other.id) && !nested(window, other_window) {
+                add_static_conflict(&mut conflicts, &task.id, window, &other.id, other_window);
             }
         }
         for dependency in dependency_ids(&task.payload) {
@@ -576,7 +575,7 @@ async fn build_request_from_store_with_context(
                     if mandatory.contains(&task.id) && mandatory.contains(&dependency) {
                         dropped_edges.insert((task.id.clone(), dependency.clone()));
                         diagnostics.push(DiagnosticBody { code: "routine_occurrence_edge_dropped".into(), message: format!("Routine occurrence `{}` has a stale Static edge to `{dependency}`; both retain their fixed placement",task.id) });
-                    } else { add_static_conflict(&mut conflicts, &task.id, window, &dependency, other_window); }
+                    } else if !nested(window, other_window) { add_static_conflict(&mut conflicts, &task.id, window, &dependency, other_window); }
                 }
             }
         }
