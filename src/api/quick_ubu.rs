@@ -26,6 +26,13 @@ pub struct QuickUbuSkipped {
     pub reason: String,
 }
 #[derive(Debug, Serialize, ToSchema)]
+pub struct QuickUbuResolved {
+    pub quick_ubu_id: String,
+    pub target: String,
+    pub establisher_quick_ubu_id: String,
+    pub establisher_title: String,
+}
+#[derive(Debug, Serialize, ToSchema)]
 pub struct QuickUbuObjectRef {
     pub kind: String,
     pub id: String,
@@ -40,6 +47,7 @@ pub struct QuickUbuImportResponse {
     pub preferences: ImportCounts,
     pub objectives_not_imported: usize,
     pub skipped: Vec<QuickUbuSkipped>,
+    pub resolved: Vec<QuickUbuResolved>,
     pub diverged: Vec<QuickUbuObjectRef>,
     pub stale: Vec<QuickUbuObjectRef>,
 }

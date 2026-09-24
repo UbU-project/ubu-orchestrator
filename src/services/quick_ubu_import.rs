@@ -441,6 +441,7 @@ pub async fn import(
         preferences: Default::default(),
         objectives_not_imported: snapshot.store.objectives.len(),
         skipped: Vec::new(),
+        resolved: Vec::new(),
         diverged: Vec::new(),
         stale: Vec::new(),
     };
@@ -535,6 +536,13 @@ pub async fn import(
             if !merge_requirement(&mut after, edge) {
                 skip(&mut response, "routine", source,
                     format!("requirement_inverted_bounds: {}", requirement.fact));
+            } else {
+                response.resolved.push(QuickUbuResolved {
+                    quick_ubu_id: source.clone(),
+                    target: requirement.fact.clone(),
+                    establisher_quick_ubu_id: establisher.id.clone(),
+                    establisher_title: establisher.title.clone(),
+                });
             }
         }
         if !after.is_empty() {
@@ -779,6 +787,9 @@ pub async fn import(
             });
         }
     }
+    response.resolved.sort_by(|a, b| {
+        (&a.quick_ubu_id, &a.target).cmp(&(&b.quick_ubu_id, &b.target))
+    });
     Ok(response)
 }
 

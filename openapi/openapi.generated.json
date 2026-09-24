@@ -3297,6 +3297,7 @@
           "preferences",
           "objectives_not_imported",
           "skipped",
+          "resolved",
           "diverged",
           "stale"
         ],
@@ -3316,6 +3317,12 @@
           },
           "preferences": {
             "$ref": "#/components/schemas/ImportCounts"
+          },
+          "resolved": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuickUbuResolved"
+            }
           },
           "routines": {
             "$ref": "#/components/schemas/ImportCounts"
@@ -3355,6 +3362,29 @@
             "type": "string"
           },
           "quick_ubu_id": {
+            "type": "string"
+          }
+        }
+      },
+      "QuickUbuResolved": {
+        "type": "object",
+        "required": [
+          "quick_ubu_id",
+          "target",
+          "establisher_quick_ubu_id",
+          "establisher_title"
+        ],
+        "properties": {
+          "establisher_quick_ubu_id": {
+            "type": "string"
+          },
+          "establisher_title": {
+            "type": "string"
+          },
+          "quick_ubu_id": {
+            "type": "string"
+          },
+          "target": {
             "type": "string"
           }
         }

@@ -45,6 +45,7 @@ use utoipa::OpenApi;
         crate::api::quick_ubu::QuickUbuImportResponse,
         crate::api::quick_ubu::ImportCounts,
         crate::api::quick_ubu::QuickUbuSkipped,
+        crate::api::quick_ubu::QuickUbuResolved,
         crate::api::quick_ubu::QuickUbuObjectRef,
         crate::api::advisory::AdvisoryCandidateResponse,
         crate::api::advisory::AdvisoryQueueResponse,
