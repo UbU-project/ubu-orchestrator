@@ -82,6 +82,8 @@ struct Requires {
     offset: Option<(i64, i32)>,
     #[serde(default)]
     maximum: Option<(i64, i32)>,
+    #[serde(default)]
+    verify: bool,
 }
 #[derive(Deserialize)]
 struct Window {
@@ -222,6 +224,27 @@ fn routine_payload(
         }
     }
     template["reminder_minutes"] = json!(reminders);
+    let mut mutations = Vec::new();
+    for target in &r.establishes {
+        if !target.starts_with("facts.") || !requirement_target_valid(target) {
+            skip(response, "routine", &r.id, format!("establishes_invalid_target: {target}"));
+            continue;
+        }
+        mutations.push(json!({"operation":"set_fact","target":target,"payload":true}));
+    }
+    if !mutations.is_empty() {
+        template["effects"] = json!({"mutations":mutations});
+    }
+    // Verification and ordering are independent: even a requirement whose
+    // establisher cannot be resolved in the second pass keeps its precondition.
+    let mut preconditions: Vec<_> = r.requires.iter().filter(|r| r.verify)
+        .map(|r| json!({"target":r.fact,"predicate":"equals","expected":true}))
+        .collect();
+    if preconditions.len() == 1 {
+        template["preconditions"] = preconditions.remove(0);
+    } else if !preconditions.is_empty() {
+        template["preconditions"] = json!({"all_of":preconditions});
+    }
     if r.dynamic {
         let latest = r.latest_tod.as_deref().unwrap_or("23:59:59");
         if validate_local_time(&r.start_time).is_err()

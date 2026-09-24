@@ -196,6 +196,12 @@ fn payload(
     if !o.template.occupies_capacity {
         p["occupies_capacity"] = json!(false);
     }
+    if let Some(effects) = &o.template.effects {
+        p["effects"] = json!(effects);
+    }
+    if let Some(preconditions) = &o.template.preconditions {
+        p["preconditions"] = json!(preconditions);
+    }
     let edges: BTreeSet<_> = o
         .after
         .iter()

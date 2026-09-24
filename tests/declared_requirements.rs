@@ -353,7 +353,11 @@ async fn resolved_and_explicit_edges_merge_the_tightest_bounds() {
             }))
             .collect::<Vec<_>>());
         let response = import(&state, vec![parent, child]).await;
-        assert_eq!(response["skipped"], json!([]));
+        assert_eq!(response["skipped"], json!(targets.iter()
+            .filter(|target| !target.starts_with("facts."))
+            .map(|target| json!({"kind":"routine","quick_ubu_id":uid(1),
+                "reason":format!("establishes_invalid_target: {target}")}))
+            .collect::<Vec<_>>()));
         assert_eq!(
             response["resolved"],
             json!(targets.map(|target| resolution(2, target, 1, "Parent")))
