@@ -217,7 +217,7 @@ async fn complete_without_effects_leaves_universe_state_unchanged() {
 }
 
 #[tokio::test]
-async fn complete_with_effects_but_no_universe_state_surfaces_diagnostic() {
+async fn complete_with_effects_on_a_cold_store_seeds_universe_state() {
     let state = test_state().await;
     let task_id = admit_task_with_effects(
         &state,
@@ -241,10 +241,12 @@ async fn complete_with_effects_but_no_universe_state_surfaces_diagnostic() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = json_body(response).await;
     assert_eq!(body["transition_applied"], true);
-    assert_eq!(
-        body["diagnostics"][0]["code"],
-        "task_effect_universe_state_absent"
-    );
+    assert_eq!(body["diagnostics"], json!([]));
+    let payload: String = sqlx::query_scalar(
+        "SELECT payload_json FROM objects WHERE object_type='UniverseState'",
+    ).fetch_one(state.inner().store.pool()).await.expect("seeded universe");
+    let payload: Value = serde_json::from_str(&payload).unwrap();
+    assert_eq!(payload["facts"]["task_outcome"], "done");
 }
 
 async fn test_state() -> AppState {

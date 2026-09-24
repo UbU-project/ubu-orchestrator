@@ -1,6 +1,6 @@
 use serde_json::json;
 use ubu_core::core::{
-    apply_universe_mutations, validate_mutations_for_mode, InstanceMode, TaskEffect,
+    apply_universe_mutations, validate_mutations_for_mode, InstanceMode, TaskEffect, UniverseState,
 };
 use ubu_core::id_registry::ObjectType;
 use ubu_core::{AuthoritySource, UbuId, UbuTimestamp, VersionRef};
@@ -339,14 +339,36 @@ async fn apply_completed_effects(
         }]);
     }
 
-    let Some((current_state, current_version)) =
+    let current = planning_service::read_current_universe_state(pool).await?;
+    let (current_state, current_version) = if let Some(current) = current {
+        current
+    } else {
+        let seed = UniverseState::new(effective_time, "empty UniverseState seeded on Task completion");
+        let now = effective_time.to_string();
+        let mut payload = serde_json::to_value(&seed)
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        payload["schema_version"] = json!("core/universe-state/0.1");
+        payload["provenance"] = json!({"created_at":effective_time,"authority_source":authority_source});
+        let envelope = state.envelope_for(
+            [
+                (seed.id.clone(), VersionRef::Absent),
+                (UbuId::parse(&task.id)?, observed_version(task.version)?),
+            ].into_iter().collect(),
+            authority_source,
+            effective_time,
+        )?;
+        queries::admit_object(pool, &envelope, NewObjectRecord {
+            id: seed.id.to_string(),
+            object_type: ObjectType::UniverseState.as_str().into(),
+            version: 1,
+            status: "active".into(),
+            compartment_label: task.compartment_label.clone(),
+            payload,
+            created_at: now.clone(),
+            updated_at: now,
+        }).await?;
         planning_service::read_current_universe_state(pool).await?
-    else {
-        return Ok(vec![ActionDiagnostic {
-            code: "task_effect_universe_state_absent".to_owned(),
-            message: "no current UniverseState exists; completed Task effects were not applied"
-                .to_owned(),
-        }]);
+            .ok_or_else(|| AppError::Internal("UniverseState missing after seed admission".into()))?
     };
 
     let next_state = match apply_universe_mutations(&current_state, &effect.mutations) {
@@ -486,12 +508,27 @@ mod effect_mode_tests {
 
     #[tokio::test]
     async fn user_mode_permits_intrinsic_affect_effect() {
-        // user_mode models intrinsic affect, so the mode check passes; with no
-        // current UniverseState the effect simply has nowhere to persist.
+        // A real admitted Task supplies the observed version for seeding and
+        // applying its permitted intrinsic-affect mutation on a cold store.
         let state = AppState::in_memory(ServerConfig::from_env())
             .await
             .expect("state");
-        let task = completed_task_with_effects(intrinsic_affect_effect());
+        let mut task = completed_task_with_effects(intrinsic_affect_effect());
+        let now = state.planning_now();
+        task.payload["id"] = json!(task.id);
+        task.payload["title"] = json!("Synthetic completed Task");
+        task.payload["status"] = json!("completed");
+        task.payload["provenance"] = json!({"created_at":now,"authority_source":"user"});
+        let envelope = state.envelope_for(
+            [(UbuId::parse(&task.id).unwrap(), VersionRef::Absent)].into_iter().collect(),
+            AuthoritySource::User, now,
+        ).unwrap();
+        let admitted = queries::admit_object(state.inner().store.pool(), &envelope, NewObjectRecord {
+            id: task.id.clone(), object_type: "Task".into(), version: 1,
+            status: task.status.clone(), compartment_label: task.compartment_label.clone(),
+            payload: task.payload.clone(), created_at: now.to_string(), updated_at: now.to_string(),
+        }).await.unwrap();
+        task.version = admitted.version;
         let diagnostics = apply_completed_effects(
             &state,
             &task,
@@ -501,6 +538,9 @@ mod effect_mode_tests {
         )
         .await
         .expect("effects evaluated");
-        assert_eq!(diagnostics[0].code, "task_effect_universe_state_absent");
+        assert!(diagnostics.is_empty());
+        let (universe, _) = planning_service::read_current_universe_state(state.inner().store.pool())
+            .await.unwrap().unwrap();
+        assert_eq!(universe.numeric_values["affect.energy"], 1.0);
     }
 }
