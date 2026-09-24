@@ -25,7 +25,7 @@ pub async fn record_task_action(
 ) -> Result<RecordedTaskActionResponse> {
     validate_schema_version(request.schema_version.as_deref())?;
 
-    let effective_time = UbuTimestamp::now_utc();
+    let effective_time = state.planning_now();
     let pool = state.inner().store.pool();
     let mut task = load_task(pool, &task_id).await?;
     let authority_source = authority_for_recorded_action(request.action);
@@ -135,7 +135,7 @@ pub async fn append_action(
         }
     }
     let log_id = UbuId::new(ObjectType::LogEntry).to_string();
-    let now = UbuTimestamp::now_utc().to_string();
+    let now = state.planning_now().to_string();
     let event_type = action_event_type(action);
     let status = TaskLifecycleStatus::for_action(action);
 
@@ -394,7 +394,7 @@ fn validate_schema_version(schema_version: Option<&str>) -> Result<()> {
 
 fn authority_for_recorded_action(action: RecordedTaskActionKind) -> AuthoritySource {
     match action {
-        RecordedTaskActionKind::Complete | RecordedTaskActionKind::Skip | RecordedTaskActionKind::Snooze => AuthoritySource::User,
+        RecordedTaskActionKind::Start | RecordedTaskActionKind::Complete | RecordedTaskActionKind::Skip | RecordedTaskActionKind::Snooze => AuthoritySource::User,
         RecordedTaskActionKind::Override => AuthoritySource::UserOverride,
     }
 }
@@ -407,6 +407,7 @@ fn authority_source_wire(authority_source: AuthoritySource) -> Result<String> {
 
 fn recorded_action_wire(action: RecordedTaskActionKind) -> &'static str {
     match action {
+        RecordedTaskActionKind::Start => "start",
         RecordedTaskActionKind::Complete => "complete",
         RecordedTaskActionKind::Skip => "skip",
         RecordedTaskActionKind::Override => "override",
@@ -416,6 +417,7 @@ fn recorded_action_wire(action: RecordedTaskActionKind) -> &'static str {
 
 fn recorded_decision_wire(action: RecordedTaskActionKind) -> &'static str {
     match action {
+        RecordedTaskActionKind::Start => "task_started",
         RecordedTaskActionKind::Complete => "task_completed",
         RecordedTaskActionKind::Skip => "occurrence_skipped",
         RecordedTaskActionKind::Override => "recommendation_rejected",

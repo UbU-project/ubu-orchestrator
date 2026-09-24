@@ -50,6 +50,8 @@ pub struct UserActionRequest {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RecordedTaskActionKind {
+    /// Record that work began without changing lifecycle state or applying effects.
+    Start,
     Complete,
     Skip,
     Override,

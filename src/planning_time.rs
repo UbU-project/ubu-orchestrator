@@ -15,7 +15,8 @@ pub fn timestamp_at(seconds: u64) -> Result<String> {
         timestamp.hour(), timestamp.minute(), timestamp.second()))
 }
 
-/// Clock used only for planning horizons and next-action selection.
+/// Clock for planning horizons, next-action selection, and recorded execution actions.
+/// Tests and replays can drive both planning and observed action timestamps.
 pub trait PlanningClock: Send + Sync {
     fn now(&self) -> UbuTimestamp;
 }
