@@ -11,7 +11,7 @@ fn def(title: &str, start: &str, end: Option<&str>, duration: u64) -> RoutineDef
 }
 fn after(b: &mut RoutineDefinition, a: &RoutineDefinition, offset: i64) {
     b.template.after.push(
-        serde_json::from_value(json!({"objective_id":a.objective_id,"offset_seconds":offset}))
+        serde_json::from_value(json!({"objective_id":a.objective_id,"minimum_seconds":offset}))
             .unwrap(),
     );
 }
@@ -79,7 +79,7 @@ fn lowering_binds_and_infeasibility_leaves_unmatched_successor() {
         (os[2].start, os[2].end),
         (sec("2026-09-22T14:00:00Z"), sec("2026-09-22T14:10:00Z"))
     );
-    b.template.after[0].offset_seconds = 10800;
+    b.template.after[0].minimum_seconds = 10800;
     let out = inspect(&[s.clone(), b.clone(), a]);
     assert!(!out
         .occurrences

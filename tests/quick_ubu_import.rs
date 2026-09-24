@@ -136,7 +136,7 @@ async fn first_import_maps_synthetic_fixture_and_identical_import_writes_nothing
     );
     assert_eq!(
         second["routine_instance_template"]["after"],
-        json!([{"objective_id":first["id"],"offset_seconds":3600}])
+        json!([{"objective_id":first["id"],"minimum_seconds":3600}])
     );
     for (id, kind) in [
         (3, "weekly"),

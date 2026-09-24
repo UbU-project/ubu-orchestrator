@@ -2350,7 +2350,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 [[package]]
 name = "ubu_core"
 version = "0.1.0"
-source = "git+https://github.com/UbU-project/ubu-core?rev=cc2087f7e9bb54029a60b34916d4ac6d291604f0#cc2087f7e9bb54029a60b34916d4ac6d291604f0"
+source = "git+https://github.com/UbU-project/ubu-core?rev=e02267763f86750a40a84b3c47d1a8f0d173084b#e02267763f86750a40a84b3c47d1a8f0d173084b"
 dependencies = [
  "regex",
  "serde",
@@ -2363,7 +2363,7 @@ dependencies = [
 [[package]]
 name = "ubu_github_adapter"
 version = "0.1.0"
-source = "git+https://github.com/UbU-project/ubu-github-adapter?rev=2ffb7f47e2d2806828c29badfa9c8869a0641a68#2ffb7f47e2d2806828c29badfa9c8869a0641a68"
+source = "git+https://github.com/UbU-project/ubu-github-adapter?rev=e47d5bf2e2c14d84320061cbf476570820059faf#e47d5bf2e2c14d84320061cbf476570820059faf"
 dependencies = [
  "octocrab",
  "serde",
@@ -2401,7 +2401,7 @@ dependencies = [
 [[package]]
 name = "ubu_planning_core"
 version = "0.1.0"
-source = "git+https://github.com/UbU-project/ubu-planning-kernel?rev=1cae4f0c82013a48b7899ce3050fbd7bab094e75#1cae4f0c82013a48b7899ce3050fbd7bab094e75"
+source = "git+https://github.com/UbU-project/ubu-planning-kernel?rev=6595bfe5c38cf62f56fe2a777330017d967d7283#6595bfe5c38cf62f56fe2a777330017d967d7283"
 dependencies = [
  "serde",
  "serde_json",
@@ -2412,7 +2412,7 @@ dependencies = [
 [[package]]
 name = "ubu_planning_cpu"
 version = "0.1.0"
-source = "git+https://github.com/UbU-project/ubu-planning-kernel?rev=1cae4f0c82013a48b7899ce3050fbd7bab094e75#1cae4f0c82013a48b7899ce3050fbd7bab094e75"
+source = "git+https://github.com/UbU-project/ubu-planning-kernel?rev=6595bfe5c38cf62f56fe2a777330017d967d7283#6595bfe5c38cf62f56fe2a777330017d967d7283"
 dependencies = [
  "ubu_core",
  "ubu_planning_core",
@@ -2421,7 +2421,7 @@ dependencies = [
 [[package]]
 name = "ubu_store"
 version = "0.1.0"
-source = "git+https://github.com/UbU-project/ubu-store?rev=ddee9621525f77fac29c28dc513cb2bf4b463419#ddee9621525f77fac29c28dc513cb2bf4b463419"
+source = "git+https://github.com/UbU-project/ubu-store?rev=6fa8826cee7c75590e64f823c43911b2702dd0ca#6fa8826cee7c75590e64f823c43911b2702dd0ca"
 dependencies = [
  "serde",
  "serde_json",

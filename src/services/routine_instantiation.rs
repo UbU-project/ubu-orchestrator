@@ -216,11 +216,11 @@ pub fn instantiate(defs: &[RoutineDefinition], start: u64, end: u64) -> Instanti
                                 nominal_ends.get(&(reference.objective_id.clone(), date))
                             {
                                 floor = floor
-                                    .max(u64::saturating_add(end, reference.offset_seconds as u64));
+                                    .max(u64::saturating_add(end, reference.minimum_seconds as u64));
                                 after
                                     .entry(reference.objective_id.clone())
-                                    .and_modify(|n| *n = (*n).max(reference.offset_seconds))
-                                    .or_insert(reference.offset_seconds);
+                                    .and_modify(|n| *n = (*n).max(reference.minimum_seconds))
+                                    .or_insert(reference.minimum_seconds);
                             } else if report {
                                 out.diagnostics.push(diagnostic("routine_after_unmatched", format!("Routine `{id}` on {date} has no same-date predecessor `{}`",reference.objective_id)));
                             }

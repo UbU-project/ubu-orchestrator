@@ -389,7 +389,7 @@ pub async fn import(
                 skip(&mut response, "routine", source, reason);
             } else {
                 after.push(
-                    json!({"objective_id":routine_ids[&a.template_id],"offset_seconds":a.offset.0}),
+                    json!({"objective_id":routine_ids[&a.template_id],"minimum_seconds":a.offset.0}),
                 );
             }
         }
