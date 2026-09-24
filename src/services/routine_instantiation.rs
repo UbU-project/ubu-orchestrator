@@ -30,8 +30,10 @@ pub struct Occurrence {
     /// Static interval or planned allowed range, in UTC seconds.
     pub start: u64,
     pub end: u64,
+    /// Latest finish from the declared range, before an after ceiling is applied.
+    pub declared_end: u64,
     pub nominal_end: u64,
-    pub after: Vec<(UbuId, i64)>,
+    pub after: Vec<(UbuId, i64, Option<i64>)>,
 }
 #[derive(Debug, Default)]
 pub struct Instantiation {
@@ -208,8 +210,9 @@ pub fn instantiate(defs: &[RoutineDefinition], start: u64, end: u64) -> Instanti
                     } else {
                         None
                     };
-                    let mut after = BTreeMap::<UbuId, i64>::new();
+                    let mut after = BTreeMap::<UbuId, (i64, Option<i64>)>::new();
                     let mut floor = 0;
+                    let mut start_ceiling: Option<u64> = None;
                     if !cyclic.contains(&id) {
                         for reference in &d.template.after {
                             if let Some(&end) =
@@ -217,22 +220,38 @@ pub fn instantiate(defs: &[RoutineDefinition], start: u64, end: u64) -> Instanti
                             {
                                 floor = floor
                                     .max(u64::saturating_add(end, reference.minimum_seconds as u64));
+                                if let Some(maximum) = reference.maximum_seconds {
+                                    let ceiling = end.saturating_add(maximum as u64);
+                                    start_ceiling = Some(start_ceiling.map_or(ceiling, |current| current.min(ceiling)));
+                                }
                                 after
                                     .entry(reference.objective_id.clone())
-                                    .and_modify(|n| *n = (*n).max(reference.minimum_seconds))
-                                    .or_insert(reference.minimum_seconds);
+                                    .and_modify(|(minimum, maximum)| {
+                                        *minimum = (*minimum).max(reference.minimum_seconds);
+                                        *maximum = match (*maximum, reference.maximum_seconds) {
+                                            (Some(a), Some(b)) => Some(a.min(b)),
+                                            (a, b) => a.or(b),
+                                        };
+                                    })
+                                    .or_insert((reference.minimum_seconds, reference.maximum_seconds));
                             } else if report {
                                 out.diagnostics.push(diagnostic("routine_after_unmatched", format!("Routine `{id}` on {date} has no same-date predecessor `{}`",reference.objective_id)));
                             }
                         }
                     }
                     let duration = d.template.duration_estimate.scalar_seconds();
-                    let (start, end, nominal_end) = match range {
+                    let (start, end, nominal_end, declared_end) = match range {
                         Some((earliest, latest)) => {
                             let earliest = earliest.max(floor);
+                            let declared_latest = latest;
+                            let latest = start_ceiling.map_or(latest, |ceiling| latest.min(ceiling.saturating_add(duration)));
                             if earliest.saturating_add(duration) > latest {
                                 if report {
-                                    out.diagnostics.push(diagnostic("routine_after_infeasible", format!("Routine `{id}` on {date} cannot fit its lowered allowed range")));
+                                    if earliest.saturating_add(duration) <= declared_latest {
+                                        out.diagnostics.push(diagnostic("routine_after_maximum_infeasible", format!("Routine `{id}` on {date} cannot start within `maximum_seconds` of its predecessor and still honour its own allowed range")));
+                                    } else {
+                                        out.diagnostics.push(diagnostic("routine_after_infeasible", format!("Routine `{id}` on {date} cannot fit its lowered allowed range")));
+                                    }
                                 }
                                 return None;
                             }
@@ -240,12 +259,17 @@ pub fn instantiate(defs: &[RoutineDefinition], start: u64, end: u64) -> Instanti
                                 earliest,
                                 latest,
                                 nominal.max(earliest).saturating_add(duration),
+                                declared_latest,
                             )
                         }
                         None => {
                             let start = nominal.max(floor);
+                            if report && start_ceiling.is_some_and(|ceiling| start > ceiling) {
+                                out.diagnostics.push(diagnostic("routine_after_maximum_infeasible", format!("Routine `{id}` on {date} cannot start within `maximum_seconds` of its predecessor and still honour its own allowed range")));
+                            }
                             (
                                 start,
+                                start.saturating_add(duration),
                                 start.saturating_add(duration),
                                 start.saturating_add(duration),
                             )
@@ -265,8 +289,9 @@ pub fn instantiate(defs: &[RoutineDefinition], start: u64, end: u64) -> Instanti
                         template: d.template.clone(),
                         start,
                         end,
+                        declared_end,
                         nominal_end,
-                        after: after.into_iter().collect(),
+                        after: after.into_iter().map(|(id, (minimum, maximum))| (id, minimum, maximum)).collect(),
                     })
                 };
                 if let Some(occurrence) = expand() {

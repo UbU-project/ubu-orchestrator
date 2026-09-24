@@ -197,7 +197,7 @@ fn payload(
     let edges: BTreeSet<_> = o
         .after
         .iter()
-        .filter_map(|(id, _)| days.get(&(id.to_string(), o.local_date.clone())).cloned())
+        .filter_map(|(id, _, _)| days.get(&(id.to_string(), o.local_date.clone())).cloned())
         .collect();
     if !edges.is_empty() {
         p["blocked_by"] = json!(edges);
@@ -434,7 +434,7 @@ pub async fn materialize(
         let Some(id) = ids.get(&o.key) else {
             continue;
         };
-        for (predecessor, offset) in &o.after {
+        for (predecessor, offset, _) in &o.after {
             let Some(parent) = days
                 .get(&(predecessor.to_string(), o.local_date.clone()))
                 .and_then(|id| by_id.get(id.as_str()))

@@ -55,8 +55,8 @@ fn check_in_chain_is_predecessor_first_and_skips_wednesday() {
         );
     }
     assert!(os[0].key.ends_with("/s1/2026-09-22T09:00:00/planned/t1"));
-    assert_eq!(os[1].after, vec![(a.objective_id, 3600)]);
-    assert_eq!(os[2].after, vec![(b.objective_id, 3600)]);
+    assert_eq!(os[1].after, vec![(a.objective_id, 3600, None)]);
+    assert_eq!(os[2].after, vec![(b.objective_id, 3600, None)]);
     assert!(!out.occurrences.iter().any(|o| o.local_date == "2026-09-23"));
 }
 #[test]
