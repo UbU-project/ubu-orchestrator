@@ -1318,6 +1318,23 @@ async fn build_affect_profile(pool: &sqlx::SqlitePool) -> Result<AffectProfileBo
     Ok(profile)
 }
 
+async fn observed_routine_events(pool: &sqlx::SqlitePool) -> Result<Vec<(String, i64, bool)>> {
+    let rows = sqlx::query_as::<_, (String, String, bool)>("SELECT json_extract(o.payload_json, '$.occurrence.routine_objective_id') AS routine_id,
+        l.created_at, (l.event_type = 'task_started' OR
+            (l.event_type = 'decision_recorded' AND json_extract(l.payload_json, '$.action') = 'start')) AS is_start
+        FROM logs l JOIN objects o ON o.id = json_extract(l.object_refs_json, '$[0]')
+        WHERE o.object_type = 'Task' AND json_extract(o.payload_json, '$.occurrence.routine_objective_id') IS NOT NULL
+        AND (l.event_type IN ('task_started', 'task_done') OR
+            (l.event_type = 'decision_recorded' AND json_extract(l.payload_json, '$.action') IN ('start', 'complete')))")
+        .fetch_all(pool).await.map_err(|e| AppError::Internal(e.to_string()))?;
+    let mut events = Vec::new();
+    for (group, created_at, is_start) in rows {
+        let Ok(time) = UbuTimestamp::parse(&created_at) else { continue; };
+        events.push((group, time.inner().unix_timestamp(), is_start));
+    }
+    Ok(events)
+}
+
 async fn active_task_preferences(pool: &sqlx::SqlitePool) -> Result<Vec<Preference>> {
     let rows = sqlx::query("SELECT payload_json FROM objects WHERE object_type = 'Preference' AND status = 'active'")
         .fetch_all(pool).await.map_err(|e| AppError::Internal(e.to_string()))?;
