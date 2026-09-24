@@ -68,6 +68,8 @@ enum Recurrence {
 struct After {
     template_id: String,
     offset: (i64, i32),
+    #[serde(default)]
+    maximum: Option<(i64, i32)>,
 }
 #[derive(Deserialize)]
 struct Window {
@@ -382,15 +384,21 @@ pub async fn import(
                 Some("negative_after_offset")
             } else if a.offset.1 != 0 {
                 Some("invalid: fractional after offset is not representable in whole seconds")
+            } else if a.maximum.is_some_and(|(_, nanos)| nanos != 0) {
+                Some("invalid: fractional after maximum is not representable in whole seconds")
+            } else if a.maximum.is_some_and(|(maximum, _)| maximum < a.offset.0) {
+                Some("inverted_after_bounds")
             } else {
                 None
             };
             if let Some(reason) = reason {
                 skip(&mut response, "routine", source, reason);
             } else {
-                after.push(
-                    json!({"objective_id":routine_ids[&a.template_id],"minimum_seconds":a.offset.0}),
-                );
+                let mut edge = json!({"objective_id":routine_ids[&a.template_id],"minimum_seconds":a.offset.0});
+                if let Some((maximum, _)) = a.maximum {
+                    edge["maximum_seconds"] = json!(maximum);
+                }
+                after.push(edge);
             }
         }
         if !after.is_empty() {
