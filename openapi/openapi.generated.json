@@ -3475,6 +3475,7 @@
       "RecordedTaskActionKind": {
         "type": "string",
         "enum": [
+          "start",
           "complete",
           "skip",
           "override",
