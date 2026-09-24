@@ -25,6 +25,8 @@ use ubu_store::{
 pub struct RoutineContext {
     pub diagnostics: Vec<DiagnosticBody>,
     pub realized_floors: HashMap<String, u64>,
+    /// Assigned, not intersected with nominal ceilings; already clamped to the declared range.
+    pub realized_ceilings: HashMap<String, u64>,
 }
 fn internal(e: impl std::fmt::Display) -> AppError {
     AppError::Internal(e.to_string())
@@ -434,7 +436,7 @@ pub async fn materialize(
         let Some(id) = ids.get(&o.key) else {
             continue;
         };
-        for (predecessor, offset, _) in &o.after {
+        for (predecessor, minimum, maximum) in &o.after {
             let Some(parent) = days
                 .get(&(predecessor.to_string(), o.local_date.clone()))
                 .and_then(|id| by_id.get(id.as_str()))
@@ -443,12 +445,18 @@ pub async fn materialize(
             };
             if parent.row.status == "completed" {
                 if let Some(end) = seconds(&json!(parent.row.updated_at)) {
-                    let floor = end.saturating_add(*offset as u64);
+                    let floor = end.saturating_add(*minimum as u64);
                     context
                         .realized_floors
                         .entry(id.clone())
                         .and_modify(|v| *v = (*v).max(floor))
                         .or_insert(floor);
+                    if let Some(maximum) = maximum {
+                        let ceiling = end.saturating_add(*maximum as u64)
+                            .saturating_add(o.template.duration_estimate.scalar_seconds()).min(o.declared_end);
+                        context.realized_ceilings.entry(id.clone())
+                            .and_modify(|value| *value = (*value).min(ceiling)).or_insert(ceiling);
+                    }
                 }
             }
         }

@@ -543,6 +543,9 @@ async fn build_request_from_store_with_context(
                     if timestamp_seconds(&range.earliest_start.to_string())? >= pre_repair_horizon.end || end <= pre_repair_horizon.start { continue; }
                     window.end = end;
                     window.start = window.start.max(routine_context.realized_floors.get(&task.id).copied().unwrap_or(0));
+                    if let Some(ceiling) = routine_context.realized_ceilings.get(&task.id).copied() {
+                        window.end = ceiling;
+                    }
                 } else { window.end = window.end.min(end); }
             }
             task_bodies.push(TaskSpecBody {
