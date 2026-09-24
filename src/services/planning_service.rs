@@ -651,6 +651,26 @@ async fn build_request_from_store_with_context(
         task.depends_on.retain(|dependency| planned_ids.contains(dependency));
     }
 
+    let groups = super::duration_model::by_group(observed_routine_events(pool).await?, now as i64);
+    let titles = routine_titles(pool).await?;
+    let task_groups: HashMap<_, _> = task_rows.iter().filter_map(|row| {
+        row.payload["occurrence"]["routine_objective_id"].as_str().map(|group| (row.id.as_str(), group))
+    }).collect();
+    for (group, observations) in groups {
+        let Ok(model) = super::duration_model::derive(&observations) else { continue; };
+        let mut applied = false;
+        for task in &mut task_bodies {
+            if task.static_anchor.is_none() && task_groups.get(task.id.as_str()) == Some(&group.as_str()) {
+                task.duration = model.mode_seconds;
+                task.duration_estimate = Some(model.estimate.clone());
+                applied = true;
+            }
+        }
+        if applied {
+            let title = titles.get(&group).unwrap_or(&group);
+            diagnostics.push(DiagnosticBody { code: "duration_model_observed".into(), message: format!("`{title}` is planned from {} observed runs, not its declared duration ({})", model.observations, describe_estimate(&model)) });
+        }
+    }
     let preferences = active_task_preferences(pool).await?;
     for task in &task_bodies { if mandatory.contains(&task.id) && task.static_anchor.is_none() { time_window.end = time_window.end.max(task.window.as_ref().unwrap().end); } }
     let eligible = task_bodies.iter().filter(|task| !mandatory.contains(&task.id)).map(|task| task.id.clone()).collect::<Vec<_>>();
@@ -1333,6 +1353,19 @@ async fn observed_routine_events(pool: &sqlx::SqlitePool) -> Result<Vec<(String,
         events.push((group, time.inner().unix_timestamp(), is_start));
     }
     Ok(events)
+}
+
+async fn routine_titles(pool: &sqlx::SqlitePool) -> Result<BTreeMap<String, String>> {
+    let rows = sqlx::query_as::<_, (String, Option<String>)>("SELECT id, json_extract(payload_json, '$.title') FROM objects WHERE object_type = 'Objective'")
+        .fetch_all(pool).await.map_err(|e| AppError::Internal(e.to_string()))?;
+    Ok(rows.into_iter().filter_map(|(id, title)| title.map(|title| (id, title))).collect())
+}
+
+fn describe_estimate(model: &super::duration_model::DerivedDuration) -> String {
+    match model.estimate {
+        DurationEstimateBody::Fixed { seconds } => format!("{} min every observed run", seconds.div_ceil(60)),
+        DurationEstimateBody::ShiftedLognormalP95 { .. } => format!("usually {} min, {} min at worst, {} min at best", model.mode_seconds.div_ceil(60), model.p95_seconds.div_ceil(60), model.min_seconds.div_ceil(60)),
+    }
 }
 
 async fn active_task_preferences(pool: &sqlx::SqlitePool) -> Result<Vec<Preference>> {
