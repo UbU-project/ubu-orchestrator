@@ -235,6 +235,109 @@ fn routine_payload(
     payload["routine_instance_template"] = template;
     normalize(ObjectType::Objective, payload).map_err(|e| format!("invalid: {e}"))
 }
+// Local copy of schemas/core/precondition.schema.json's target pattern:
+// ^(facts|numeric_values|set_memberships|event_markers)\.[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$
+// ubu-core's target parser is private; keep this in sync with the documented grammar.
+fn requirement_target_valid(target: &str) -> bool {
+    let Some((collection, key)) = target.split_once('.') else {
+        return false;
+    };
+    matches!(collection, "facts" | "numeric_values" | "set_memberships" | "event_markers")
+        && key.split('.').all(|part| {
+            !part.is_empty()
+                && part.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        })
+}
+fn local_seconds(value: &str) -> Option<i64> {
+    validate_local_time(value).ok()?;
+    value.split(':').try_fold(0, |seconds, part| {
+        Some(seconds * 60 + part.parse::<i64>().ok()?)
+    })
+}
+fn resolve_requirement<'a>(
+    requiring: &Routine,
+    requirement: &Requires,
+    routines: &'a BTreeMap<String, Routine>,
+    routine_ids: &BTreeMap<String, Value>,
+) -> std::result::Result<&'a Routine, &'static str> {
+    if !requirement_target_valid(&requirement.fact) {
+        return Err("requirement_invalid_target");
+    }
+    let offset = requirement.offset.unwrap_or((0, 0));
+    if offset.1 != 0 || requirement.maximum.is_some_and(|(_, nanos)| nanos != 0) {
+        return Err("requirement_fractional_bound");
+    }
+    // Mainline after minima are nonnegative. Reject at the edge, not at admission.
+    if offset.0 < 0 || requirement.maximum.is_some_and(|(maximum, _)| maximum < offset.0) {
+        return Err("requirement_inverted_bounds");
+    }
+    let start = local_seconds(&requiring.start_time);
+    let mut established = false;
+    let mut nearest: Option<(i64, &Routine)> = None;
+    let mut tied = false;
+    for routine in routines.values() {
+        if routine.id == requiring.id
+            || !routine_ids.contains_key(&routine.id)
+            || !routine.establishes.contains(&requirement.fact)
+            || routine.duration.1 != 0
+        {
+            continue;
+        }
+        let Some(end) = local_seconds(&routine.start_time)
+            .and_then(|seconds| seconds.checked_add(routine.duration.0)) else {
+            continue;
+        };
+        established = true;
+        if !start.is_some_and(|start| end <= start) {
+            continue;
+        }
+        match nearest {
+            Some((previous, _)) if end < previous => {}
+            Some((previous, _)) if end == previous => tied = true,
+            _ => {
+                nearest = Some((end, routine));
+                tied = false;
+            }
+        }
+    }
+    if !established {
+        Err("requirement_unestablished")
+    } else if tied {
+        Err("requirement_ambiguous")
+    } else {
+        nearest.map(|(_, routine)| routine).ok_or("requirement_unestablished_before")
+    }
+}
+fn merge_requirement(after: &mut Vec<Value>, mut edge: Value) -> bool {
+    let id = edge["objective_id"].clone();
+    for previous in after.iter().filter(|previous| previous["objective_id"] == id) {
+        edge["minimum_seconds"] = json!(edge["minimum_seconds"].as_i64().unwrap()
+            .max(previous["minimum_seconds"].as_i64().unwrap()));
+        if let Some(maximum) = previous["maximum_seconds"].as_i64() {
+            edge["maximum_seconds"] = json!(edge["maximum_seconds"].as_i64()
+                .map_or(maximum, |current| current.min(maximum)));
+        }
+    }
+    if edge["maximum_seconds"].as_i64()
+        .is_some_and(|maximum| maximum < edge["minimum_seconds"].as_i64().unwrap()) {
+        return false;
+    }
+    // A contradictory intersection must not discard the routine or its earlier valid edges.
+    if let Some(index) = after.iter().position(|previous| previous["objective_id"] == id) {
+        after[index] = edge;
+        let mut first = true;
+        after.retain(|previous| {
+            if previous["objective_id"] != id {
+                true
+            } else {
+                std::mem::take(&mut first)
+            }
+        });
+    } else {
+        after.push(edge);
+    }
+    true
+}
 fn task_payload(
     t: &QuickTask,
     id: &str,
@@ -411,6 +514,27 @@ pub async fn import(
                     edge["maximum_seconds"] = json!(maximum);
                 }
                 after.push(edge);
+            }
+        }
+        let routine = &snapshot.store.routines[source];
+        for requirement in &routine.requires {
+            let establisher = match resolve_requirement(
+                routine, requirement, &snapshot.store.routines, &routine_ids,
+            ) {
+                Ok(establisher) => establisher,
+                Err(reason) => {
+                    skip(&mut response, "routine", source, format!("{reason}: {}", requirement.fact));
+                    continue;
+                }
+            };
+            let mut edge = json!({"objective_id":routine_ids[&establisher.id],
+                "minimum_seconds":requirement.offset.unwrap_or((0, 0)).0});
+            if let Some((maximum, _)) = requirement.maximum {
+                edge["maximum_seconds"] = json!(maximum);
+            }
+            if !merge_requirement(&mut after, edge) {
+                skip(&mut response, "routine", source,
+                    format!("requirement_inverted_bounds: {}", requirement.fact));
             }
         }
         if !after.is_empty() {
