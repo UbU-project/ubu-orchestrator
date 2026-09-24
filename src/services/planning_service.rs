@@ -2015,9 +2015,10 @@ fn committed_clusters(tasks: &mut Vec<TaskSpecBody>, mandatory: &HashSet<String>
     for i in 0..tasks.len() {
         if tasks[i].static_anchor.is_none() {continue;}
         for j in i+1..tasks.len() {
-            if tasks[j].static_anchor.is_none() || (!mandatory.contains(&tasks[i].id) && !mandatory.contains(&tasks[j].id)) {continue;}
+            if tasks[j].static_anchor.is_none() {continue;}
             let a=tasks[i].window.as_ref().unwrap();let b=tasks[j].window.as_ref().unwrap();
-            if a.start<b.end && a.end>b.start {let x=root(&mut parents,i);let y=root(&mut parents,j);parents[x]=y;}
+            let joins = mandatory.contains(&tasks[i].id) || mandatory.contains(&tasks[j].id) || nested(a, b);
+            if joins && a.start<b.end && a.end>b.start {let x=root(&mut parents,i);let y=root(&mut parents,j);parents[x]=y;}
         }
     }
     let mut groups=BTreeMap::<usize,Vec<usize>>::new();
@@ -2027,6 +2028,11 @@ fn committed_clusters(tasks: &mut Vec<TaskSpecBody>, mandatory: &HashSet<String>
         group.sort_by_key(|&i| {let w=tasks[i].window.as_ref().unwrap();(w.start,std::cmp::Reverse(w.end),tasks[i].id.clone())});
         let carrier=group[0];let members:HashSet<_>=group.iter().map(|&i|tasks[i].id.clone()).collect();
         let mut occurrences:Vec<_>=members.iter().filter(|id|mandatory.contains(*id)).cloned().collect();occurrences.sort();
+        if occurrences.is_empty() {
+            let count = group.len() - 1;
+            let wording = if count == 1 { "Static Task happens" } else { "Static Tasks happen" };
+            warnings.push(DiagnosticBody { code: "static_tasks_share_committed_time".into(), message: format!("{count} {wording} during `{}`; the whole span is busy and every one of them stays on the Calendar", tasks[carrier].id) });
+        }
         let commitment=group.iter().map(|&i|&tasks[i]).filter(|t|!mandatory.contains(&t.id)).min_by_key(|t|(t.window.as_ref().unwrap().start,t.id.clone()));
         if let Some(commitment)=commitment {
             for id in &occurrences {warnings.push(DiagnosticBody {code:"routine_occurrence_overlaps_commitment".into(),message:format!("Routine occurrence `{id}` shares its time with commitment `{}`; both stay on the Calendar and the whole span is busy",commitment.id)});}
