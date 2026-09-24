@@ -22,7 +22,7 @@ planning resolves real timezones and materializes occurrences as described in
 | Routine dynamic | Planned template with start_time–latest_tod range; absent latest_tod becomes 23:59:59 |
 | Routine not dynamic | Static template without a local range |
 | Routine transparent | Inverse occupies_capacity |
-| Routine after | Reference to mapped Objective id plus nonnegative offset_seconds |
+| Routine after | Reference to mapped Objective id plus nonnegative minimum_seconds and optional maximum_seconds |
 | Backlog, Scheduled, Active, Deferred Task | Active Task |
 | detail, tags/category, pinned, due | description, union of tags with category_tag, static_window, due_at |
 | Positive est_duration, transparent | Fixed duration_estimate, inverse occupies_capacity |
