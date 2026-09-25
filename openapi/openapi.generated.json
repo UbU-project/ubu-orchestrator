@@ -777,6 +777,76 @@
         }
       }
     },
+    "/task": {
+      "post": {
+        "tags": [
+          "crate::api::task"
+        ],
+        "operationId": "capture",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaptureRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskWriteResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/task/{task_id}": {
+      "patch": {
+        "tags": [
+          "crate::api::task"
+        ],
+        "operationId": "edit",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskWriteResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/task/{task_id}/action": {
       "post": {
         "tags": [
@@ -1526,6 +1596,22 @@
           "other"
         ]
       },
+      "CaptureRequest": {
+        "allOf": [
+          {},
+          {
+            "type": "object",
+            "properties": {
+              "schema_version": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        ]
+      },
       "CheckpointCoverage": {
         "type": "string",
         "enum": [
@@ -1743,6 +1829,29 @@
                 "type": "string",
                 "enum": [
                   "shifted_lognormal_p95"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "EditRequest": {
+        "allOf": [
+          {},
+          {
+            "type": "object",
+            "required": [
+              "expected_version"
+            ],
+            "properties": {
+              "expected_version": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "schema_version": {
+                "type": [
+                  "string",
+                  "null"
                 ]
               }
             }
@@ -4239,6 +4348,26 @@
           },
           "status": {
             "$ref": "#/components/schemas/TaskLifecycleStatus"
+          }
+        }
+      },
+      "TaskWriteResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "task_id",
+          "version"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },

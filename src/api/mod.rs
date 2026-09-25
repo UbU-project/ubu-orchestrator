@@ -9,6 +9,7 @@ pub mod planning;
 pub mod projection;
 pub mod recalculation;
 pub mod reports;
+pub mod task;
 pub mod user_action;
 
 pub mod quick_ubu;

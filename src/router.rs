@@ -42,6 +42,8 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/calendar/current", get(api::calendar::current))
         .route("/next-action", get(api::next_action::next_action))
+        .route("/task", post(api::task::capture))
+        .route("/task/:task_id", axum::routing::patch(api::task::edit))
         .route("/task/:task_id/start", post(api::user_action::start))
         .route(
             "/task/:task_id/action",
