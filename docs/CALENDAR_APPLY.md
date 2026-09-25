@@ -2,9 +2,9 @@
 
 P1B-28 established the event mapping and deterministic diff. P1B-29 adds the
 recording client, persisted previews and applied sets, and gated apply. P1B-30
-will add the real Google transport and authorization, followed by external-edit
-reconciliation. This ticket stops at an entirely offline state machine: Live is
-defined and explicitly refused. The adapter lives in `ubu-orchestrator`; the
+now adds the real Google transport and session enablement; see
+[CALENDAR_LIVE.md](CALENDAR_LIVE.md) for configuration and the scratch-calendar
+procedure. External-edit reconciliation follows in P1B-31. The adapter lives in `ubu-orchestrator`; the
 `CalendarApi` trait is the extraction seam if an independent release is needed.
 
 ## Existing contracts and the two additions
@@ -51,8 +51,10 @@ applied events, per-operation outcomes, and diagnostics. Aggregate status is
 `failed`. A gate-denied batch is represented by a failed result with skipped
 operations and rejection diagnostics, not by a successful delivery claim.
 
-`export_mode: "live"` returns HTTP 501 `calendar_live_export_unavailable` before
-any client call or delivery record. It never silently substitutes the recorder.
+`export_mode: "live"` requires configured credential paths and per-process
+enablement. Missing paths return HTTP 503 `calendar_live_export_unconfigured`;
+a disabled session returns HTTP 403 `calendar_live_export_not_enabled`, before
+any client call or delivery record. Live never substitutes the recorder.
 Mock mode uses `RecordingCalendarApi`, seeded from the persisted applied set.
 Tests can inject a recorder through `AppState::with_calendar_api` to inspect its
 ordered calls and simulate operation failures.
@@ -102,7 +104,7 @@ all events is also a real snapshot, not a signal to fall back to an older set.
 
 Operations are attempted once, independently, in deterministic create/update/
 delete order, each group sorted by external id. There is no automatic retry or
-backoff. A later preview proposes failed work again. Successful apply followed by
+backoff, except P1B-30's single insert-conflict-to-patch transition. A later preview proposes failed work again. Successful apply followed by
 an unchanged preview produces zero operations.
 
 Preview and apply share a single-Device mutex. Apply verifies its stored base
@@ -113,8 +115,8 @@ compare that set with Google or imply any external reconciliation.
 
 ## Known limits
 
-1. **Nothing reaches Google.** `Live` is refused. The whole path is exercised against `RecordingCalendarApi`, so the trait's shape is proven and its Google implementation is not.
-2. **The applied set is UbU's belief, not the calendar's state.** If someone edits or deletes an event in Google, UbU will not notice and the next preview will propose nothing. Reconciliation is P1B-30.
+1. **Transport is covered manually.** P1B-30 adds Live; offline tests exercise the wire model and recorder. Only the scratch-calendar procedure exercises Google.
+2. **The applied set is UbU's belief, not the calendar's state.** If someone edits or deletes an event in Google, UbU will not notice and the next preview will propose nothing. Reconciliation is P1B-31.
 3. **No retry and no backoff.** A failed operation is recorded as failed and re-proposed by the next preview. There is no queue and no automatic second attempt.
-4. **One calendar, not selected.** Which calendar receives the projection is still unmodelled; it belongs with the client and its credentials.
+4. **One calendar.** P1B-30 selects it with `UBU_GOOGLE_CALENDAR_ID`; routing by category or compartment is not supported.
 5. **The boundary Log records adjudication, not delivery.** A permitted operation that then fails in the client is visible in the result payload, not in the boundary Log entry, which was written when the gate decided.
