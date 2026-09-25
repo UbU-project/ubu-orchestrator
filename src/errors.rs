@@ -113,6 +113,7 @@ impl IntoResponse for AppError {
             Self::Diagnostic { status, .. } | Self::Diagnostics { status, .. } => *status,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::Upstream(_) => StatusCode::BAD_GATEWAY,
+            Self::Store(ubu_store::StoreError::PreconditionFailed { .. }) => StatusCode::CONFLICT,
             Self::Core(_) | Self::Store(_) | Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
