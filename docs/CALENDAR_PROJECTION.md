@@ -115,4 +115,3 @@ projection interfaces is deferred until a third surface provides a concrete need
 3. **One calendar, no calendar selection.** Which Google calendar receives the projection is not modelled; that belongs with the client and its credentials in P1B-29.
 4. **Colours come from the operator palette, not from Google.** `CategoryPalette` maps a category to a Google colour id by number. If the user's calendar uses a custom palette, the numbers still apply but the rendered colours may not be what the category name suggests.
 5. **All-day events, recurrence and attendees are not modelled.** Every event is a timed, single, attendee-free block. UbU plans concrete spans, and a recurring Google event would fight the daily re-plan rather than help it.
-
