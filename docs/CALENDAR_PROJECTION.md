@@ -1,5 +1,9 @@
 # Calendar projection preview
 
+P1B-29 supersedes the preview-only persistence behavior described below: previews
+now persist projection records and diff against the last applied set. See
+[Calendar apply](CALENDAR_APPLY.md) for the current preview/approve contract.
+
 UBU-D0275 describes the switch configuration:
 
 > the dogfooding configuration is one desktop Device with Google Calendar as a projection surface
