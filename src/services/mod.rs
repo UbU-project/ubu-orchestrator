@@ -6,6 +6,7 @@ pub mod calendar_client;
 pub mod calendar_wire;
 pub mod calendar_google;
 pub mod calendar_apply;
+pub mod calendar_reconcile;
 pub mod desktop_session_service;
 pub mod duration_model;
 pub mod import_service;
