@@ -732,6 +732,87 @@
         }
       }
     },
+    "/projection/calendar/reconcile": {
+      "post": {
+        "tags": [
+          "crate::api::calendar_reconciliation"
+        ],
+        "operationId": "reconcile",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalendarReconcileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarReconcileResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or unsupported schema"
+          },
+          "403": {
+            "description": "Live Calendar is not enabled for this process"
+          },
+          "502": {
+            "description": "Calendar observation failed"
+          },
+          "503": {
+            "description": "Google credential paths are not configured"
+          }
+        }
+      }
+    },
+    "/projection/calendar/reconcile/{reconciliation_id}/repair": {
+      "post": {
+        "tags": [
+          "crate::api::calendar_reconciliation"
+        ],
+        "operationId": "repair",
+        "parameters": [
+          {
+            "name": "reconciliation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarRepairResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Record is not a supported Calendar reconciliation"
+          },
+          "404": {
+            "description": "Reconciliation not found"
+          },
+          "409": {
+            "description": "Calendar reconciliation has already been repaired"
+          }
+        }
+      }
+    },
     "/projection/preview": {
       "post": {
         "tags": [
@@ -1590,6 +1671,29 @@
           }
         }
       },
+      "CalendarConflict": {
+        "type": "object",
+        "required": [
+          "external_id",
+          "conflict_type",
+          "summary",
+          "message"
+        ],
+        "properties": {
+          "conflict_type": {
+            "type": "string"
+          },
+          "external_id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        }
+      },
       "CalendarEventBody": {
         "type": "object",
         "required": [
@@ -1835,6 +1939,94 @@
           },
           "status": {
             "type": "string"
+          }
+        }
+      },
+      "CalendarReconcileRequest": {
+        "type": "object",
+        "required": [
+          "export_mode"
+        ],
+        "properties": {
+          "export_mode": {
+            "$ref": "#/components/schemas/CalendarExportMode"
+          },
+          "schema_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "CalendarReconcileResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "reconciliation_id",
+          "status",
+          "conflicts",
+          "diagnostics"
+        ],
+        "properties": {
+          "conflicts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CalendarConflict"
+            }
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DiagnosticBody"
+            }
+          },
+          "reconciliation_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "CalendarRepairResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "reconciliation_id",
+          "dropped_events",
+          "updated_events",
+          "applied_event_count",
+          "remaining_conflicts"
+        ],
+        "properties": {
+          "applied_event_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "dropped_events": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reconciliation_id": {
+            "type": "string"
+          },
+          "remaining_conflicts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CalendarConflict"
+            }
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "updated_events": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },
