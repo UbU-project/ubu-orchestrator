@@ -393,6 +393,42 @@
         }
       }
     },
+    "/desktop/session/google-calendar": {
+      "post": {
+        "tags": [
+          "crate::api::desktop"
+        ],
+        "operationId": "google_calendar",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoogleCalendarEnableRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoogleCalendarEnableResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or unsupported session schema"
+          },
+          "503": {
+            "description": "Google credential paths are not configured"
+          }
+        }
+      }
+    },
     "/github/import/fixture": {
       "post": {
         "tags": [
@@ -653,11 +689,14 @@
               }
             }
           },
+          "403": {
+            "description": "Live Calendar export is not enabled for this process"
+          },
           "409": {
             "description": "The applied set changed since this preview"
           },
-          "501": {
-            "description": "Live Calendar export is unavailable"
+          "503": {
+            "description": "Google credential paths are not configured"
           }
         }
       }
@@ -1598,7 +1637,7 @@
       },
       "CalendarExportMode": {
         "type": "string",
-        "description": "Live is deliberately unavailable until the provider transport is implemented.",
+        "description": "Live requires operator configuration and explicit in-memory enablement.",
         "enum": [
           "mock",
           "live"
@@ -2278,6 +2317,37 @@
           },
           "token_available": {
             "type": "boolean"
+          }
+        }
+      },
+      "GoogleCalendarEnableRequest": {
+        "type": "object",
+        "properties": {
+          "schema_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "GoogleCalendarEnableResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "accepted",
+          "enabled"
+        ],
+        "properties": {
+          "accepted": {
+            "type": "boolean"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "schema_version": {
+            "type": "string"
           }
         }
       },

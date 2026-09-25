@@ -1,0 +1,42 @@
+{
+  "summary": "Synthetic focus",
+  "start": {
+    "dateTime": "2026-09-25T09:00:00Z",
+    "timeZone": "UTC"
+  },
+  "end": {
+    "dateTime": "2026-09-25T09:30:00Z",
+    "timeZone": "UTC"
+  },
+  "colorId": "5",
+  "transparency": "transparent",
+  "reminders": {
+    "useDefault": false,
+    "overrides": [
+      {
+        "method": "popup",
+        "minutes": 10
+      },
+      {
+        "method": "popup",
+        "minutes": 0
+      }
+    ]
+  },
+  "id": "0123456789abcdef0123456789abcdef",
+  "kind": "calendar#event",
+  "etag": "\"synthetic-etag\"",
+  "status": "confirmed",
+  "htmlLink": "https://example.invalid/synthetic-event",
+  "created": "2026-09-24T08:00:00Z",
+  "updated": "2026-09-24T08:00:00Z",
+  "creator": {
+    "email": "fake-owner@example.invalid"
+  },
+  "organizer": {
+    "email": "fake-calendar@example.invalid"
+  },
+  "iCalUID": "synthetic-event@example.invalid",
+  "sequence": 0,
+  "eventType": "default"
+}
