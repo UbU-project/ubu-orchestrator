@@ -288,7 +288,7 @@ async fn f1_routine_day_preserves_committed_time_mandatory_order_and_idempotency
         let s = step(&r, &ids[&n]);
         assert!(s["start"].as_u64().unwrap() >= sec(&format!("{DAY}T{start}:00Z")));
         assert!(s["end"].as_u64().unwrap() <= sec(&format!("{DAY}T{end}:00Z")));
-        assert_eq!(s["occupies_capacity"], true);
+        assert_eq!(s["occupies_capacity"], false);
     }
     assert!(step(&r, &ids[&102])["depends_on"]
         .as_array()

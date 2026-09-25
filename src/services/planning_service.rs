@@ -857,15 +857,15 @@ fn scheduled_task_body(
         depends_on: task.depends_on.clone(),
         static_anchor: task.static_anchor,
         placement_authority,
-        occupies_capacity: true,
+        occupies_capacity: titles.get(&task.task_id).map(|display| display.occupies_capacity).unwrap_or(true),
         category_tag: titles.get(&task.task_id).and_then(|display| display.category_tag.clone()),
         gcal_color_id: titles.get(&task.task_id).and_then(|display| display.gcal_color_id.clone()),
     })
 }
 
-/// Non-capacity steps do not enter the kernel: robustness, probability and
-/// legitimization describe capacity work only. Risk and plan-quality analysis
-/// sees these steps through the merged candidate bodies.
+/// Non-capacity Static steps bypass the kernel and enter merged candidate bodies
+/// for risk and plan-quality analysis. Mandatory Dynamic occurrences still enter
+/// the kernel even when their Task declares that they do not occupy capacity.
 fn direct_static_steps(tasks: &[TaskSpecBody], titles: &HashMap<String, TaskDisplay>, occupies_capacity: bool) -> Result<Vec<ScheduledTaskBody>> {
     tasks.iter().map(|task| {
         let window = task.window.as_ref().expect("direct Static Task has a window");
@@ -1661,6 +1661,7 @@ fn bootstrap_affect_observation(
 
 struct TaskDisplay {
     title: String,
+    occupies_capacity: bool,
     category_tag: Option<String>,
     gcal_color_id: Option<String>,
 }
@@ -1685,6 +1686,7 @@ async fn task_titles(pool: &sqlx::SqlitePool, palette: &crate::category_palette:
         let gcal_color_id = palette.color(category_tag.as_deref()).map(str::to_owned);
         titles.insert(id.clone(), TaskDisplay {
             title: payload.get("title").and_then(Value::as_str).unwrap_or(&id).to_owned(),
+            occupies_capacity: payload.get("occupies_capacity").and_then(Value::as_bool).unwrap_or(true),
             category_tag,
             gcal_color_id,
         });
