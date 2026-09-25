@@ -626,6 +626,26 @@
         }
       }
     },
+    "/projection/calendar/preview": {
+      "get": {
+        "tags": [
+          "crate::api::calendar_projection"
+        ],
+        "operationId": "preview",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarProjectionPreviewResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projection/preview": {
       "post": {
         "tags": [
@@ -1480,6 +1500,156 @@
             "type": "string"
           },
           "started": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CalendarEventBody": {
+        "type": "object",
+        "required": [
+          "external_id",
+          "task_id",
+          "summary",
+          "start_at",
+          "end_at",
+          "transparent",
+          "reminders_minutes"
+        ],
+        "properties": {
+          "color_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "end_at": {
+            "type": "string"
+          },
+          "external_id": {
+            "type": "string"
+          },
+          "reminders_minutes": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "start_at": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "transparent": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CalendarOperationBody": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "event",
+              "kind"
+            ],
+            "properties": {
+              "event": {
+                "$ref": "#/components/schemas/CalendarEventBody"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "create"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "event",
+              "kind"
+            ],
+            "properties": {
+              "event": {
+                "$ref": "#/components/schemas/CalendarEventBody"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "update"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "external_id",
+              "summary",
+              "kind"
+            ],
+            "properties": {
+              "external_id": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "delete"
+                ]
+              },
+              "summary": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
+      "CalendarProjectionPreviewResponse": {
+        "type": "object",
+        "description": "Read-only view of the current Calendar. Preview stores nothing. Operations\nare diff(desired, &[]): all creates until P1B-29 persists the applied events.",
+        "required": [
+          "schema_version",
+          "stale",
+          "events",
+          "operations",
+          "diagnostics"
+        ],
+        "properties": {
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DiagnosticBody"
+            }
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CalendarEventBody"
+            }
+          },
+          "operations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CalendarOperationBody"
+            }
+          },
+          "plan_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "stale": {
             "type": "boolean"
           }
         }

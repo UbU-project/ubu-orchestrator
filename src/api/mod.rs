@@ -1,6 +1,7 @@
 pub mod advisory;
 pub mod bootstrap;
 pub mod calendar;
+pub mod calendar_projection;
 pub mod desktop;
 pub mod github;
 pub mod health;
