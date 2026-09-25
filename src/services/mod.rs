@@ -3,6 +3,7 @@ pub mod proposal_applier;
 pub mod bootstrap_service;
 pub mod calendar_projection;
 pub mod calendar_client;
+pub mod calendar_wire;
 pub mod calendar_apply;
 pub mod desktop_session_service;
 pub mod duration_model;
