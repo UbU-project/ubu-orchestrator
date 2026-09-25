@@ -632,6 +632,17 @@
           "crate::api::calendar_projection"
         ],
         "operationId": "preview",
+        "parameters": [
+          {
+            "name": "no_external_export",
+            "in": "query",
+            "description": "Mirror the existing projection policy input; true denies external export.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "",
@@ -1613,9 +1624,10 @@
       },
       "CalendarProjectionPreviewResponse": {
         "type": "object",
-        "description": "Read-only view of the current Calendar. Preview stores nothing. Operations\nare diff(desired, &[]): all creates until P1B-29 persists the applied events.",
+        "description": "Persisted preview of the current Calendar, diffed against the last applied\nevent set. Preview changes projection records only; it makes no client calls.",
         "required": [
           "schema_version",
+          "preview_id",
           "stale",
           "events",
           "operations",
@@ -1645,6 +1657,9 @@
               "string",
               "null"
             ]
+          },
+          "preview_id": {
+            "type": "string"
           },
           "schema_version": {
             "type": "string"

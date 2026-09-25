@@ -1,13 +1,13 @@
-use axum::{extract::State, Json};
-use serde::Serialize;
+use axum::{extract::{Query, State}, Json};
+use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::{
     api::planning::DiagnosticBody,
     errors::Result,
     services::{
-        calendar_projection::{self, CalendarOperation, DesiredEvent},
-        planning_service,
+        calendar_projection::{CalendarOperation, DesiredEvent},
+        calendar_apply,
     },
     state::AppState,
 };
@@ -77,11 +77,12 @@ impl From<CalendarOperation> for CalendarOperationBody {
     }
 }
 
-/// Read-only view of the current Calendar. Preview stores nothing. Operations
-/// are diff(desired, &[]): all creates until P1B-29 persists the applied events.
+/// Persisted preview of the current Calendar, diffed against the last applied
+/// event set. Preview changes projection records only; it makes no client calls.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct CalendarProjectionPreviewResponse {
     pub schema_version: String,
+    pub preview_id: String,
     pub plan_id: Option<String>,
     pub stale: bool,
     pub events: Vec<CalendarEventBody>,
@@ -89,43 +90,22 @@ pub struct CalendarProjectionPreviewResponse {
     pub diagnostics: Vec<DiagnosticBody>,
 }
 
+#[derive(Debug, Default, Deserialize, utoipa::IntoParams)]
+pub struct CalendarPreviewQuery {
+    /// Mirror the existing projection policy input; true denies external export.
+    #[serde(default)]
+    pub no_external_export: bool,
+}
+
 #[utoipa::path(
     get,
     path = "/projection/calendar/preview",
+    params(CalendarPreviewQuery),
     responses((status = 200, body = CalendarProjectionPreviewResponse))
 )]
 pub async fn preview(
     State(state): State<AppState>,
+    Query(query): Query<CalendarPreviewQuery>,
 ) -> Result<Json<CalendarProjectionPreviewResponse>> {
-    let calendar = planning_service::current_calendar(state.clone()).await?;
-    let maps = planning_service::calendar_reminder_maps(state.inner().store.pool()).await?;
-    let desired = calendar_projection::desired_events(
-        &calendar.steps,
-        &maps.reminders_by_objective,
-        &maps.objective_of_task,
-    );
-    let operations = calendar_projection::diff(&desired, &[])
-        .into_iter()
-        .map(Into::into)
-        .collect();
-    let diagnostics = calendar
-        .steps
-        .iter()
-        .filter(|step| calendar_projection::external_id(&step.task_id).is_none())
-        .map(|step| DiagnosticBody {
-            code: "calendar_event_id_unmappable".into(),
-            message: format!(
-                "Task `{}` cannot produce a valid Calendar event id; step skipped",
-                step.task_id
-            ),
-        })
-        .collect();
-    Ok(Json(CalendarProjectionPreviewResponse {
-        schema_version: CALENDAR_PROJECTION_PREVIEW_SCHEMA_VERSION.into(),
-        plan_id: calendar.plan_id,
-        stale: calendar.stale,
-        events: desired.into_iter().map(Into::into).collect(),
-        operations,
-        diagnostics,
-    }))
+    Ok(Json(calendar_apply::preview(&state, query.no_external_export).await?))
 }

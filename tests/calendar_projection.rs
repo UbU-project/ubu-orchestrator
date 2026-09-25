@@ -295,8 +295,8 @@ async fn preview_preserves_current_calendar_plan_id_and_staleness() {
     assert_eq!(projected["stale"], current["stale"]);
 }
 
-// Snapshot every SQLite table so a preview that writes even unrelated state
-// fails the read-only check. Identifiers come from SQLite's own schema.
+// Snapshot every table except the authorized preview records. Canonical state
+// and unrelated projection state must remain unchanged.
 async fn database_snapshot(state: &AppState) -> Vec<(String, Vec<String>)> {
     use sqlx::Row;
     let pool = state.inner().store.pool();
@@ -326,13 +326,13 @@ async fn database_snapshot(state: &AppState) -> Vec<(String, Vec<String>)> {
         .fetch_all(pool)
         .await
         .unwrap();
-        snapshot.push((table, rows));
+        if table != "projection_previews" { snapshot.push((table, rows)); }
     }
     snapshot
 }
 
 #[tokio::test]
-async fn repeated_preview_is_byte_identical_all_creates_and_read_only() {
+async fn repeated_preview_preserves_content_and_only_persists_previews() {
     let state = state().await;
     import_day(&state).await;
     generate(&state).await;
@@ -341,7 +341,16 @@ async fn repeated_preview_is_byte_identical_all_creates_and_read_only() {
     assert_eq!(status, StatusCode::OK);
     let (status, second) = bytes(&state, "GET", PREVIEW, Value::Null).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(first, second);
+    let mut first_content: Value = serde_json::from_slice(&first).unwrap();
+    let mut second_content: Value = serde_json::from_slice(&second).unwrap();
+    let first_id = first_content.as_object_mut().unwrap().remove("preview_id").unwrap();
+    let second_id = second_content.as_object_mut().unwrap().remove("preview_id").unwrap();
+    assert_ne!(first_id, second_id);
+    assert_eq!(first_content, second_content);
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM projection_previews WHERE id IN (?, ?)")
+        .bind(first_id.as_str().unwrap()).bind(second_id.as_str().unwrap())
+        .fetch_one(state.inner().store.pool()).await.unwrap();
+    assert_eq!(count, 2);
     assert_eq!(database_snapshot(&state).await, before);
     let projected: Value = serde_json::from_slice(&first).unwrap();
     let ops = projected["operations"].as_array().unwrap();
