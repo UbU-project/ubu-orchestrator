@@ -11,6 +11,7 @@ pub mod projection_service;
 pub mod recalculation_service;
 pub mod report_service;
 pub mod task_priority;
+pub mod task_capture;
 
 pub mod quick_ubu_import;
 pub mod routine_instantiation;
