@@ -1,10 +1,18 @@
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::{filter::filter_fn, prelude::*, EnvFilter};
 
 pub fn init_tracing() {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_target(false)
+    // OAuth debug logs include cached tokens, auth URLs and response bodies.
+    // A separate global filter cannot be overridden by RUST_LOG directives.
+    let secret_safe = filter_fn(|metadata| {
+        !["yup_oauth2", "reqwest", "hyper", "hyper_util", "hyper_rustls", "h2", "rustls"]
+            .iter().any(|target| metadata.target() == *target
+                || metadata.target().starts_with(&format!("{target}::")))
+    });
+    let _ = tracing_subscriber::registry()
+        .with(secret_safe)
+        .with(filter)
+        .with(tracing_subscriber::fmt::layer().with_target(false))
         .try_init();
 }
 
