@@ -1659,6 +1659,41 @@ fn bootstrap_affect_observation(
     }
 }
 
+pub struct CalendarReminderMaps {
+    pub reminders_by_objective: BTreeMap<String, Vec<i64>>,
+    pub objective_of_task: BTreeMap<String, String>,
+}
+
+/// Read reminders from routine templates, linked only through Task occurrences.
+/// Missing or malformed reminder lists are empty; list order is preserved.
+pub async fn calendar_reminder_maps(pool: &sqlx::SqlitePool) -> Result<CalendarReminderMaps> {
+    let rows = sqlx::query("SELECT id, object_type, payload_json FROM objects WHERE object_type IN ('Objective', 'Task') ORDER BY id")
+        .fetch_all(pool).await.map_err(|e| AppError::Internal(e.to_string()))?;
+    let mut maps = CalendarReminderMaps {
+        reminders_by_objective: BTreeMap::new(),
+        objective_of_task: BTreeMap::new(),
+    };
+    for row in rows {
+        let id: String = row.try_get("id").map_err(|e| AppError::Internal(e.to_string()))?;
+        let kind: String = row.try_get("object_type").map_err(|e| AppError::Internal(e.to_string()))?;
+        let raw: String = row.try_get("payload_json").map_err(|e| AppError::Internal(e.to_string()))?;
+        let payload: Value = serde_json::from_str(&raw).map_err(|e| AppError::Internal(e.to_string()))?;
+        if kind == "Objective" {
+            if let Some(template) = payload.get("routine_instance_template").and_then(Value::as_object) {
+                let reminders = template.get("reminder_minutes")
+                    .and_then(|value| serde_json::from_value::<Vec<i64>>(value.clone()).ok())
+                    .filter(|minutes| minutes.iter().all(|minute| *minute >= 0))
+                    .unwrap_or_default();
+                maps.reminders_by_objective.insert(id, reminders);
+            }
+        } else if let Some(objective) = payload.get("occurrence")
+            .and_then(|occurrence| occurrence.get("routine_objective_id")).and_then(Value::as_str) {
+            maps.objective_of_task.insert(id, objective.to_owned());
+        }
+    }
+    Ok(maps)
+}
+
 struct TaskDisplay {
     title: String,
     occupies_capacity: bool,
