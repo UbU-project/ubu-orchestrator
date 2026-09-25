@@ -38,6 +38,9 @@ pub struct ServerConfig {
     /// Operator-owned registration file, outside mutable database state.
     device_registration_path: Option<PathBuf>,
     category_palette_path: Option<PathBuf>,
+    google_credentials_path: Option<PathBuf>,
+    google_token_cache_path: Option<PathBuf>,
+    google_calendar_id: String,
     planning_horizon_seconds: Option<String>,
     planner_strategy: Option<String>,
 }
@@ -98,6 +101,9 @@ impl ServerConfig {
             db_path: env::var("UBU_DB_PATH").unwrap_or_else(|_| "ubu-orchestrator.db".to_owned()),
             device_registration_path: env::var_os("UBU_DEVICE_REGISTRATION").map(PathBuf::from),
             category_palette_path: env::var_os("UBU_CATEGORY_PALETTE_PATH").map(PathBuf::from),
+            google_credentials_path: env::var_os("UBU_GOOGLE_CREDENTIALS_PATH").map(PathBuf::from),
+            google_token_cache_path: env::var_os("UBU_GOOGLE_TOKEN_CACHE_PATH").map(PathBuf::from),
+            google_calendar_id: env::var("UBU_GOOGLE_CALENDAR_ID").unwrap_or_else(|_| "primary".into()),
             planner_strategy: env::var_os("UBU_PLANNER_STRATEGY")
                 .map(|value| value.to_string_lossy().into_owned()),
             planning_horizon_seconds: env::var_os("UBU_PLANNING_HORIZON_SECONDS")
@@ -176,6 +182,33 @@ impl ServerConfig {
 
     pub fn category_palette_path(&self) -> Option<&Path> {
         self.category_palette_path.as_deref()
+    }
+
+    pub fn google_credentials_path(&self) -> Option<&Path> {
+        self.google_credentials_path.as_deref()
+    }
+
+    pub fn with_google_credentials_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.google_credentials_path = Some(path.into());
+        self
+    }
+
+    pub fn google_token_cache_path(&self) -> Option<&Path> {
+        self.google_token_cache_path.as_deref()
+    }
+
+    pub fn with_google_token_cache_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.google_token_cache_path = Some(path.into());
+        self
+    }
+
+    pub fn google_calendar_id(&self) -> &str {
+        &self.google_calendar_id
+    }
+
+    pub fn with_google_calendar_id(mut self, id: impl Into<String>) -> Self {
+        self.google_calendar_id = id.into();
+        self
     }
 
     pub fn device_registration_path(&self) -> PathBuf {
