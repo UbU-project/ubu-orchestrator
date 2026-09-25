@@ -626,6 +626,42 @@
         }
       }
     },
+    "/projection/calendar/approve": {
+      "post": {
+        "tags": [
+          "crate::api::calendar_projection"
+        ],
+        "operationId": "approve",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalendarProjectionApproveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarProjectionResultResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The applied set changed since this preview"
+          },
+          "501": {
+            "description": "Live Calendar export is unavailable"
+          }
+        }
+      }
+    },
     "/projection/calendar/preview": {
       "get": {
         "tags": [
@@ -1560,6 +1596,14 @@
           }
         }
       },
+      "CalendarExportMode": {
+        "type": "string",
+        "description": "Live is deliberately unavailable until the provider transport is implemented.",
+        "enum": [
+          "mock",
+          "live"
+        ]
+      },
       "CalendarOperationBody": {
         "oneOf": [
           {
@@ -1622,6 +1666,52 @@
           }
         ]
       },
+      "CalendarOperationResultBody": {
+        "type": "object",
+        "required": [
+          "operation_id",
+          "status"
+        ],
+        "properties": {
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "CalendarProjectionApproveRequest": {
+        "type": "object",
+        "required": [
+          "preview_id",
+          "authority_source",
+          "export_mode"
+        ],
+        "properties": {
+          "authority_source": {
+            "$ref": "#/components/schemas/AuthoritySourceBody"
+          },
+          "export_mode": {
+            "$ref": "#/components/schemas/CalendarExportMode"
+          },
+          "preview_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "CalendarProjectionPreviewResponse": {
         "type": "object",
         "description": "Persisted preview of the current Calendar, diffed against the last applied\nevent set. Preview changes projection records only; it makes no client calls.",
@@ -1666,6 +1756,46 @@
           },
           "stale": {
             "type": "boolean"
+          }
+        }
+      },
+      "CalendarProjectionResultResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "preview_id",
+          "status",
+          "applied_events",
+          "operation_results",
+          "diagnostics"
+        ],
+        "properties": {
+          "applied_events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CalendarEventBody"
+            }
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DiagnosticBody"
+            }
+          },
+          "operation_results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CalendarOperationResultBody"
+            }
+          },
+          "preview_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
           }
         }
       },

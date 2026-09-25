@@ -195,3 +195,226 @@ pub async fn persist_result(
 fn internal(error: impl std::fmt::Display) -> AppError {
     AppError::Internal(error.to_string())
 }
+
+/// Apply exactly the stored preview under the same single-Device lock used by
+/// preview. The client never supplies the diff's existing side.
+pub async fn approve(
+    state: &AppState,
+    preview_id: &str,
+    authority: ubu_core::AuthoritySource,
+    mode: super::calendar_client::CalendarExportMode,
+) -> Result<StoredCalendarResult> {
+    use super::calendar_client::{CalendarApi, RecordingCalendarApi};
+    use std::{collections::BTreeMap, sync::Arc};
+    use ubu_core::projection::OperationResultStatus;
+
+    mode.ensure_available()?;
+    let _guard = state.inner().calendar_projection_lock.lock().await;
+    let pool = state.inner().store.pool();
+    let stored = load_preview(pool, preview_id).await?;
+    let existing = last_applied_events(pool).await?;
+    if existing != stored.existing_events {
+        return Err(AppError::conflict_diagnostic(
+            "calendar_projection_conflict",
+            "The applied Calendar event set changed after this preview; request a new preview",
+        ));
+    }
+    let client: Arc<dyn CalendarApi> = state
+        .calendar_api()
+        .unwrap_or_else(|| Arc::new(RecordingCalendarApi::with_events(existing.clone())));
+    let mut landed: BTreeMap<_, _> = existing
+        .into_iter()
+        .map(|event| (event.external_id.clone(), event))
+        .collect();
+    let mut operation_results = Vec::new();
+    let mut diagnostics = Vec::new();
+    for operation in &stored.operations {
+        let core = lower_operation(operation)?;
+        let gate = gate_export_operation(state, &core, stored.policy_summary.as_ref(), authority);
+        append_boundary_log(state, preview_id, &core, &gate.decision.log_payload).await?;
+        let Some(permit) = gate.permit() else {
+            let message = gate.decision.adjudication_reasons.join(" ");
+            diagnostics.push(DiagnosticBody {
+                code: "calendar_export_rejected".into(),
+                message: message.clone(),
+            });
+            operation_results.push(OperationResult {
+                operation_id: core.operation_id,
+                status: OperationResultStatus::Skipped,
+                message: Some(message),
+            });
+            continue;
+        };
+        if permit.operation_id() != core.operation_id
+            || permit.authority_source() != ubu_core::AuthoritySource::AutomationWorker
+        {
+            return Err(AppError::Internal(
+                "Calendar export permit does not match the operation".into(),
+            ));
+        }
+        let applied = match operation {
+            CalendarOperation::Create(event) => client.insert_event(event).await,
+            CalendarOperation::Update(event) => client.patch_event(event).await,
+            CalendarOperation::Delete { external_id, .. } => client.delete_event(external_id).await,
+        };
+        match applied {
+            Ok(()) => {
+                match operation {
+                    CalendarOperation::Create(event) | CalendarOperation::Update(event) => {
+                        landed.insert(event.external_id.clone(), event.clone());
+                    }
+                    CalendarOperation::Delete { external_id, .. } => {
+                        landed.remove(external_id);
+                    }
+                }
+                operation_results.push(OperationResult {
+                    operation_id: core.operation_id,
+                    status: OperationResultStatus::Applied,
+                    message: None,
+                });
+            }
+            Err(message) => {
+                diagnostics.push(DiagnosticBody {
+                    code: "calendar_operation_failed".into(),
+                    message: format!("{}: {message}", core.operation_id),
+                });
+                operation_results.push(OperationResult {
+                    operation_id: core.operation_id,
+                    status: OperationResultStatus::Failed,
+                    message: Some(message),
+                });
+            }
+        }
+    }
+    let applied = operation_results
+        .iter()
+        .filter(|result| result.status == OperationResultStatus::Applied)
+        .count();
+    let status = if applied == operation_results.len() {
+        ProjectionResultStatus::Applied
+    } else if applied > 0 {
+        ProjectionResultStatus::Partial
+    } else {
+        ProjectionResultStatus::Failed
+    };
+    let result = StoredCalendarResult {
+        schema_version: CALENDAR_PROJECTION_RESULT_SCHEMA_VERSION.into(),
+        preview_id: preview_id.into(),
+        status,
+        applied_events: landed.into_values().collect(),
+        operation_results,
+        diagnostics,
+    };
+    persist_result(pool, &result, state.planning_now()).await?;
+    Ok(result)
+}
+
+pub fn lower_operation(
+    operation: &CalendarOperation,
+) -> Result<ubu_core::projection::ProjectionOperation> {
+    use ubu_core::{
+        projection::{ProjectionOperation, ProjectionOperationKind},
+        SourceRef,
+    };
+    let (kind, verb, id, summary, payload) = match operation {
+        CalendarOperation::Create(event) => (
+            ProjectionOperationKind::Create,
+            "create",
+            &event.external_id,
+            &event.summary,
+            serde_json::to_value(event).map_err(internal)?,
+        ),
+        CalendarOperation::Update(event) => (
+            ProjectionOperationKind::Update,
+            "update",
+            &event.external_id,
+            &event.summary,
+            serde_json::to_value(event).map_err(internal)?,
+        ),
+        CalendarOperation::Delete {
+            external_id,
+            summary,
+        } => (
+            ProjectionOperationKind::Delete,
+            "delete",
+            external_id,
+            summary,
+            serde_json::json!({"external_id":external_id,"summary":summary}),
+        ),
+    };
+    Ok(ProjectionOperation {
+        operation_id: format!("calendar-{verb}-{id}"),
+        kind,
+        target: SourceRef {
+            source_kind: "google_calendar".into(),
+            source_id: id.clone(),
+            url: None,
+        },
+        summary: summary.clone(),
+        payload: Some(payload),
+    })
+}
+
+fn gate_export_operation(
+    state: &AppState,
+    operation: &ubu_core::projection::ProjectionOperation,
+    policy: Option<&PolicySummary>,
+    authority: ubu_core::AuthoritySource,
+) -> ubu_core::projection::ExportGateDecision {
+    use ubu_core::{
+        projection::{ExportProjectionContext, Legitimizer},
+        ObjectRef, Provenance,
+    };
+    let now = state.planning_now();
+    let compartment = ObjectRef {
+        id: UbuId::new(ObjectType::Compartment),
+        object_type: ObjectType::Compartment,
+    };
+    let actor = ObjectRef {
+        id: state.actor_identity_id().clone(),
+        object_type: ObjectType::Identity,
+    };
+    let provenance = Provenance {
+        created_at: now,
+        created_by: None,
+        authority_source: authority,
+        source: Some(operation.target.clone()),
+        source_refs: None,
+    };
+    Legitimizer::gate_export_projection(ExportProjectionContext {
+        operation,
+        effective_policy: policy,
+        compartment_ref: &compartment,
+        actor_identity_ref: &actor,
+        authority_source: authority,
+        effective_time: now,
+        provenance: &provenance,
+    })
+}
+
+async fn append_boundary_log(
+    state: &AppState,
+    preview_id: &str,
+    operation: &ubu_core::projection::ProjectionOperation,
+    payload: &ubu_core::core::CompartmentBoundaryDecidedPayload,
+) -> Result<()> {
+    let envelope = state.envelope_for(
+        Default::default(),
+        payload.authority_source,
+        payload.effective_time,
+    )?;
+    queries::append_log_entry(
+        state.inner().store.pool(),
+        &envelope,
+        ubu_store::models::log_record::NewLogRecord {
+            id: UbuId::new(ObjectType::LogEntry).to_string(),
+            event_type: "compartment_boundary_decided".into(),
+            object_refs: serde_json::json!([preview_id, operation.operation_id]),
+            payload: serde_json::to_value(payload).map_err(internal)?,
+            provenance: serde_json::to_value(&payload.provenance).map_err(internal)?,
+            created_at: payload.effective_time.to_string(),
+        },
+    )
+    .await?;
+    Ok(())
+}

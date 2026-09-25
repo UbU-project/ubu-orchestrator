@@ -58,6 +58,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/projection/preview", post(api::projection::preview))
         .route("/projection/calendar/preview", get(api::calendar_projection::preview))
+        .route("/projection/calendar/approve", post(api::calendar_projection::approve))
         .route("/projection/approve", post(api::projection::approve))
         .route("/projection/reconcile", post(api::projection::reconcile))
         .route(

@@ -17,6 +17,7 @@ use crate::errors::StartupError;
 pub struct AppState {
     inner: Arc<OrchestratorState>,
     clock: Arc<dyn crate::planning_time::PlanningClock>,
+    calendar_api: Option<Arc<dyn crate::services::calendar_client::CalendarApi>>,
 }
 
 pub struct OrchestratorState {
@@ -83,6 +84,7 @@ impl AppState {
         let causality_issuer = LocalIssuer::new(registration.device_id.clone());
         Ok(Self {
             clock: Arc::new(crate::planning_time::SystemClock),
+            calendar_api: None,
             inner: Arc::new(OrchestratorState {
                 config,
                 category_palette,
@@ -108,6 +110,15 @@ impl AppState {
 
     pub fn planning_now(&self) -> UbuTimestamp {
         self.clock.now()
+    }
+
+    pub fn with_calendar_api(mut self, api: Arc<dyn crate::services::calendar_client::CalendarApi>) -> Self {
+        self.calendar_api = Some(api);
+        self
+    }
+
+    pub fn calendar_api(&self) -> Option<Arc<dyn crate::services::calendar_client::CalendarApi>> {
+        self.calendar_api.clone()
     }
 
     /// Assemble provenance at the mutation boundary; domain time remains independent.
