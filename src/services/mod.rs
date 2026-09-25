@@ -2,6 +2,7 @@ pub mod advisory_service;
 pub mod proposal_applier;
 pub mod bootstrap_service;
 pub mod calendar_projection;
+pub mod calendar_client;
 pub mod desktop_session_service;
 pub mod duration_model;
 pub mod import_service;

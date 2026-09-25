@@ -1,9 +1,10 @@
 //! Pure Calendar event mapping and deterministic projection diffing.
 use std::collections::BTreeMap;
+use serde::{Deserialize, Serialize};
 
 use crate::api::planning::ScheduledTaskBody;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DesiredEvent {
     pub external_id: String,
     pub task_id: String,
@@ -53,7 +54,8 @@ pub fn desired_events(
     events
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "event", rename_all = "snake_case")]
 pub enum CalendarOperation {
     Create(DesiredEvent),
     Update(DesiredEvent),
