@@ -326,10 +326,10 @@ async fn live_mode_is_refused_without_calls_or_delivery_records() {
     let (state, client) = setup().await;
     let p = preview(&state).await;
     let (status,body)=request(&state,"POST",APPROVE,json!({"schema_version":SCHEMA,"preview_id":p["preview_id"],"authority_source":"automation_worker","export_mode":"live"})).await;
-    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
         body["diagnostics"][0]["code"],
-        "calendar_live_export_unavailable"
+        "calendar_live_export_unconfigured"
     );
     assert!(client.recorded_calls().is_empty());
     assert!(results(&state).await.is_empty());

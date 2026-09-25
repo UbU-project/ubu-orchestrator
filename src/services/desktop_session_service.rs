@@ -40,3 +40,17 @@ fn validate_schema_version(schema_version: Option<&str>) -> Result<()> {
         )),
     }
 }
+
+pub async fn google_calendar(
+    state: AppState,
+    request: crate::api::desktop::GoogleCalendarEnableRequest,
+) -> Result<crate::api::desktop::GoogleCalendarEnableResponse> {
+    validate_schema_version(request.schema_version.as_deref())?;
+    super::calendar_client::require_live_configuration(&state)?;
+    state.inner().google_calendar_enabled.store(true, std::sync::atomic::Ordering::Release);
+    Ok(crate::api::desktop::GoogleCalendarEnableResponse {
+        schema_version: DESKTOP_SESSION_SCHEMA_VERSION.into(),
+        accepted: true,
+        enabled: true,
+    })
+}

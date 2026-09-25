@@ -41,3 +41,31 @@ pub async fn github_token(
     let response = desktop_session_service::github_token(state, request).await?;
     Ok(Json(response))
 }
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GoogleCalendarEnableRequest {
+    pub schema_version: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct GoogleCalendarEnableResponse {
+    pub schema_version: String,
+    pub accepted: bool,
+    pub enabled: bool,
+}
+
+#[utoipa::path(
+    post,
+    path = "/desktop/session/google-calendar",
+    request_body = GoogleCalendarEnableRequest,
+    responses((status = 200, body = GoogleCalendarEnableResponse),
+        (status = 400, description = "Missing or unsupported session schema"),
+        (status = 503, description = "Google credential paths are not configured"))
+)]
+pub async fn google_calendar(
+    State(state): State<AppState>,
+    Json(request): Json<GoogleCalendarEnableRequest>,
+) -> Result<Json<GoogleCalendarEnableResponse>> {
+    Ok(Json(desktop_session_service::google_calendar(state, request).await?))
+}

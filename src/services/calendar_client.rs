@@ -20,7 +20,7 @@ pub trait CalendarApi: Send + Sync {
     fn delete_event<'a>(&'a self, external_id: &'a str) -> CalendarApiFuture<'a, ()>;
 }
 
-/// Live is deliberately unavailable until the provider transport is implemented.
+/// Live requires operator configuration and explicit in-memory enablement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CalendarExportMode {
@@ -29,18 +29,33 @@ pub enum CalendarExportMode {
 }
 
 impl CalendarExportMode {
-    pub fn ensure_available(self) -> crate::errors::Result<()> {
+    pub fn ensure_available(self, state: &crate::state::AppState) -> crate::errors::Result<()> {
         if self == Self::Live {
+            require_live_configuration(state)?;
+            if state.inner().google_calendar_enabled.load(std::sync::atomic::Ordering::Acquire) {
+                return Ok(());
+            }
             return Err(crate::errors::AppError::Diagnostic {
-                status: axum::http::StatusCode::NOT_IMPLEMENTED,
-                code: "calendar_live_export_unavailable".into(),
-                message:
-                    "Live Calendar export is unavailable; only explicit mock mode is supported"
-                        .into(),
+                status: axum::http::StatusCode::FORBIDDEN,
+                code: "calendar_live_export_not_enabled".into(),
+                message: "Live Calendar export is not enabled for this process; POST /desktop/session/google-calendar first".into(),
             });
         }
         Ok(())
     }
+}
+
+pub fn require_live_configuration(state: &crate::state::AppState) -> crate::errors::Result<()> {
+    let config = &state.inner().config;
+    if [config.google_credentials_path(), config.google_token_cache_path()]
+        .iter().all(|path| path.is_some_and(|path| !path.as_os_str().is_empty())) {
+        return Ok(());
+    }
+    Err(crate::errors::AppError::Diagnostic {
+        status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
+        code: "calendar_live_export_unconfigured".into(),
+        message: "Live Calendar export requires UBU_GOOGLE_CREDENTIALS_PATH and UBU_GOOGLE_TOKEN_CACHE_PATH".into(),
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

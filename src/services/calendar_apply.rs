@@ -204,11 +204,12 @@ pub async fn approve(
     authority: ubu_core::AuthoritySource,
     mode: super::calendar_client::CalendarExportMode,
 ) -> Result<StoredCalendarResult> {
-    use super::calendar_client::{CalendarApi, RecordingCalendarApi};
+    use super::calendar_client::{CalendarApi, CalendarExportMode, RecordingCalendarApi};
+    use super::calendar_google::GoogleCalendarApi;
     use std::{collections::BTreeMap, sync::Arc};
     use ubu_core::projection::OperationResultStatus;
 
-    mode.ensure_available()?;
+    mode.ensure_available(state)?;
     let _guard = state.inner().calendar_projection_lock.lock().await;
     let pool = state.inner().store.pool();
     let stored = load_preview(pool, preview_id).await?;
@@ -219,9 +220,16 @@ pub async fn approve(
             "The applied Calendar event set changed after this preview; request a new preview",
         ));
     }
-    let client: Arc<dyn CalendarApi> = state
-        .calendar_api()
-        .unwrap_or_else(|| Arc::new(RecordingCalendarApi::with_events(existing.clone())));
+    let google = if mode == CalendarExportMode::Live {
+        Some(Arc::new(GoogleCalendarApi::new(&state.inner().config).map_err(internal)?))
+    } else {
+        None
+    };
+    let client: Arc<dyn CalendarApi> = match &google {
+        Some(client) => client.clone(),
+        None => state.calendar_api()
+            .unwrap_or_else(|| Arc::new(RecordingCalendarApi::with_events(existing.clone()))),
+    };
     let mut landed: BTreeMap<_, _> = existing
         .into_iter()
         .map(|event| (event.external_id.clone(), event))
@@ -257,6 +265,9 @@ pub async fn approve(
             CalendarOperation::Update(event) => client.patch_event(event).await,
             CalendarOperation::Delete { external_id, .. } => client.delete_event(external_id).await,
         };
+        if let Some(google) = &google {
+            diagnostics.extend(google.take_diagnostics().await);
+        }
         match applied {
             Ok(()) => {
                 match operation {

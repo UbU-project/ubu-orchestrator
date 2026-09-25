@@ -160,7 +160,8 @@ impl From<calendar_apply::StoredCalendarResult> for CalendarProjectionResultResp
     request_body = CalendarProjectionApproveRequest,
     responses((status = 200, body = CalendarProjectionResultResponse),
         (status = 409, description = "The applied set changed since this preview"),
-        (status = 501, description = "Live Calendar export is unavailable"))
+        (status = 403, description = "Live Calendar export is not enabled for this process"),
+        (status = 503, description = "Google credential paths are not configured"))
 )]
 pub async fn approve(
     State(state): State<AppState>,

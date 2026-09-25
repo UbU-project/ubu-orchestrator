@@ -19,6 +19,7 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/routines", get(api::routines::summaries))
         .route("/health", get(api::health::health))
+        .route("/desktop/session/google-calendar", post(api::desktop::google_calendar))
         .route("/import/quick-ubu", post(api::quick_ubu::import_quick_ubu))
         .route("/advisory/queue", get(api::advisory::queue))
         .route("/advisory/candidate/:candidate_id", get(api::advisory::candidate))
