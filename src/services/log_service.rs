@@ -80,8 +80,6 @@ async fn record_task_action_with_calendar(
         false
     };
 
-    let log_id = UbuId::new(ObjectType::LogEntry).to_string();
-    let now = effective_time.to_string();
     let authority_source_wire = authority_source_wire(authority_source)?;
     let task_status = task_status_from_wire(&task.status)?;
 
@@ -101,34 +99,7 @@ async fn record_task_action_with_calendar(
         payload["observed_window"] = json!({"start":signal.observed_start,"end":signal.observed_end});
     }
 
-    // TODO(O6-task-transition-log-event): Replace this decision_recorded fallback
-    // with a dedicated canonical task-transition Log event after a recorded
-    // decision ticket extends the closed LogEventType vocabulary.
-    // The recorded status/transition decision describes this observed Task version.
-    let envelope = state.envelope_for(
-        [(UbuId::parse(&task.id)?, observed_version(task.version)?)]
-            .into_iter()
-            .collect(),
-        authority_source,
-        effective_time,
-    )?;
-    queries::append_log_entry(
-        pool,
-        &envelope,
-        NewLogRecord {
-            id: log_id.clone(),
-            event_type: "decision_recorded".to_owned(),
-            object_refs: json!([task_id.clone()]),
-            payload,
-            provenance: json!({
-                "created_at": now,
-                "authority_source": authority_source_wire
-            }),
-            created_at: now,
-        },
-    )
-    .await
-    .map_err(AppError::from)?;
+    let log_id = append_task_decision(&state, &task, payload, Vec::new(), authority_source, effective_time).await?;
 
     if matches!(request.action, RecordedTaskActionKind::Snooze) {
         // TODO(O6-snooze-readiness): Snooze records a defer decision only;
@@ -150,6 +121,56 @@ async fn record_task_action_with_calendar(
         note: request.note,
         diagnostics,
     })
+}
+
+/// The narrow inverse of a Calendar completion; no new public action vocabulary.
+/// Re-check the most recent completion under the same lock as app actions.
+pub async fn reopen_calendar_completion(
+    state: &AppState,
+    signal: &super::calendar_interaction::ReopenSignal,
+) -> Result<bool> {
+    let _guard = state.inner().task_action_lock.lock().await;
+    let pool = state.inner().store.pool();
+    let mut task = load_task(pool, &signal.task_id).await?;
+    if task.status != "completed" || task.payload.get("static_window").is_some_and(|window| !window.is_null()) || task.payload["provenance"]["source"]["source_kind"] == "google_calendar" { return Ok(false); }
+    let Some(completion) = super::calendar_interaction::latest_completion(pool, &task.id).await? else { return Ok(false); };
+    if completion.log_id != signal.completion_log_id || !completion.from_calendar_event(&signal.external_id) { return Ok(false); }
+    let now = state.planning_now();
+    persist_task_transition(state, &mut task, "active", AuthoritySource::User, now).await?;
+    let payload = json!({
+        "schema_version":TASK_ACTION_SCHEMA_VERSION, "action":"reopen", "decision":"task_reopened",
+        "task_status":"active", "transition_applied":true,
+        "source":{"source_kind":"google_calendar","source_id":signal.external_id},
+        "completion_log_id":signal.completion_log_id
+    });
+    append_task_decision(state, &task, payload, vec![signal.completion_log_id.clone()], AuthoritySource::User, now).await?;
+    Ok(true)
+}
+
+/// Keep canonical decision recording shared by app actions and Calendar undo.
+async fn append_task_decision(
+    state: &AppState,
+    task: &TaskForTransition,
+    payload: serde_json::Value,
+    extra_refs: Vec<String>,
+    authority_source: AuthoritySource,
+    effective_time: UbuTimestamp,
+) -> Result<String> {
+    let log_id = UbuId::new(ObjectType::LogEntry).to_string();
+    let now = effective_time.to_string();
+    let mut refs = vec![task.id.clone()];
+    refs.extend(extra_refs);
+    // The closed Log vocabulary uses decision_recorded for Task transitions.
+    let envelope = state.envelope_for(
+        [(UbuId::parse(&task.id)?, observed_version(task.version)?)].into_iter().collect(),
+        authority_source, effective_time,
+    )?;
+    queries::append_log_entry(state.inner().store.pool(), &envelope, NewLogRecord {
+        id:log_id.clone(), event_type:"decision_recorded".into(), object_refs:json!(refs), payload,
+        provenance:json!({"created_at":now,"authority_source":authority_source_wire(authority_source)?}),
+        created_at:now,
+    }).await?;
+    Ok(log_id)
 }
 
 pub async fn append_action(
@@ -282,6 +303,16 @@ async fn apply_completed_transition(
             "complete requires an active Task or a missed routine occurrence",
         ));
     }
+    persist_task_transition(state, task, "completed", authority_source, effective_time).await
+}
+
+async fn persist_task_transition(
+    state: &AppState,
+    task: &mut TaskForTransition,
+    status: &str,
+    authority_source: AuthoritySource,
+    effective_time: UbuTimestamp,
+) -> Result<()> {
     let envelope = state.envelope_for(
         [(UbuId::parse(&task.id)?, observed_version(task.version)?)]
             .into_iter()
@@ -290,7 +321,7 @@ async fn apply_completed_transition(
         effective_time,
     )?;
     let mut payload = task.payload.clone();
-    payload["status"] = json!("completed");
+    payload["status"] = json!(status);
     let admitted = queries::admit_object(
         state.inner().store.pool(),
         &envelope,
@@ -298,7 +329,7 @@ async fn apply_completed_transition(
             id: task.id.clone(),
             object_type: ObjectType::Task.as_str().to_owned(),
             version: task.version,
-            status: "completed".to_owned(),
+            status: status.to_owned(),
             compartment_label: task.compartment_label.clone(),
             payload: payload.clone(),
             created_at: task.created_at.clone(),

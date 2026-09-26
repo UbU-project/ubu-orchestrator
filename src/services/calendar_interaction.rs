@@ -181,7 +181,7 @@ pub async fn apply(
     applied: &mut [DesiredEvent],
 ) -> Result<InteractionResult> {
     let owned = observed_owned(state.inner().store.pool(), observed, applied).await?;
-    let (completions, _reopens, diagnostics) = detect(&owned, state.planning_now());
+    let (completions, reopens, diagnostics) = detect(&owned, state.planning_now());
     let mut result = InteractionResult {
         changed_external_ids: BTreeSet::new(),
         diagnostics,
@@ -202,6 +202,12 @@ pub async fn apply(
                 result.diagnostics.push(DiagnosticBody { code, message })
             }
             Err(error) => return Err(error),
+        }
+    }
+    for signal in reopens {
+        if log_service::reopen_calendar_completion(state, &signal).await? {
+            accept_observation(&signal.external_id, observed, applied);
+            result.changed_external_ids.insert(signal.external_id);
         }
     }
     Ok(result)
