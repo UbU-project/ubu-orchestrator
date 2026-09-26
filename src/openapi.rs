@@ -25,6 +25,7 @@ use utoipa::OpenApi;
         crate::api::calendar::current,
         crate::api::calendar_projection::preview,
         crate::api::calendar_projection::approve,
+        crate::api::calendar_capture::capture,
         crate::api::calendar_reconciliation::reconcile,
         crate::api::calendar_reconciliation::repair,
         crate::api::next_action::next_action,
@@ -44,6 +45,8 @@ use utoipa::OpenApi;
         crate::api::reports::human_complete
     ),
     components(schemas(
+        crate::api::calendar_capture::CalendarCaptureRequest,
+        crate::api::calendar_capture::CalendarCaptureResponse,
         crate::api::calendar_reconciliation::CalendarReconcileRequest,
         crate::api::calendar_reconciliation::CalendarReconcileResponse,
         crate::api::calendar_reconciliation::CalendarRepairResponse,

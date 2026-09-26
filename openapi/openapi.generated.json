@@ -701,6 +701,48 @@
         }
       }
     },
+    "/projection/calendar/capture": {
+      "post": {
+        "tags": [
+          "crate::api::calendar_capture"
+        ],
+        "operationId": "capture",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalendarCaptureRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarCaptureResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or unsupported schema"
+          },
+          "403": {
+            "description": "Live Calendar is not enabled"
+          },
+          "502": {
+            "description": "Calendar observation failed"
+          },
+          "503": {
+            "description": "Google credential paths are not configured"
+          }
+        }
+      }
+    },
     "/projection/calendar/preview": {
       "get": {
         "tags": [
@@ -1668,6 +1710,58 @@
           },
           "started": {
             "type": "boolean"
+          }
+        }
+      },
+      "CalendarCaptureRequest": {
+        "type": "object",
+        "required": [
+          "export_mode"
+        ],
+        "properties": {
+          "export_mode": {
+            "$ref": "#/components/schemas/CalendarExportMode"
+          },
+          "schema_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "CalendarCaptureResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "captured",
+          "updated",
+          "skipped",
+          "diagnostics"
+        ],
+        "properties": {
+          "captured": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DiagnosticBody"
+            }
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "skipped": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "updated": {
+            "type": "integer",
+            "description": "Includes unchanged owned-source reuse, without another admission.",
+            "minimum": 0
           }
         }
       },

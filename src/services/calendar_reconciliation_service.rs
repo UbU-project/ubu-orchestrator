@@ -92,7 +92,20 @@ pub async fn reconcile(
     let (applied, out_of_range_events): (Vec<_>, Vec<_>) = applied.into_iter().partition(|event| range.overlaps(event));
     let mut observed = client.list_events(&range).await.map_err(AppError::Upstream)?;
     super::calendar_capture::normalize_observed(&mut observed, &applied);
-    let diagnostics = client.take_diagnostics().await;
+    let mut diagnostics = client.take_diagnostics().await;
+    for (source, (row, payload)) in super::calendar_sources::by_source(pool).await? {
+        if row.status != "active" || observed.iter().any(|event| event.external_id == source) { continue; }
+        // A bounded observation says nothing about commitments outside its range.
+        let in_range = payload["static_window"]["start"].as_str().zip(payload["static_window"]["end"].as_str())
+            .and_then(|(start,end)| super::calendar_range::CalendarTimeRange::parse(start,end).ok())
+            .is_some_and(|window| window.start < range.end && window.end > range.start);
+        if in_range {
+            diagnostics.push(crate::api::planning::DiagnosticBody {
+                code: "capture_source_removed".into(),
+                message: format!("Captured Task `{}` has no source event in the observed planning horizon; Task retained for operator review", row.id),
+            });
+        }
+    }
     let known = known_external_ids(pool).await?;
     let conflicts = calendar_reconcile::classify(&applied, &observed, &known);
     let status = if conflicts.is_empty() {
