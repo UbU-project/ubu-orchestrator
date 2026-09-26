@@ -77,10 +77,10 @@ pub fn detect_window_gestures(
     let mut resizes = Vec::new();
     let mut diagnostics = Vec::new();
     for item in owned {
-        let window = (&item.event.start_at, &item.event.end_at);
-        let changed = window != (&item.applied_window.0, &item.applied_window.1);
+        let window = (item.event.start_at.as_str(), item.event.end_at.as_str());
+        let changed = !same_window(window, (&item.applied_window.0, &item.applied_window.1));
         if item.status != "active" {
-            if changed {
+            if changed || item.static_window.as_ref().is_some_and(|old| !same_window(window, (&old.0, &old.1))) {
                 diagnostics.push(DiagnosticBody {
                     code: "calendar_gesture_on_inactive_task".into(),
                     message: format!("Task `{}` is {}; Calendar window gesture ignored", item.task_id, item.status),
@@ -98,7 +98,7 @@ pub fn detect_window_gestures(
             continue;
         }
         if item.is_static {
-            if item.static_window.as_ref().is_some_and(|old| window != (&old.0, &old.1)) {
+            if item.static_window.as_ref().is_some_and(|old| !same_window(window, (&old.0, &old.1))) {
                 moves.push(MoveSignal {
                     task_id: item.task_id.clone(), external_id: item.event.external_id.clone(),
                     new_start: item.event.start_at.clone(), new_end: item.event.end_at.clone(),
@@ -108,7 +108,7 @@ pub fn detect_window_gestures(
             match CalendarTimeRange::parse(&item.event.start_at, &item.event.end_at) {
                 Ok(range) => {
                     let seconds = (range.end.inner().unix_timestamp() - range.start.inner().unix_timestamp()) as u64;
-                    if seconds != item.declared_duration_seconds {
+                    if seconds > 0 && seconds != item.declared_duration_seconds {
                         resizes.push(ResizeSignal {
                             task_id: item.task_id.clone(), external_id: item.event.external_id.clone(),
                             new_duration_seconds: seconds,
@@ -123,6 +123,13 @@ pub fn detect_window_gestures(
         }
     }
     (moves, resizes, diagnostics)
+}
+
+fn same_window(left: (&str, &str), right: (&str, &str)) -> bool {
+    [(left.0, right.0), (left.1, right.1)].into_iter().all(|(a, b)| {
+        UbuTimestamp::parse(a).ok().zip(UbuTimestamp::parse(b).ok())
+            .is_some_and(|(a, b)| a == b)
+    })
 }
 
 pub fn detect(
@@ -396,7 +403,7 @@ async fn apply_move(state: &AppState, signal: &MoveSignal) -> Result<()> {
 /// Static placement belongs to the current Task even when the stored plan predates
 /// its edit. Never project an obsolete meeting window back onto the operator.
 pub async fn current_static_windows(pool: &sqlx::SqlitePool, desired: &mut [DesiredEvent]) -> Result<()> {
-    for event in desired {
+    for event in desired.iter_mut() {
         let Some(task) = queries::get_current_state(pool, &event.task_id).await? else { continue; };
         if task.status != "active" { continue; }
         let payload: Value = serde_json::from_str(&task.payload_json).map_err(internal)?;
@@ -407,6 +414,7 @@ pub async fn current_static_windows(pool: &sqlx::SqlitePool, desired: &mut [Desi
             event.end_at = crate::planning_time::timestamp_at(u64::try_from(window.end.inner().unix_timestamp()).map_err(internal)?)?;
         }
     }
+    desired.sort_by(|a, b| (&a.start_at, &a.external_id).cmp(&(&b.start_at, &b.external_id)));
     Ok(())
 }
 
