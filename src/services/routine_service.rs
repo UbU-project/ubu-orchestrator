@@ -210,7 +210,7 @@ fn payload(
     if !edges.is_empty() {
         p["blocked_by"] = json!(edges);
     }
-    if o.template.placement == RoutinePlacement::Static {
+    if o.overridden || o.template.placement == RoutinePlacement::Static {
         p["static_window"] = json!({"start":timestamp_at(o.start)?,"end":timestamp_at(o.end)?});
     } else {
         p["allowed_time_range"] =
@@ -436,7 +436,7 @@ pub async fn materialize(
     }
     let by_id: HashMap<_, _> = stored.values().map(|r| (r.row.id.as_str(), r)).collect();
     for o in &derived.occurrences {
-        if o.template.placement != RoutinePlacement::Planned {
+        if o.overridden || o.template.placement != RoutinePlacement::Planned {
             continue;
         }
         let Some(id) = ids.get(&o.key) else {

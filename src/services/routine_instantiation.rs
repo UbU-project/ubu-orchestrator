@@ -33,6 +33,7 @@ pub struct Occurrence {
     /// Latest finish from the declared range, before an after ceiling is applied.
     pub declared_end: u64,
     pub nominal_end: u64,
+    pub overridden: bool,
     pub after: Vec<(UbuId, i64, Option<i64>)>,
 }
 #[derive(Debug, Default)]
@@ -47,7 +48,7 @@ pub(crate) fn diagnostic(code: &str, message: impl Into<String>) -> DiagnosticBo
         message: message.into(),
     }
 }
-fn matches(schedule: &RecurrenceSchedule, date: NaiveDate) -> bool {
+pub(crate) fn matches(schedule: &RecurrenceSchedule, date: NaiveDate) -> bool {
     let d = date.to_string();
     if schedule.enabled_from.as_ref().is_some_and(|s| &d < s)
         || schedule.enabled_until.as_ref().is_some_and(|s| &d > s)
@@ -191,8 +192,8 @@ pub fn instantiate(defs: &[RoutineDefinition], start: u64, end: u64) -> Instanti
             .insert(id.to_string(), (from.to_string(), until.to_string()));
         let mut date = from;
         loop {
+            let report = date >= first && date <= last;
             if matches(&d.schedule, date) {
-                let report = date >= first && date <= last;
                 let mut expand = || -> Option<Occurrence> {
                     let nominal = local(
                         tz,
@@ -240,12 +241,13 @@ pub fn instantiate(defs: &[RoutineDefinition], start: u64, end: u64) -> Instanti
                         }
                     }
                     let duration = d.template.duration_estimate.scalar_seconds();
-                    let (start, end, nominal_end, declared_end) = match range {
+                    let override_entry = d.schedule.override_for(&date.to_string());
+                    let (mut start, mut end, mut nominal_end, mut declared_end) = match range {
                         Some((earliest, latest)) => {
                             let earliest = earliest.max(floor);
                             let declared_latest = latest;
                             let latest = start_ceiling.map_or(latest, |ceiling| latest.min(ceiling.saturating_add(duration)));
-                            if earliest.saturating_add(duration) > latest {
+                            if earliest.saturating_add(duration) > latest && override_entry.is_none() {
                                 if report {
                                     if earliest.saturating_add(duration) <= declared_latest {
                                         out.diagnostics.push(diagnostic("routine_after_maximum_infeasible", format!("Routine `{id}` on {date} cannot start within `maximum_seconds` of its predecessor and still honour its own allowed range")));
@@ -264,7 +266,7 @@ pub fn instantiate(defs: &[RoutineDefinition], start: u64, end: u64) -> Instanti
                         }
                         None => {
                             let start = nominal.max(floor);
-                            if report && start_ceiling.is_some_and(|ceiling| start > ceiling) {
+                            if report && override_entry.is_none() && start_ceiling.is_some_and(|ceiling| start > ceiling) {
                                 out.diagnostics.push(diagnostic("routine_after_maximum_infeasible", format!("Routine `{id}` on {date} cannot start within `maximum_seconds` of its predecessor and still honour its own allowed range")));
                             }
                             (
@@ -275,6 +277,21 @@ pub fn instantiate(defs: &[RoutineDefinition], start: u64, end: u64) -> Instanti
                             )
                         }
                     };
+                    let overridden = if let Some(entry) = override_entry {
+                        let override_start = u64::try_from(entry.start.inner().unix_timestamp()).ok()?;
+                        let override_end = u64::try_from(entry.end.inner().unix_timestamp()).ok()?;
+                        if report && range.is_some_and(|(earliest, latest)| override_start < earliest || override_end > latest) {
+                            out.diagnostics.push(diagnostic("routine_override_outside_allowed_range", format!("Routine `{id}` on {date}: override {}..{} is outside its declared allowed range; honoured", entry.start, entry.end)));
+                        }
+                        if report && (override_start < floor || start_ceiling.is_some_and(|ceiling| override_start > ceiling)) {
+                            out.diagnostics.push(diagnostic("routine_override_violates_after_bounds", format!("Routine `{id}` on {date}: override {}..{} violates matched predecessor minimum_seconds/maximum_seconds; honoured", entry.start, entry.end)));
+                        }
+                        start = override_start;
+                        end = override_end;
+                        declared_end = override_end;
+                        nominal_end = override_end;
+                        true
+                    } else { false };
                     Some(Occurrence {
                         objective_id: id.clone(),
                         local_date: date.to_string(),
@@ -291,6 +308,7 @@ pub fn instantiate(defs: &[RoutineDefinition], start: u64, end: u64) -> Instanti
                         end,
                         declared_end,
                         nominal_end,
+                        overridden,
                         after: after.into_iter().map(|(id, (minimum, maximum))| (id, minimum, maximum)).collect(),
                     })
                 };
@@ -298,6 +316,8 @@ pub fn instantiate(defs: &[RoutineDefinition], start: u64, end: u64) -> Instanti
                     nominal_ends.insert((id.clone(), date), occurrence.nominal_end);
                     out.occurrences.push(occurrence);
                 }
+            } else if report && d.schedule.override_for(&date.to_string()).is_some() {
+                out.diagnostics.push(diagnostic("routine_override_no_occurrence", format!("Routine `{id}` does not occur on {date}; override ignored")));
             }
             if date == until {
                 break;
@@ -385,7 +405,7 @@ pub fn static_overlaps(
         .filter(|o| {
             o.start >= start
                 && o.start < end
-                && o.template.placement == ubu_core::core::RoutinePlacement::Static
+                && (o.overridden || o.template.placement == ubu_core::core::RoutinePlacement::Static)
                 && o.template.occupies_capacity
         })
         .collect();
