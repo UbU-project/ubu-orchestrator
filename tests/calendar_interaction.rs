@@ -215,7 +215,7 @@ async fn phone_colour_completes_with_observed_window_and_source_log() {
     assert!(stored["payload"].get("static_window").is_none());
     assert_eq!(
         stored["payload"]["duration_estimate"],
-        dynamic()["duration_estimate"]
+        json!({"type":"fixed","seconds":2700})
     );
     let logs = actions(&state, &id).await;
     assert_eq!(logs.len(), 1);

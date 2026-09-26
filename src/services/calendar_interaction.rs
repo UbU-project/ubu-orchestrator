@@ -256,6 +256,7 @@ pub async fn observed_owned(
 pub struct InteractionResult {
     pub changed_external_ids: BTreeSet<String>,
     pub moved: usize,
+    pub resized: usize,
     pub diagnostics: Vec<DiagnosticBody>,
 }
 
@@ -266,9 +267,10 @@ pub async fn apply(
 ) -> Result<InteractionResult> {
     let owned = observed_owned(state.inner().store.pool(), observed, applied).await?;
     let (completions, reopens, diagnostics) = detect(&owned, state.planning_now());
-    let (moves, _, window_diagnostics) = detect_window_gestures(&owned);
+    let (moves, resizes, window_diagnostics) = detect_window_gestures(&owned);
     let mut result = InteractionResult {
         moved: 0,
+        resized: 0,
         changed_external_ids: BTreeSet::new(),
         diagnostics,
     };
@@ -285,6 +287,19 @@ pub async fn apply(
             Err(error) => return Err(error),
         }
     }
+    for signal in resizes {
+        match apply_resize(state, &signal).await {
+            Ok(()) => {
+                result.resized += 1;
+                accept_observation(&signal.external_id, observed, applied);
+                result.changed_external_ids.insert(signal.external_id);
+            }
+            Err(AppError::Diagnostic { code, message, .. }) => result.diagnostics.push(DiagnosticBody { code, message }),
+            Err(AppError::Diagnostics { items, .. }) => result.diagnostics.extend(items.into_iter().map(|(code, message)| DiagnosticBody { code, message })),
+            Err(error) => return Err(error),
+        }
+    }
+    result.diagnostics.extend(resize_model_diagnostics(state, &owned).await?);
     for signal in completions {
         match log_service::record_calendar_completion(state.clone(), &signal).await {
             Ok(response) => {
@@ -393,4 +408,50 @@ pub async fn current_static_windows(pool: &sqlx::SqlitePool, desired: &mut [Desi
         }
     }
     Ok(())
+}
+
+
+async fn apply_resize(state: &AppState, signal: &ResizeSignal) -> Result<()> {
+    let _guard = state.inner().task_action_lock.lock().await;
+    let task = queries::get_current_state(state.inner().store.pool(), &signal.task_id).await?
+        .ok_or_else(|| AppError::NotFound(format!("Task `{}` disappeared", signal.task_id)))?;
+    if task.status != "active" {
+        return Err(AppError::bad_request_diagnostic("calendar_gesture_on_inactive_task",
+            format!("Task `{}` is no longer active; resize ignored", signal.task_id)));
+    }
+    let payload: Value = serde_json::from_str(&task.payload_json).map_err(internal)?;
+    if !payload["static_window"].is_null() {
+        return Err(AppError::bad_request_diagnostic("calendar_resize_not_dynamic",
+            format!("Task `{}` is no longer Dynamic; resize ignored", signal.task_id)));
+    }
+    super::task_capture::edit(state, &task.id, task.version,
+        serde_json::json!({"duration_estimate":{"type":"fixed","seconds":signal.new_duration_seconds}})).await?;
+    Ok(())
+}
+
+async fn resize_model_diagnostics(state: &AppState, owned: &[ObservedOwned]) -> Result<Vec<DiagnosticBody>> {
+    // Only occurrence Tasks currently use the P1B-23 model. Their gesture is
+    // rejected above; still explain both the missing override and model priority.
+    let candidates: Vec<_> = owned.iter().filter(|item| {
+        item.status == "active" && !item.is_static && item.routine_objective_id.is_some()
+            && CalendarTimeRange::parse(&item.event.start_at, &item.event.end_at).ok()
+                .zip(CalendarTimeRange::parse(&item.applied_window.0, &item.applied_window.1).ok())
+                .is_some_and(|(new, old)| new.end.inner() - new.start.inner() != old.end.inner() - old.start.inner())
+    }).collect();
+    if candidates.is_empty() { return Ok(Vec::new()); }
+    let groups = super::duration_model::by_group(
+        super::planning_service::observed_routine_events(state.inner().store.pool()).await?,
+        state.planning_now().inner().unix_timestamp(),
+    );
+    let mut diagnostics = Vec::new();
+    for item in candidates {
+        let routine = item.routine_objective_id.as_ref().unwrap();
+        if let Some(model) = groups.get(routine).and_then(|observations| super::duration_model::derive(observations).ok()) {
+            diagnostics.push(DiagnosticBody {
+                code: "calendar_resize_overridden_by_observations".into(),
+                message: format!("Task `{}` routine `{routine}` is planned from {} observations; its observed duration model takes priority over a declared resize", item.task_id, model.observations),
+            });
+        }
+    }
+    Ok(diagnostics)
 }

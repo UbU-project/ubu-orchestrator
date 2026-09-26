@@ -1341,7 +1341,7 @@ async fn build_affect_profile(pool: &sqlx::SqlitePool) -> Result<AffectProfileBo
     Ok(profile)
 }
 
-async fn observed_routine_events(pool: &sqlx::SqlitePool) -> Result<Vec<(String, i64, bool)>> {
+pub(super) async fn observed_routine_events(pool: &sqlx::SqlitePool) -> Result<Vec<(String, i64, bool)>> {
     let rows = sqlx::query_as::<_, (String, String, bool)>("SELECT json_extract(o.payload_json, '$.occurrence.routine_objective_id') AS routine_id,
         l.created_at, (l.event_type = 'task_started' OR
             (l.event_type = 'decision_recorded' AND json_extract(l.payload_json, '$.action') = 'start')) AS is_start
