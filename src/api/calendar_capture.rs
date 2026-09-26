@@ -20,8 +20,9 @@ pub struct CalendarCaptureRequest {
 pub struct CalendarCaptureResponse {
     pub schema_version: String,
     pub captured: usize,
-    /// Includes unchanged owned-source reuse, without another admission.
+    /// Tasks whose canonical state actually changed.
     pub updated: usize,
+    pub unchanged: usize,
     pub skipped: usize,
     pub diagnostics: Vec<DiagnosticBody>,
 }

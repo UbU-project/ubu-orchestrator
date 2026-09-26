@@ -266,7 +266,8 @@ async fn repeat_capture_reuses_one_source_and_performs_no_second_admission() {
     let results = count(&state, "projection_results").await;
     let second = capture(&state).await;
     assert_eq!(second["captured"], 0);
-    assert_eq!(second["updated"], 1);
+    assert_eq!(second["updated"], 0);
+    assert_eq!(second["unchanged"], 1);
     assert_eq!(second["skipped"], 0);
     assert_eq!(tasks(&state).await, before);
     assert_eq!(count(&state, "mutation_envelopes").await, admissions);
@@ -284,7 +285,9 @@ async fn repeat_capture_reuses_one_source_and_performs_no_second_admission() {
     let drift = capture(&state).await;
     assert_eq!(drift["captured"], 0);
     assert_eq!(drift["updated"], 0);
-    assert_eq!(drift["skipped"], 1);
+    assert_eq!(drift["skipped"], 0);
+    assert_eq!(drift["unchanged"], 0);
+    assert_eq!(drift["diagnostics"][0]["code"], "capture_owned_drift");
     assert_eq!(tasks(&state).await, before);
     // Simulate bookkeeping loss after admission: provenance recovers the same Task.
     sqlx::query("DELETE FROM projection_results")
@@ -314,7 +317,8 @@ async fn an_event_ubu_projected_is_never_captured_as_a_new_task() {
     let response = capture(&state).await;
     assert_eq!(response["captured"], 0);
     assert_eq!(response["updated"], 0);
-    assert_eq!(response["skipped"], 1);
+    assert_eq!(response["skipped"], 0);
+    assert_eq!(response["unchanged"], 1);
     assert_eq!(tasks(&state).await, before);
     assert_eq!(count(&state, "mutation_envelopes").await, admissions);
     assert_eq!(count(&state, "projection_results").await, results);

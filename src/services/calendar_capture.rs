@@ -164,6 +164,7 @@ pub async fn capture(
     normalize_observed(&mut observed, &applied);
     observed.retain(|event| range.overlaps(event) || applied.iter().any(|old| old.external_id == event.external_id));
     let mut diagnostics = client.take_diagnostics().await;
+    let wire_skipped = diagnostics.len();
     let interaction = super::calendar_interaction::apply(state, &observed, &mut applied).await?;
     diagnostics.extend(interaction.diagnostics);
     let conflicts =
@@ -198,25 +199,28 @@ pub async fn capture(
         schema_version: CALENDAR_CAPTURE_SCHEMA_VERSION.into(),
         captured: 0,
         updated: interaction.changed_external_ids.len(),
-        skipped: invalid + diagnostics.len(),
+        unchanged: 0,
+        skipped: invalid + wire_skipped,
         diagnostics: Vec::new(),
     };
     diagnostics.extend(plan_diagnostics);
-    // An unchanged owned source is a reuse, never a second admission. Owned drift
-    // remains reconciliation/P1B-33 work, even if its source belongs to a Task.
-    for event in observed
-        .iter()
-        .filter(|event| !foreign_ids.contains(event.external_id.as_str()))
-    {
+    // Successful gestures changed the Task; otherwise report owned matches and
+    // unresolved drift separately from entries that could not be captured.
+    for event in observed.iter().filter(|event| !foreign_ids.contains(event.external_id.as_str())) {
         if interaction.changed_external_ids.contains(&event.external_id) { continue; }
-        if existing
-            .get(&event.external_id)
-            .is_some_and(|(row, _)| row.status == "active")
-            && applied.iter().any(|old| old == event)
-        {
-            response.updated += 1;
-        } else {
-            response.skipped += 1;
+        match applied.iter().find(|old| old.external_id == event.external_id) {
+            Some(old) if old == event => response.unchanged += 1,
+            Some(old) => diagnostics.push(DiagnosticBody {
+                code: "capture_owned_drift".into(),
+                message: format!("Owned Task `{}` event `{}` differs from the applied record; no Task update was made", old.task_id, event.external_id),
+            }),
+            None => {
+                response.skipped += 1;
+                diagnostics.push(DiagnosticBody {
+                    code: "capture_unrecorded_event".into(),
+                    message: format!("Event `{}` matches known Task evidence without applied ownership; not captured", event.external_id),
+                });
+            }
         }
     }
     let now = state.planning_now();
@@ -250,7 +254,8 @@ pub async fn capture(
         }
         let typed: Task = serde_json::from_value(payload.clone()).map_err(internal)?;
         typed.validate().map_err(internal)?;
-        if previous.is_none_or(|(_, old)| old != &payload) {
+        let changed = previous.is_none_or(|(_, old)| old != &payload);
+        if changed {
             let (version, observed_version, created_at, compartment_label) =
                 if let Some((row, _)) = previous {
                     let version = row
@@ -292,10 +297,12 @@ pub async fn capture(
             )
             .await?;
         }
-        if previous.is_some() {
+        if previous.is_none() {
+            response.captured += 1;
+        } else if changed {
             response.updated += 1;
         } else {
-            response.captured += 1;
+            response.unchanged += 1;
         }
         let mut origin = foreign
             .iter()

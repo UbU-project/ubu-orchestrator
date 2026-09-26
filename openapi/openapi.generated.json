@@ -1737,6 +1737,7 @@
           "schema_version",
           "captured",
           "updated",
+          "unchanged",
           "skipped",
           "diagnostics"
         ],
@@ -1758,9 +1759,13 @@
             "type": "integer",
             "minimum": 0
           },
+          "unchanged": {
+            "type": "integer",
+            "minimum": 0
+          },
           "updated": {
             "type": "integer",
-            "description": "Includes unchanged owned-source reuse, without another admission.",
+            "description": "Tasks whose canonical state actually changed.",
             "minimum": 0
           }
         }
