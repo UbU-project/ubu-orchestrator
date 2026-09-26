@@ -469,3 +469,32 @@ pub async fn materialize(
     }
     Ok(context)
 }
+
+/// Refresh only the placement derived from an explicit date override (or its
+/// removal), including active occurrences with start evidence. Callers hold the
+/// import, materialization and action locks. Ordinary Task field edits stay closed.
+pub(crate) async fn refresh_override_window(
+    state: &AppState,
+    occurrence: &Occurrence,
+    now: UbuTimestamp,
+) -> Result<()> {
+    let rows = sqlx::query_as::<_, ObjectRecord>("SELECT * FROM objects WHERE object_type='Task' AND status='active' AND json_extract(payload_json,'$.occurrence.routine_objective_id')=? AND json_extract(payload_json,'$.occurrence.local_date')=?")
+        .bind(occurrence.objective_id.as_str()).bind(&occurrence.local_date)
+        .fetch_all(state.inner().store.pool()).await.map_err(internal)?;
+    for row in rows {
+        let old = Stored::parse(row)?;
+        let mut next = old.payload.clone();
+        let object = next.as_object_mut().ok_or_else(|| internal("stored Task is not an object"))?;
+        object.remove("static_window");
+        object.remove("allowed_time_range");
+        if occurrence.overridden || occurrence.template.placement == RoutinePlacement::Static {
+            next["static_window"] = json!({"start":timestamp_at(occurrence.start)?,"end":timestamp_at(occurrence.end)?});
+        } else {
+            next["allowed_time_range"] = json!({"earliest_start":timestamp_at(occurrence.start)?,"latest_finish":timestamp_at(occurrence.end)?});
+        }
+        if canonical(&next) != canonical(&old.payload) {
+            write(state, &old.row.id, Some(&old), &old.row.compartment_label, next, now).await?;
+        }
+    }
+    Ok(())
+}

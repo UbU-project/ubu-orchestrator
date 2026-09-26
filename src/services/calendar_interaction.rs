@@ -16,6 +16,8 @@ pub struct CompletionSignal {
     pub external_id: String,
     pub observed_start: String,
     pub observed_end: String,
+    /// Preserve the pre-observation Dynamic colour meaning when this pass pins it.
+    pub allow_occurrence_pin: bool,
 }
 #[derive(Debug, Clone)]
 pub struct ReopenSignal {
@@ -88,11 +90,11 @@ pub fn detect_window_gestures(
             }
             continue;
         }
-        if let Some(routine) = &item.routine_objective_id {
+        if item.routine_objective_id.is_some() {
             if changed {
-                diagnostics.push(DiagnosticBody {
-                    code: "calendar_move_needs_occurrence_override".into(),
-                    message: format!("Task `{}` belongs to routine `{routine}`; moving or resizing it needs an occurrence override (UBU-D0289)", item.task_id),
+                moves.push(MoveSignal {
+                    task_id: item.task_id.clone(), external_id: item.event.external_id.clone(),
+                    new_start: item.event.start_at.clone(), new_end: item.event.end_at.clone(),
                 });
             }
             continue;
@@ -173,6 +175,7 @@ pub fn detect(
                 external_id: item.event.external_id.clone(),
                 observed_start: item.event.start_at.clone(),
                 observed_end: item.event.end_at.clone(),
+                allow_occurrence_pin: item.routine_objective_id.is_some(),
             });
         } else if window.end.inner().unix_timestamp()
             > now.inner().unix_timestamp().saturating_sub(86_400)
@@ -284,7 +287,8 @@ pub async fn apply(
     result.diagnostics.extend(window_diagnostics);
     for signal in moves {
         match apply_move(state, &signal).await {
-            Ok(()) => {
+            Ok(diagnostics) => {
+                result.diagnostics.extend(diagnostics);
                 result.moved += 1;
                 accept_observation(&signal.external_id, observed, applied);
                 result.changed_external_ids.insert(signal.external_id);
@@ -306,7 +310,6 @@ pub async fn apply(
             Err(error) => return Err(error),
         }
     }
-    result.diagnostics.extend(resize_model_diagnostics(state, &owned).await?);
     for signal in completions {
         match log_service::record_calendar_completion(state.clone(), &signal).await {
             Ok(response) => {
@@ -352,7 +355,7 @@ pub async fn preserve_completed(
 ) -> Result<()> {
     let owned = observed_owned(pool, applied, applied).await?;
     for item in owned {
-        if !item.is_static
+        if (!item.is_static || item.routine_objective_id.is_some())
             && !item.is_captured
             && item.status == "completed"
             && item.latest_completion.as_ref().is_some_and(|completion| {
@@ -368,7 +371,18 @@ pub async fn preserve_completed(
 }
 
 
-async fn apply_move(state: &AppState, signal: &MoveSignal) -> Result<()> {
+async fn apply_move(state: &AppState, signal: &MoveSignal) -> Result<Vec<DiagnosticBody>> {
+    if let Some(task) = queries::get_current_state(state.inner().store.pool(), &signal.task_id).await? {
+        let payload: Value = serde_json::from_str(&task.payload_json).map_err(internal)?;
+        if let Some((objective, date)) = payload["occurrence"]["routine_objective_id"].as_str().zip(payload["occurrence"]["local_date"].as_str()) {
+            let window = CalendarTimeRange::parse(&signal.new_start, &signal.new_end)
+                .map_err(|_| AppError::bad_request_diagnostic("routine_override_invalid_window", "Override window must have a strictly positive span"))?;
+            let result = super::routine_override::change(state, objective, date, Some((window.start, window.end)), Some(super::routine_override::CalendarSource {
+                task_id: &signal.task_id, external_id: &signal.external_id,
+            })).await?;
+            return Ok(result.diagnostics);
+        }
+    }
     let _guard = state.inner().task_action_lock.lock().await;
     let task = queries::get_current_state(state.inner().store.pool(), &signal.task_id).await?
         .ok_or_else(|| AppError::NotFound(format!("Task `{}` disappeared", signal.task_id)))?;
@@ -397,7 +411,7 @@ async fn apply_move(state: &AppState, signal: &MoveSignal) -> Result<()> {
     super::task_capture::edit(state, &task.id, task.version,
         serde_json::json!({"static_window":{"start":signal.new_start,"end":signal.new_end}})).await?;
     log_service::append_calendar_move(state, signal).await?;
-    Ok(())
+    Ok(Vec::new())
 }
 
 /// Static placement belongs to the current Task even when the stored plan predates
@@ -407,7 +421,6 @@ pub async fn current_static_windows(pool: &sqlx::SqlitePool, desired: &mut [Desi
         let Some(task) = queries::get_current_state(pool, &event.task_id).await? else { continue; };
         if task.status != "active" { continue; }
         let payload: Value = serde_json::from_str(&task.payload_json).map_err(internal)?;
-        if payload.get("occurrence").is_some() { continue; }
         if let Some((start, end)) = payload["static_window"]["start"].as_str().zip(payload["static_window"]["end"].as_str()) {
             let window = CalendarTimeRange::parse(start, end).map_err(internal)?;
             event.start_at = crate::planning_time::timestamp_at(u64::try_from(window.start.inner().unix_timestamp()).map_err(internal)?)?;
@@ -435,31 +448,4 @@ async fn apply_resize(state: &AppState, signal: &ResizeSignal) -> Result<()> {
     super::task_capture::edit(state, &task.id, task.version,
         serde_json::json!({"duration_estimate":{"type":"fixed","seconds":signal.new_duration_seconds}})).await?;
     Ok(())
-}
-
-async fn resize_model_diagnostics(state: &AppState, owned: &[ObservedOwned]) -> Result<Vec<DiagnosticBody>> {
-    // Only occurrence Tasks currently use the P1B-23 model. Their gesture is
-    // rejected above; still explain both the missing override and model priority.
-    let candidates: Vec<_> = owned.iter().filter(|item| {
-        item.status == "active" && !item.is_static && item.routine_objective_id.is_some()
-            && CalendarTimeRange::parse(&item.event.start_at, &item.event.end_at).ok()
-                .zip(CalendarTimeRange::parse(&item.applied_window.0, &item.applied_window.1).ok())
-                .is_some_and(|(new, old)| new.end.inner() - new.start.inner() != old.end.inner() - old.start.inner())
-    }).collect();
-    if candidates.is_empty() { return Ok(Vec::new()); }
-    let groups = super::duration_model::by_group(
-        super::planning_service::observed_routine_events(state.inner().store.pool()).await?,
-        state.planning_now().inner().unix_timestamp(),
-    );
-    let mut diagnostics = Vec::new();
-    for item in candidates {
-        let routine = item.routine_objective_id.as_ref().unwrap();
-        if let Some(model) = groups.get(routine).and_then(|observations| super::duration_model::derive(observations).ok()) {
-            diagnostics.push(DiagnosticBody {
-                code: "calendar_resize_overridden_by_observations".into(),
-                message: format!("Task `{}` routine `{routine}` is planned from {} observations; its observed duration model takes priority over a declared resize", item.task_id, model.observations),
-            });
-        }
-    }
-    Ok(diagnostics)
 }

@@ -398,7 +398,7 @@ async fn dynamic_position_alone_is_not_a_signal_and_repair_projects_planned_slot
 }
 
 #[tokio::test]
-async fn occurrence_drag_requires_override_and_does_not_edit_task() {
+async fn occurrence_drag_pins_date_without_changing_key() {
     let recorder = Arc::new(RecordingCalendarApi::new());
     let state = state(recorder.clone()).await;
     admit_routine(&state).await;
@@ -415,16 +415,15 @@ async fn occurrence_drag_requires_override_and_does_not_edit_task() {
     )
     .await;
     let detected = signals(&state, &recorder).await;
-    assert_eq!(detected["moves"], json!([]));
+    assert_eq!(detected["moves"].as_array().unwrap().len(), 1);
     assert_eq!(detected["resizes"], json!([]));
     let response = capture(&state).await;
-    assert!(has_code(
-        &response,
-        "calendar_move_needs_occurrence_override"
-    ));
-    let message = response["diagnostics"][0]["message"].as_str().unwrap();
-    assert!(message.contains(&id) && message.contains(ROUTINE));
-    assert_eq!(task(&state, &id).await, before);
+    assert_eq!(response["moved"], 1);
+    assert_eq!(response["diagnostics"], json!([]));
+    let after = task(&state, &id).await;
+    assert_eq!(after["payload"]["occurrence"], before["payload"]["occurrence"]);
+    assert_eq!(after["payload"]["static_window"], json!({"start":"2026-09-26T10:00:00Z","end":"2026-09-26T10:10:00Z"}));
+    assert!(after["payload"].get("allowed_time_range").is_none());
     println!(
         "EVIDENCE[P1B34_test5]={}",
         json!({"signals":detected,"diagnostics":response["diagnostics"]})
@@ -432,7 +431,7 @@ async fn occurrence_drag_requires_override_and_does_not_edit_task() {
 }
 
 #[tokio::test]
-async fn observed_routine_resize_reports_model_priority_without_bypassing_override() {
+async fn observed_routine_window_override_pins_without_changing_declaration() {
     let recorder = Arc::new(RecordingCalendarApi::new());
     let state = state(recorder.clone()).await;
     let first = state.clone().with_clock(FixedClock(
@@ -486,23 +485,13 @@ async fn observed_routine_resize_reports_model_priority_without_bypassing_overri
     .await;
     let detected = signals(&state, &recorder).await;
     let response = capture(&state).await;
-    assert!(has_code(
-        &response,
-        "calendar_move_needs_occurrence_override"
-    ));
-    assert!(has_code(
-        &response,
-        "calendar_resize_overridden_by_observations"
-    ));
-    let diagnostic = response["diagnostics"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|d| d["code"] == "calendar_resize_overridden_by_observations")
-        .unwrap();
-    assert!(diagnostic["message"].as_str().unwrap().contains("5"));
-    assert_eq!(task(&state, &id).await, before);
+    assert_eq!(response["moved"], 1);
     assert_eq!(response["resized"], 0);
+    assert_eq!(response["diagnostics"], json!([]));
+    let after = task(&state, &id).await;
+    assert_eq!(after["payload"]["duration_estimate"], before["payload"]["duration_estimate"]);
+    assert_eq!(after["payload"]["occurrence"], before["payload"]["occurrence"]);
+    assert_eq!(after["payload"]["static_window"], json!({"start":"2026-09-26T09:00:00Z","end":"2026-09-26T09:25:00Z"}));
     generate(&state).await;
     let p = preview(&state).await;
     let projected = p["events"]
@@ -511,7 +500,7 @@ async fn observed_routine_resize_reports_model_priority_without_bypassing_overri
         .iter()
         .find(|e| e["task_id"] == id)
         .unwrap();
-    assert_eq!(projected["end_at"], initial.end_at);
+    assert_eq!(projected["end_at"], "2026-09-26T09:25:00Z");
     println!(
         "EVIDENCE[P1B34_test6]={}",
         json!({"signals":detected,"diagnostics":response["diagnostics"],"declared_duration":before["payload"]["duration_estimate"],"planned_start":projected["start_at"],"planned_end":projected["end_at"]})

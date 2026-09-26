@@ -50,9 +50,14 @@ async fn record_task_action_with_calendar(
     let pool = state.inner().store.pool();
     let mut task = load_task(pool, &task_id).await?;
     if let Some(signal) = calendar {
-        super::calendar_range::CalendarTimeRange::parse(&signal.observed_start, &signal.observed_end)
+        let observed = super::calendar_range::CalendarTimeRange::parse(&signal.observed_start, &signal.observed_end)
             .map_err(|_| AppError::bad_request_diagnostic("capture_interaction_invalid_window", "Calendar completion requires a valid observed window"))?;
-        if task.payload.get("static_window").is_some_and(|window| !window.is_null()) || task.payload["provenance"]["source"]["source_kind"] == "google_calendar" {
+        let pinned_in_this_capture = signal.allow_occurrence_pin
+            && task.payload.get("occurrence").is_some()
+            && task.payload["static_window"]["start"].as_str().zip(task.payload["static_window"]["end"].as_str())
+                .and_then(|(start, end)| super::calendar_range::CalendarTimeRange::parse(start, end).ok())
+                .is_some_and(|window| window.start == observed.start && window.end == observed.end);
+        if (task.payload.get("static_window").is_some_and(|window| !window.is_null()) && !pinned_in_this_capture) || task.payload["provenance"]["source"]["source_kind"] == "google_calendar" {
             return Err(AppError::conflict_diagnostic("capture_interaction_not_dynamic", "Task became Static or captured before Calendar completion; gesture ignored"));
         }
     }

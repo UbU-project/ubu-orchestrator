@@ -1,5 +1,8 @@
 # P1B-34 verification
 
+Historical checkpoint. P1B-35 supersedes the occurrence rejection and updates
+two tests. The original evidence remains in this file at commit `95dec6e`.
+
 Base: `88b70d46bcb502a46d94af9536e718038d0994d7` (clean).
 Branch: `p1b-34-calendar-move-resize`. One signed commit per section A–F.
 Only `ubu-orchestrator` changes. No dependency added and no pin moved.
@@ -112,17 +115,12 @@ repair. These cover both entrances to the fix.
 {"diagnostics":[{"code":"capture_owned_drift","message":"Owned Task `task_01a0dda9e4db76c0b5c1ad1deca5f2e6` event `01a0dda9e4db76c0b5c1ad1deca5f2e6` differs from the applied record; no Task update was made"}],"operations":[{"event":{"color_id":null,"end_at":"2026-09-26T08:30:00Z","external_id":"01a0dda9e4db76c0b5c1ad1deca5f2e6","reminders_minutes":[],"start_at":"2026-09-26T08:00:00Z","summary":"Synthetic Dynamic work","task_id":"task_01a0dda9e4db76c0b5c1ad1deca5f2e6","transparent":false},"kind":"update"}],"signals":{"diagnostics":[],"moves":[],"resizes":[]}}
 ```
 
-### Test 5 — occurrence signals and diagnostics
+### Tests 5 and 6 — historical occurrence rejection
 
-```json
-{"diagnostics":[{"code":"calendar_move_needs_occurrence_override","message":"Task `task_01a0dda9e4ff77c08ad29d8c67b70fe6` belongs to routine `obj_018f3c8e9b2a7c4d8f1e2a3b4c5d8e01`; moving or resizing it needs an occurrence override (UBU-D0289)"},{"code":"capture_owned_drift","message":"Owned Task `task_01a0dda9e4ff77c08ad29d8c67b70fe6` event `01a0dda9e4ff77c08ad29d8c67b70fe6` differs from the applied record; no Task update was made"}],"signals":{"diagnostics":[{"code":"calendar_move_needs_occurrence_override","message":"Task `task_01a0dda9e4ff77c08ad29d8c67b70fe6` belongs to routine `obj_018f3c8e9b2a7c4d8f1e2a3b4c5d8e01`; moving or resizing it needs an occurrence override (UBU-D0289)"}],"moves":[],"resizes":[]}}
-```
-
-### Test 6 — occurrence resize, model diagnostics and planned duration
-
-```json
-{"declared_duration":{"seconds":600,"type":"fixed"},"diagnostics":[{"code":"calendar_move_needs_occurrence_override","message":"Task `task_01a0dda9e5717ae0a98ac7c29bcc7bfa` belongs to routine `obj_018f3c8e9b2a7c4d8f1e2a3b4c5d8e01`; moving or resizing it needs an occurrence override (UBU-D0289)"},{"code":"calendar_resize_overridden_by_observations","message":"Task `task_01a0dda9e5717ae0a98ac7c29bcc7bfa` routine `obj_018f3c8e9b2a7c4d8f1e2a3b4c5d8e01` is planned from 5 observations; its observed duration model takes priority over a declared resize"},{"code":"capture_owned_drift","message":"Owned Task `task_01a0dda9e5717ae0a98ac7c29bcc7bfa` event `01a0dda9e5717ae0a98ac7c29bcc7bfa` differs from the applied record; no Task update was made"}],"planned_end":"2026-09-26T12:00:00Z","planned_start":"2026-09-26T11:40:00Z","signals":{"diagnostics":[{"code":"calendar_move_needs_occurrence_override","message":"Task `task_01a0dda9e5717ae0a98ac7c29bcc7bfa` belongs to routine `obj_018f3c8e9b2a7c4d8f1e2a3b4c5d8e01`; moving or resizing it needs an occurrence override (UBU-D0289)"}],"moves":[],"resizes":[]}}
-```
+The retired rejection evidence is preserved in the
+[original P1B-34 verification](https://github.com/UbU-project/ubu-orchestrator/blob/95dec6ec1d60ce20375e878a641d79a1cef6c4bc/docs/P1B-34_VERIFICATION.md).
+P1B-35 replaces those two tests with accepted date-override behavior; the old
+verbatim output has not been rewritten to pretend it describes current behavior.
 
 ### Test 7 — zero-length window
 
@@ -158,14 +156,10 @@ window edit first: test 9 applies a Dynamic resize before completion. A Static
 move with colour stays active; a Dynamic position-only drag with colour has no
 window edit. There is no change to P1B-33's colour partition.
 
-Judgments 3 and 4 / test 6 also intersect: the P1B-23 model applies only to
-routine occurrence Tasks, while occurrences reject both gestures. Rejection
-wins. A changed duration on a well-observed occurrence emits both
-`calendar_move_needs_occurrence_override` and
-`calendar_resize_overridden_by_observations`, without bypassing
-`task_capture::edit` or editing a template. No successful routine resize is
-claimed; P1B-35's missing override remains visible. An unchanged model-sized
-occurrence does not generate spurious gesture diagnostics.
+At this historical checkpoint, judgments 3 and 4 intersected: routine
+occurrences rejected both window gestures even when an observed duration model
+existed. P1B-35 replaces that behavior with canonical per-date window overrides.
+The original judgment discussion is preserved at the revision linked above.
 
 Other bounded interpretations:
 

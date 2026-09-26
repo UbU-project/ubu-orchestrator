@@ -35,7 +35,7 @@ PROBE[honour] operations: none
 | Dynamic | Done; removing Calendar completion colour can reopen recent work | Resize: change the declared duration; placement remains the planner's |
 | Static | Category | Move: make `static_window` follow the event |
 
-Dragging Dynamic work without changing its duration emits no move or resize
+Dragging Dynamic one-off work without changing its duration emits no move or resize
 signal. It does not pin the Task or create a Static commitment. The next plan
 still chooses its position. After reconcile repair accepts the observed event
 position into the projection record, preview proposes the planner's slot again.
@@ -46,20 +46,18 @@ It does not rewrite the stored plan or any placement field; the next generate
 uses the new duration. If the work no longer fits, the existing partial placement
 machinery reports the outcome.
 
-A resize changes what the operator **declared**. P1B-23 still plans a routine
-from observations once at least five usable recent runs survive outlier filtering.
-`calendar_resize_overridden_by_observations` names the Task, routine and number
-of observations. Those observations can override the declared duration.
+A one-off resize changes what the operator **declared**. Routine occurrences
+now have a separate P1B-35 path: any changed Calendar window writes a per-date
+override and pins that span, preserving the routine's duration declaration.
+P1B-23 observations still size unpinned Planned occurrences; a pinned override
+uses its explicit span instead.
 
 ## Occurrences and combined gestures
 
-Routine occurrence payloads are rebuilt from their templates on materialize.
-Both moves and resizes are rejected with
-`calendar_move_needs_occurrence_override`, naming the Task and routine. UBU-D0289
-names an occurrence override, but no implementation exists yet; P1B-35 supplies
-it. Only occurrence Tasks currently receive P1B-23's derived model. A resized
-well-observed occurrence therefore reports **both** the missing override and
-model priority, without editing its declaration or bypassing the edit path.
+Routine occurrence payloads are rebuilt on materialize. P1B-35 stores their
+window override on the Objective schedule, keyed by local date, so it survives
+that rebuild without changing occurrence keys. This replaces the former
+occurrence-drag rejection. Direct occurrence field edits remain rejected.
 
 Window edits run before completion. Under the placement partition a Static
 move never also completes the Task: its colour means category. A Dynamic drag
@@ -93,7 +91,11 @@ entirely outside that observation window is not seen in this pass.
 together. Rejected gestures have zero edit counts and visible diagnostics;
 existing capture, unchanged and skipped accounting remains in place.
 
-## Known limits
+## Historical P1B-34 limits
+
+These limits record P1B-34. P1B-35 supersedes the occurrence and observed-resize
+restrictions above; Dynamic one-off placement remains owned by the planner.
+
 
 1. **Routine occurrences cannot be moved from the calendar.** The occurrence override does not exist; P1B-35 builds it. Until then the gesture is rejected visibly.
 2. **A resize may be overridden.** P1B-23's observed model wins for a well-observed routine. The diagnostic says so; the behaviour does not change.
