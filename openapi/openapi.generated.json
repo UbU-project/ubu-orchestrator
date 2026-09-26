@@ -1737,6 +1737,8 @@
           "schema_version",
           "captured",
           "updated",
+          "moved",
+          "resized",
           "unchanged",
           "skipped",
           "diagnostics"
@@ -1751,6 +1753,16 @@
             "items": {
               "$ref": "#/components/schemas/DiagnosticBody"
             }
+          },
+          "moved": {
+            "type": "integer",
+            "description": "Successful Static window edits, included in updated.",
+            "minimum": 0
+          },
+          "resized": {
+            "type": "integer",
+            "description": "Successful Dynamic duration edits, included in updated.",
+            "minimum": 0
           },
           "schema_version": {
             "type": "string"

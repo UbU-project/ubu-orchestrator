@@ -22,6 +22,10 @@ pub struct CalendarCaptureResponse {
     pub captured: usize,
     /// Tasks whose canonical state actually changed.
     pub updated: usize,
+    /// Successful Static window edits, included in updated.
+    pub moved: usize,
+    /// Successful Dynamic duration edits, included in updated.
+    pub resized: usize,
     pub unchanged: usize,
     pub skipped: usize,
     pub diagnostics: Vec<DiagnosticBody>,

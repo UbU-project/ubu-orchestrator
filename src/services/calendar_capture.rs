@@ -199,6 +199,8 @@ pub async fn capture(
         schema_version: CALENDAR_CAPTURE_SCHEMA_VERSION.into(),
         captured: 0,
         updated: interaction.changed_external_ids.len(),
+        moved: interaction.moved,
+        resized: interaction.resized,
         unchanged: 0,
         skipped: invalid + wire_skipped,
         diagnostics: Vec::new(),
