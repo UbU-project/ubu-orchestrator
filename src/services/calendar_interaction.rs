@@ -255,6 +255,7 @@ pub async fn observed_owned(
 
 pub struct InteractionResult {
     pub changed_external_ids: BTreeSet<String>,
+    pub moved: usize,
     pub diagnostics: Vec<DiagnosticBody>,
 }
 
@@ -265,10 +266,25 @@ pub async fn apply(
 ) -> Result<InteractionResult> {
     let owned = observed_owned(state.inner().store.pool(), observed, applied).await?;
     let (completions, reopens, diagnostics) = detect(&owned, state.planning_now());
+    let (moves, _, window_diagnostics) = detect_window_gestures(&owned);
     let mut result = InteractionResult {
+        moved: 0,
         changed_external_ids: BTreeSet::new(),
         diagnostics,
     };
+    result.diagnostics.extend(window_diagnostics);
+    for signal in moves {
+        match apply_move(state, &signal).await {
+            Ok(()) => {
+                result.moved += 1;
+                accept_observation(&signal.external_id, observed, applied);
+                result.changed_external_ids.insert(signal.external_id);
+            }
+            Err(AppError::Diagnostic { code, message, .. }) => result.diagnostics.push(DiagnosticBody { code, message }),
+            Err(AppError::Diagnostics { items, .. }) => result.diagnostics.extend(items.into_iter().map(|(code, message)| DiagnosticBody { code, message })),
+            Err(error) => return Err(error),
+        }
+    }
     for signal in completions {
         match log_service::record_calendar_completion(state.clone(), &signal).await {
             Ok(response) => {
@@ -326,5 +342,55 @@ pub async fn preserve_completed(
         }
     }
     desired.sort_by(|a, b| (&a.start_at, &a.external_id).cmp(&(&b.start_at, &b.external_id)));
+    Ok(())
+}
+
+
+async fn apply_move(state: &AppState, signal: &MoveSignal) -> Result<()> {
+    let _guard = state.inner().task_action_lock.lock().await;
+    let task = queries::get_current_state(state.inner().store.pool(), &signal.task_id).await?
+        .ok_or_else(|| AppError::NotFound(format!("Task `{}` disappeared", signal.task_id)))?;
+    let payload: Value = serde_json::from_str(&task.payload_json).map_err(internal)?;
+    let reject = |code: &str, reason: &str| AppError::bad_request_diagnostic(code,
+        format!("Task `{}` event `{}`: {reason}; move rejected", signal.task_id, signal.external_id));
+    if task.status != "active" {
+        return Err(reject("calendar_gesture_on_inactive_task", "Task is no longer active"));
+    }
+    if payload["static_window"].is_null() {
+        return Err(reject("calendar_move_not_static", "Task is no longer Static"));
+    }
+    let range = CalendarTimeRange::parse(&signal.new_start, &signal.new_end)
+        .map_err(|_| reject("calendar_move_invalid_window", "window must have a strictly positive span"))?;
+    let created = payload["provenance"]["created_at"].as_str()
+        .and_then(|value| UbuTimestamp::parse(value).ok())
+        .ok_or_else(|| reject("calendar_move_invalid_creation", "Task creation time is unavailable"))?;
+    if range.start < created {
+        return Err(reject("calendar_move_before_creation", "window starts before Task creation"));
+    }
+    let horizon = CalendarTimeRange::planning(state).await?;
+    let latest_end = horizon.end.inner().unix_timestamp().saturating_add(state.inner().planning_horizon_seconds as i64);
+    if range.end.inner().unix_timestamp() > latest_end {
+        return Err(reject("calendar_move_beyond_horizon", "window ends beyond the planning horizon plus one configured horizon length"));
+    }
+    super::task_capture::edit(state, &task.id, task.version,
+        serde_json::json!({"static_window":{"start":signal.new_start,"end":signal.new_end}})).await?;
+    log_service::append_calendar_move(state, signal).await?;
+    Ok(())
+}
+
+/// Static placement belongs to the current Task even when the stored plan predates
+/// its edit. Never project an obsolete meeting window back onto the operator.
+pub async fn current_static_windows(pool: &sqlx::SqlitePool, desired: &mut [DesiredEvent]) -> Result<()> {
+    for event in desired {
+        let Some(task) = queries::get_current_state(pool, &event.task_id).await? else { continue; };
+        if task.status != "active" { continue; }
+        let payload: Value = serde_json::from_str(&task.payload_json).map_err(internal)?;
+        if payload.get("occurrence").is_some() { continue; }
+        if let Some((start, end)) = payload["static_window"]["start"].as_str().zip(payload["static_window"]["end"].as_str()) {
+            let window = CalendarTimeRange::parse(start, end).map_err(internal)?;
+            event.start_at = crate::planning_time::timestamp_at(u64::try_from(window.start.inner().unix_timestamp()).map_err(internal)?)?;
+            event.end_at = crate::planning_time::timestamp_at(u64::try_from(window.end.inner().unix_timestamp()).map_err(internal)?)?;
+        }
+    }
     Ok(())
 }

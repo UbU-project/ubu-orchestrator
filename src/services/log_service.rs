@@ -147,6 +147,22 @@ pub async fn reopen_calendar_completion(
     Ok(true)
 }
 
+/// A Calendar window edit uses the ordinary decision Log vocabulary and source marker.
+pub(super) async fn append_calendar_move(
+    state: &AppState,
+    signal: &super::calendar_interaction::MoveSignal,
+) -> Result<()> {
+    let task = load_task(state.inner().store.pool(), &signal.task_id).await?;
+    let payload = json!({
+        "schema_version":"ubu.orchestrator.calendar_interaction.v1",
+        "action":"move", "decision":"task_window_changed",
+        "source":{"source_kind":"google_calendar","source_id":signal.external_id},
+        "static_window":{"start":signal.new_start,"end":signal.new_end}
+    });
+    append_task_decision(state, &task, payload, Vec::new(), AuthoritySource::User, state.planning_now()).await?;
+    Ok(())
+}
+
 /// Keep canonical decision recording shared by app actions and Calendar undo.
 async fn append_task_decision(
     state: &AppState,
