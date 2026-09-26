@@ -230,6 +230,12 @@ pub async fn capture(
         payload["occupies_capacity"] = task.occupies_capacity.into();
         if let Some(category) = &task.category_tag {
             payload["category_tag"] = category.clone().into();
+            // Core requires category_tag to be an exact member of tags.
+            let mut tags = payload["tags"].as_array().cloned().unwrap_or_default();
+            if !tags.iter().any(|tag| tag.as_str() == Some(category)) {
+                tags.push(category.clone().into());
+            }
+            payload["tags"] = tags.into();
         } else {
             payload.as_object_mut().unwrap().remove("category_tag");
         }
