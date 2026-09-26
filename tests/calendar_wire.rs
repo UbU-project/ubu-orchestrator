@@ -111,7 +111,7 @@ fn transparency_uses_google_strings() {
 fn realistic_google_response_round_trips_and_required_fields_are_strict() {
     let response = response_fixture();
     assert_eq!(parse_event(&response).unwrap(), event());
-    for field in ["id", "summary", "start", "end", "reminders"] {
+    for field in ["id", "summary", "start", "end"] {
         let mut malformed = response.clone();
         malformed.as_object_mut().unwrap().remove(field);
         assert!(parse_event(&malformed).is_err(), "{field}");
@@ -124,7 +124,7 @@ fn realistic_google_response_round_trips_and_required_fields_are_strict() {
         ("colorId", json!(null)),
         ("transparency", json!(false)),
         ("status", json!("cancelled")),
-        ("reminders", json!({"useDefault":true})),
+        ("reminders", json!({"useDefault":"invalid"})),
         (
             "reminders",
             json!({"useDefault":false,"overrides":[{"method":"email","minutes":10}]}),
@@ -137,6 +137,12 @@ fn realistic_google_response_round_trips_and_required_fields_are_strict() {
         let mut malformed = response.clone();
         malformed[field] = invalid;
         assert!(parse_event(&malformed).is_err(), "{field}");
+    }
+    for reminders in [None, Some(json!({"useDefault":true}))] {
+        let mut ordinary = response.clone();
+        ordinary.as_object_mut().unwrap().remove("reminders");
+        if let Some(reminders) = reminders { ordinary["reminders"] = reminders; }
+        assert!(parse_event(&ordinary).unwrap().reminders_minutes.is_empty());
     }
     let mut backward = response;
     backward["end"] = backward["start"].clone();

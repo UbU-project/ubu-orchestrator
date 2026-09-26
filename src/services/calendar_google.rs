@@ -160,6 +160,9 @@ impl GoogleCalendarApi {
 }
 
 impl CalendarApi for GoogleCalendarApi {
+    fn take_diagnostics(&self) -> super::calendar_client::CalendarDiagnosticsFuture<'_> {
+        Box::pin(GoogleCalendarApi::take_diagnostics(self))
+    }
     fn list_events<'a>(&'a self, range: &'a CalendarTimeRange) -> CalendarApiFuture<'a, Vec<DesiredEvent>> {
         Box::pin(async move {
             let mut events = Vec::new();
@@ -183,10 +186,7 @@ impl CalendarApi for GoogleCalendarApi {
                 self.diagnostics
                     .lock()
                     .await
-                    .extend(skipped.into_iter().map(|message| DiagnosticBody {
-                        code: "calendar_event_skipped".into(),
-                        message,
-                    }));
+                    .extend(skipped.into_iter().map(wire::list_diagnostic));
                 page = wire::next_page(&value, &mut seen)?;
                 if page.is_none() {
                     return Ok(events);

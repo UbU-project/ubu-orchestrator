@@ -87,6 +87,9 @@ pub fn parse_event(value: &Value) -> Result<DesiredEvent, String> {
         return Err("event id cannot map to a Task".into());
     }
     let summary = required_string(value, "summary")?;
+    if value["start"].get("date").is_some() && value["start"].get("dateTime").is_none() {
+        return Err("all-day event has no dateTime".into());
+    }
     let start_at = required_string(&value["start"], "dateTime")?;
     let end_at = required_string(&value["end"], "dateTime")?;
     let start =
@@ -107,10 +110,15 @@ pub fn parse_event(value: &Value) -> Result<DesiredEvent, String> {
         _ => return Err("invalid transparency".into()),
     };
     let reminders = &value["reminders"];
-    if reminders["useDefault"] != false {
-        return Err("reminders.useDefault must be false to recover explicit reminders".into());
-    }
-    let overrides = match reminders.get("overrides") {
+    // Default reminders are Calendar settings, not Task metadata. No explicit
+    // reminder can be recovered from an omitted/default reminder specification.
+    let explicit = match reminders.get("useDefault") {
+        Some(Value::Bool(false)) => reminders.get("overrides"),
+        Some(Value::Bool(true)) => None,
+        None if reminders.is_null() => None,
+        _ => return Err("invalid reminders.useDefault".into()),
+    };
+    let overrides = match explicit {
         None => &[][..], // Google may omit an empty overrides array.
         Some(Value::Array(overrides)) => overrides.as_slice(),
         _ => return Err("invalid reminders.overrides".into()),
@@ -156,6 +164,13 @@ pub fn parse_event_list(value: &Value) -> (Vec<DesiredEvent>, Vec<String>) {
         }
     }
     (events, messages)
+}
+
+pub fn list_diagnostic(message: String) -> crate::api::planning::DiagnosticBody {
+    crate::api::planning::DiagnosticBody {
+        code: if message.ends_with("all-day event has no dateTime") { "capture_all_day_unsupported" } else { "calendar_event_skipped" }.into(),
+        message,
+    }
 }
 
 fn percent_encode(value: &str) -> String {

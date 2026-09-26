@@ -17,3 +17,4 @@ pub mod user_action;
 pub mod quick_ubu;
 
 pub mod routines;
+pub mod calendar_capture;

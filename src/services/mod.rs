@@ -25,3 +25,4 @@ pub mod routine_instantiation;
 pub mod routine_service;
 pub mod calendar_range;
 pub mod calendar_sources;
+pub mod calendar_capture;

@@ -58,6 +58,15 @@ impl CategoryPalette {
         Ok(Self(palette))
     }
 
+    /// None means multiple categories share this colour; never choose arbitrarily.
+    pub fn inverse(&self) -> BTreeMap<String, Option<String>> {
+        let mut inverse = BTreeMap::new();
+        for (category, color) in &self.0 {
+            inverse.entry(color.clone()).and_modify(|value| *value = None).or_insert_with(|| Some(category.clone()));
+        }
+        inverse
+    }
+
     pub fn color(&self, category: Option<&str>) -> Option<&str> {
         category
             .and_then(|category| self.0.get(category))

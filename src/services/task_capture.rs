@@ -131,6 +131,9 @@ pub async fn edit(
         });
     }
     let fields = editable_fields(&fields)?;
+    if payload["provenance"]["source"]["source_kind"] == "google_calendar" && fields.get("static_window").is_some_and(Value::is_null) {
+        return Err(AppError::bad_request_diagnostic("capture_static_required", "a captured Calendar Task must retain its static_window"));
+    }
     let object = payload
         .as_object_mut()
         .ok_or_else(|| AppError::Internal("stored Task is not an object".into()))?;

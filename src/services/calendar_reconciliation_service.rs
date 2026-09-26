@@ -90,11 +90,9 @@ pub async fn reconcile(
     };
     let range = super::calendar_range::CalendarTimeRange::planning(state).await?;
     let (applied, out_of_range_events): (Vec<_>, Vec<_>) = applied.into_iter().partition(|event| range.overlaps(event));
-    let observed = client.list_events(&range).await.map_err(AppError::Upstream)?;
-    let diagnostics = match &google {
-        Some(client) => client.take_diagnostics().await,
-        None => Vec::new(),
-    };
+    let mut observed = client.list_events(&range).await.map_err(AppError::Upstream)?;
+    super::calendar_capture::normalize_observed(&mut observed, &applied);
+    let diagnostics = client.take_diagnostics().await;
     let known = known_external_ids(pool).await?;
     let conflicts = calendar_reconcile::classify(&applied, &observed, &known);
     let status = if conflicts.is_empty() {

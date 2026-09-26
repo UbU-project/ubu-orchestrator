@@ -14,7 +14,10 @@ use super::calendar_projection::DesiredEvent;
 
 pub type CalendarApiFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, String>> + Send + 'a>>;
 
+pub type CalendarDiagnosticsFuture<'a> = Pin<Box<dyn Future<Output = Vec<crate::api::planning::DiagnosticBody>> + Send + 'a>>;
+
 pub trait CalendarApi: Send + Sync {
+    fn take_diagnostics(&self) -> CalendarDiagnosticsFuture<'_> { Box::pin(async { Vec::new() }) }
     fn list_events<'a>(&'a self, range: &'a CalendarTimeRange) -> CalendarApiFuture<'a, Vec<DesiredEvent>>;
     fn insert_event<'a>(&'a self, event: &'a DesiredEvent) -> CalendarApiFuture<'a, ()>;
     fn patch_event<'a>(&'a self, event: &'a DesiredEvent) -> CalendarApiFuture<'a, ()>;
@@ -73,6 +76,7 @@ struct RecordingState {
     events: BTreeMap<String, DesiredEvent>,
     calls: Vec<RecordedCalendarCall>,
     fail_ids: BTreeSet<String>,
+    wire_messages: Vec<String>,
 }
 
 #[derive(Debug, Default)]
@@ -95,6 +99,14 @@ impl RecordingCalendarApi {
                 ..RecordingState::default()
             }),
         }
+    }
+
+    /// Decode a synthetic Google list through the production wire parser, without transport.
+    pub fn with_wire_events(value: &serde_json::Value) -> Self {
+        let (events, messages) = super::calendar_wire::parse_event_list(value);
+        let recorder = Self::with_events(events);
+        recorder.state.lock().unwrap().wire_messages = messages;
+        recorder
     }
 
     /// Deterministic failure injection. A failed call is recorded but changes no event.
@@ -134,6 +146,9 @@ impl RecordingCalendarApi {
 }
 
 impl CalendarApi for RecordingCalendarApi {
+    fn take_diagnostics(&self) -> CalendarDiagnosticsFuture<'_> {
+        Box::pin(async move { self.state.lock().unwrap().wire_messages.iter().cloned().map(super::calendar_wire::list_diagnostic).collect() })
+    }
     fn list_events<'a>(&'a self, range: &'a CalendarTimeRange) -> CalendarApiFuture<'a, Vec<DesiredEvent>> {
         Box::pin(async move {
             let mut state = self.state.lock().unwrap();
