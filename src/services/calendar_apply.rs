@@ -113,6 +113,7 @@ pub async fn preview(
             }
         }
     }
+    super::calendar_interaction::preserve_completed(state.inner().store.pool(), &mut desired, &existing).await?;
     let operations = calendar_projection::diff(&desired, &existing).into_iter().filter(|operation| {
         // A captured Task leaving the plan must never delete the source meeting.
         !matches!(operation, CalendarOperation::Delete { external_id, .. } if origins.values().any(|origin| origin == external_id))

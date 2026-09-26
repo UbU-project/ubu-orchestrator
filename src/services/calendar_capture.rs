@@ -145,6 +145,11 @@ pub async fn capture(
     let pool = state.inner().store.pool();
     let mut applied = calendar_apply::last_applied_events(pool).await?;
     let range = CalendarTimeRange::planning(state).await?;
+    // One read includes recent owned events for completion/reopen. Foreign
+    // capture still uses the original planning horizon, never this lookback.
+    let mut observation_range = range.clone();
+    let lookback = crate::planning_time::timestamp_at(u64::try_from(state.planning_now().inner().unix_timestamp()).map_err(internal)?.saturating_sub(86_400))?;
+    observation_range.start = observation_range.start.min(ubu_core::UbuTimestamp::parse(&lookback).map_err(internal)?);
     let client: Arc<dyn CalendarApi> = if mode == CalendarExportMode::Live {
         Arc::new(GoogleCalendarApi::new(&state.inner().config).map_err(internal)?)
     } else {
@@ -153,11 +158,14 @@ pub async fn capture(
             .unwrap_or_else(|| Arc::new(RecordingCalendarApi::with_events(applied.clone())))
     };
     let mut observed = client
-        .list_events(&range)
+        .list_events(&observation_range)
         .await
         .map_err(AppError::Upstream)?;
     normalize_observed(&mut observed, &applied);
+    observed.retain(|event| range.overlaps(event) || applied.iter().any(|old| old.external_id == event.external_id));
     let mut diagnostics = client.take_diagnostics().await;
+    let interaction = super::calendar_interaction::apply(state, &observed, &mut applied).await?;
+    diagnostics.extend(interaction.diagnostics);
     let conflicts =
         calendar_reconcile::classify(&applied, &observed, &known_external_ids(pool).await?);
     let foreign_ids: BTreeSet<_> = conflicts
@@ -189,7 +197,7 @@ pub async fn capture(
     let mut response = CalendarCaptureResponse {
         schema_version: CALENDAR_CAPTURE_SCHEMA_VERSION.into(),
         captured: 0,
-        updated: 0,
+        updated: interaction.changed_external_ids.len(),
         skipped: invalid + diagnostics.len(),
         diagnostics: Vec::new(),
     };
@@ -200,6 +208,7 @@ pub async fn capture(
         .iter()
         .filter(|event| !foreign_ids.contains(event.external_id.as_str()))
     {
+        if interaction.changed_external_ids.contains(&event.external_id) { continue; }
         if existing
             .get(&event.external_id)
             .is_some_and(|(row, _)| row.status == "active")
@@ -211,7 +220,7 @@ pub async fn capture(
         }
     }
     let now = state.planning_now();
-    let mut recorded = false;
+    let mut recorded = !interaction.changed_external_ids.is_empty();
     for task in tasks {
         let previous = existing.get(&task.origin_event_id);
         if previous.is_some_and(|(row, _)| row.status != "active") {

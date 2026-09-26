@@ -23,11 +23,39 @@ pub async fn record_task_action(
     task_id: String,
     request: RecordedTaskActionRequest,
 ) -> Result<RecordedTaskActionResponse> {
+    record_task_action_with_calendar(state, task_id, request, None).await
+}
+
+pub async fn record_calendar_completion(
+    state: AppState,
+    signal: &super::calendar_interaction::CompletionSignal,
+) -> Result<RecordedTaskActionResponse> {
+    record_task_action_with_calendar(state, signal.task_id.clone(), RecordedTaskActionRequest {
+        schema_version: Some(TASK_ACTION_SCHEMA_VERSION.into()),
+        action: RecordedTaskActionKind::Complete,
+        note: None,
+    }, Some(signal)).await
+}
+
+async fn record_task_action_with_calendar(
+    state: AppState,
+    task_id: String,
+    request: RecordedTaskActionRequest,
+    calendar: Option<&super::calendar_interaction::CompletionSignal>,
+) -> Result<RecordedTaskActionResponse> {
+    let _guard = state.inner().task_action_lock.lock().await;
     validate_schema_version(request.schema_version.as_deref())?;
 
     let effective_time = state.planning_now();
     let pool = state.inner().store.pool();
     let mut task = load_task(pool, &task_id).await?;
+    if let Some(signal) = calendar {
+        super::calendar_range::CalendarTimeRange::parse(&signal.observed_start, &signal.observed_end)
+            .map_err(|_| AppError::bad_request_diagnostic("capture_interaction_invalid_window", "Calendar completion requires a valid observed window"))?;
+        if task.payload.get("static_window").is_some_and(|window| !window.is_null()) || task.payload["provenance"]["source"]["source_kind"] == "google_calendar" {
+            return Err(AppError::conflict_diagnostic("capture_interaction_not_dynamic", "Task became Static or captured before Calendar completion; gesture ignored"));
+        }
+    }
     let authority_source = authority_for_recorded_action(request.action);
     let mut diagnostics = Vec::new();
     let transition_applied = if matches!(request.action, RecordedTaskActionKind::Complete) {
@@ -66,6 +94,11 @@ pub async fn record_task_action(
     });
     if let Some(note) = &request.note {
         payload["note"] = json!(note);
+    }
+
+    if let Some(signal) = calendar {
+        payload["source"] = json!({"source_kind":"google_calendar","source_id":signal.external_id});
+        payload["observed_window"] = json!({"start":signal.observed_start,"end":signal.observed_end});
     }
 
     // TODO(O6-task-transition-log-event): Replace this decision_recorded fallback
@@ -125,6 +158,7 @@ pub async fn append_action(
     action: TaskActionKind,
     request: UserActionRequest,
 ) -> Result<LogEntryResponse> {
+    let _guard = state.inner().task_action_lock.lock().await;
     if UbuId::parse(&task_id).is_ok() {
         if let Some(record) = queries::get_current_state(state.inner().store.pool(), &task_id).await? {
             let payload: serde_json::Value = serde_json::from_str(&record.payload_json)
@@ -171,6 +205,7 @@ pub async fn append_action(
     .await
     .map_err(AppError::from)?;
 
+    drop(_guard);
     recalculation_service::recalculate(state).await?;
 
     Ok(LogEntryResponse {

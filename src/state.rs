@@ -34,6 +34,7 @@ pub struct OrchestratorState {
     pub quick_ubu_import_lock: Mutex<()>,
     pub routine_materialization_lock: Mutex<()>,
     pub calendar_projection_lock: Mutex<()>,
+    pub task_action_lock: Mutex<()>,
     pub bootstrap_answers: Mutex<Vec<String>>,
 }
 
@@ -100,6 +101,7 @@ impl AppState {
                 quick_ubu_import_lock: Mutex::new(()),
                 routine_materialization_lock: Mutex::new(()),
                 calendar_projection_lock: Mutex::new(()),
+                task_action_lock: Mutex::new(()),
                 bootstrap_answers: Mutex::new(Vec::new()),
             }),
         })
