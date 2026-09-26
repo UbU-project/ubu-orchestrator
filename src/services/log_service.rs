@@ -134,7 +134,7 @@ pub async fn reopen_calendar_completion(
     let mut task = load_task(pool, &signal.task_id).await?;
     if task.status != "completed" || task.payload.get("static_window").is_some_and(|window| !window.is_null()) || task.payload["provenance"]["source"]["source_kind"] == "google_calendar" { return Ok(false); }
     let Some(completion) = super::calendar_interaction::latest_completion(pool, &task.id).await? else { return Ok(false); };
-    if completion.log_id != signal.completion_log_id || !completion.from_calendar_event(&signal.external_id) { return Ok(false); }
+    if completion.log_id != signal.completion_log_id || !completion.is_from_calendar_event(&signal.external_id) { return Ok(false); }
     let now = state.planning_now();
     persist_task_transition(state, &mut task, "active", AuthoritySource::User, now).await?;
     let payload = json!({

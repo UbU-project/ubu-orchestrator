@@ -270,10 +270,13 @@ pub fn event_request(
 ) -> WireRequest {
     let mut body =
         serde_json::to_value(event_body(event)).expect("GoogleEventBody is serializable");
-    // The writable fields remain identical to Quick UbU. Insert additionally
-    // supplies P1B-28's deterministic id instead of accepting a random Google id.
+    // Inserts omit default colour. PATCH must explicitly clear it: omission
+    // leaves a previously exported category colour behind, which could then
+    // masquerade as a completion gesture on newly Dynamic work.
     if operation == Operation::Insert {
         body["id"] = event.external_id.clone().into();
+    } else if operation == Operation::Patch && event.color_id.is_none() {
+        body["colorId"] = Value::Null;
     }
     WireRequest {
         operation,

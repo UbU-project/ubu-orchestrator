@@ -88,7 +88,7 @@ P1B-32 used `updated` for unchanged captured-source reuse and `skipped` for owne
 
 ## Existing coloured Dynamic events
 
-Old P1B-28–32 applied snapshots can already contain Dynamic category colours. They are not operator completion gestures: completion requires an applied baseline that UbU left uncoloured. Regenerate, preview, and apply the new partition to clear those legacy Dynamic colours before using the gesture. Capture phone gestures before accepting them as generic drift through reconciliation repair; repair replaces the applied baseline with its observation.
+Old P1B-28–32 applied snapshots can already contain Dynamic category colours. They are not operator completion gestures: completion requires an applied baseline that UbU left uncoloured. Regenerate, preview and apply the partition before using the gesture on old Dynamic projections. Inserts omit absent `colorId`; PATCH now sends `"colorId": null` to request clearing an existing colour explicitly. Omitting the field on PATCH would leave the previous colour outside the update while recording an uncoloured applied baseline. The wire-level request is tested offline; no live Calendar migration was exercised. Newly inserted Dynamic events start without an explicit colour. Capture phone gestures before accepting them as generic drift through reconciliation repair; repair replaces the applied baseline with its observation.
 
 ## Known limits (verbatim)
 

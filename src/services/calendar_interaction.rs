@@ -31,7 +31,7 @@ pub struct CompletionRecord {
     pub has_observed_window: bool,
 }
 impl CompletionRecord {
-    pub fn from_calendar_event(&self, external_id: &str) -> bool {
+    pub fn is_from_calendar_event(&self, external_id: &str) -> bool {
         self.source_kind.as_deref() == Some("google_calendar")
             && self.source_id.as_deref() == Some(external_id)
             && self.has_observed_window
@@ -68,10 +68,9 @@ pub fn detect(
             item.status != "completed" && item.event.color_id.is_some() && item.exported_uncoloured;
         let reopen = item.status == "completed"
             && item.event.color_id.is_none()
-            && item
-                .latest_completion
-                .as_ref()
-                .is_some_and(|completion| completion.from_calendar_event(&item.event.external_id));
+            && item.latest_completion.as_ref().is_some_and(|completion| {
+                completion.is_from_calendar_event(&item.event.external_id)
+            });
         if !complete && !reopen {
             continue;
         }
@@ -234,10 +233,9 @@ pub async fn preserve_completed(
         if !item.is_static
             && !item.is_captured
             && item.status == "completed"
-            && item
-                .latest_completion
-                .as_ref()
-                .is_some_and(|completion| completion.from_calendar_event(&item.event.external_id))
+            && item.latest_completion.as_ref().is_some_and(|completion| {
+                completion.is_from_calendar_event(&item.event.external_id)
+            })
         {
             desired.retain(|event| event.task_id != item.task_id);
             desired.push(item.event);
