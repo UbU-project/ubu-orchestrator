@@ -985,6 +985,102 @@
         }
       }
     },
+    "/routine/{objective_id}/override/{local_date}": {
+      "put": {
+        "tags": [
+          "crate::api::routine_override"
+        ],
+        "operationId": "set",
+        "parameters": [
+          {
+            "name": "objective_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "local_date",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OverrideRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverrideResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid schema, window, routine or recurrence date"
+          },
+          "409": {
+            "description": "Concurrent canonical edit"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "crate::api::routine_override"
+        ],
+        "operationId": "clear",
+        "parameters": [
+          {
+            "name": "objective_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "local_date",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverrideResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid routine, recurrence date or nominal restoration"
+          },
+          "409": {
+            "description": "Concurrent canonical edit"
+          }
+        }
+      }
+    },
     "/routines": {
       "get": {
         "tags": [
@@ -3235,6 +3331,58 @@
             "type": "string"
           },
           "object_type": {
+            "type": "string"
+          }
+        }
+      },
+      "OverrideRequest": {
+        "type": "object",
+        "required": [
+          "start",
+          "end"
+        ],
+        "properties": {
+          "end": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "start": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "OverrideResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "objective_id",
+          "local_date",
+          "overridden",
+          "diagnostics"
+        ],
+        "properties": {
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DiagnosticBody"
+            }
+          },
+          "local_date": {
+            "type": "string"
+          },
+          "objective_id": {
+            "type": "string"
+          },
+          "overridden": {
+            "type": "boolean"
+          },
+          "schema_version": {
             "type": "string"
           }
         }

@@ -5,6 +5,8 @@ use utoipa::OpenApi;
 #[openapi(
     paths(
         crate::api::routines::summaries,
+        crate::api::routine_override::set,
+        crate::api::routine_override::clear,
         crate::api::advisory::queue,
         crate::api::advisory::candidate,
         crate::api::advisory::admit,
@@ -45,6 +47,8 @@ use utoipa::OpenApi;
         crate::api::reports::human_complete
     ),
     components(schemas(
+        crate::api::routine_override::OverrideRequest,
+        crate::api::routine_override::OverrideResponse,
         crate::api::calendar_capture::CalendarCaptureRequest,
         crate::api::calendar_capture::CalendarCaptureResponse,
         crate::api::calendar_reconciliation::CalendarReconcileRequest,

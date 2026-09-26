@@ -18,6 +18,7 @@ command bridge.
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/routines", get(api::routines::summaries))
+        .route("/routine/:objective_id/override/:local_date", axum::routing::put(api::routine_override::set).delete(api::routine_override::clear))
         .route("/health", get(api::health::health))
         .route("/desktop/session/google-calendar", post(api::desktop::google_calendar))
         .route("/import/quick-ubu", post(api::quick_ubu::import_quick_ubu))
