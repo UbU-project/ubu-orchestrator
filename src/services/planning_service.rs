@@ -1122,7 +1122,7 @@ fn dependency_ids(payload: &Value) -> Vec<String> {
         .collect()
 }
 
-fn duration_seconds(payload: &Value) -> u64 {
+pub(super) fn duration_seconds(payload: &Value) -> u64 {
     if let Some(minutes) = payload.get("duration_minutes").and_then(Value::as_u64) {
         return minutes.saturating_mul(60).max(1);
     }

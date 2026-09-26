@@ -44,9 +44,85 @@ pub struct ObservedOwned {
     pub status: String,
     pub is_static: bool,
     pub is_captured: bool,
+    pub static_window: Option<(String, String)>,
+    pub declared_duration_seconds: u64,
+    pub routine_objective_id: Option<String>,
+    /// The last observed/exported window distinguishes an occurrence gesture
+    /// from an unchanged event already planned using its derived model.
+    pub applied_window: (String, String),
     /// Prevent pre-partition category colours exported by UbU from completing work.
     pub exported_uncoloured: bool,
     pub latest_completion: Option<CompletionRecord>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MoveSignal {
+    pub task_id: String,
+    pub external_id: String,
+    pub new_start: String,
+    pub new_end: String,
+}
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ResizeSignal {
+    pub task_id: String,
+    pub external_id: String,
+    pub new_duration_seconds: u64,
+}
+
+/// Placement decides the gesture; reading canonical state and admission stay outside.
+pub fn detect_window_gestures(
+    owned: &[ObservedOwned],
+) -> (Vec<MoveSignal>, Vec<ResizeSignal>, Vec<DiagnosticBody>) {
+    let mut moves = Vec::new();
+    let mut resizes = Vec::new();
+    let mut diagnostics = Vec::new();
+    for item in owned {
+        let window = (&item.event.start_at, &item.event.end_at);
+        let changed = window != (&item.applied_window.0, &item.applied_window.1);
+        if item.status != "active" {
+            if changed {
+                diagnostics.push(DiagnosticBody {
+                    code: "calendar_gesture_on_inactive_task".into(),
+                    message: format!("Task `{}` is {}; Calendar window gesture ignored", item.task_id, item.status),
+                });
+            }
+            continue;
+        }
+        if let Some(routine) = &item.routine_objective_id {
+            if changed {
+                diagnostics.push(DiagnosticBody {
+                    code: "calendar_move_needs_occurrence_override".into(),
+                    message: format!("Task `{}` belongs to routine `{routine}`; moving or resizing it needs an occurrence override (UBU-D0289)", item.task_id),
+                });
+            }
+            continue;
+        }
+        if item.is_static {
+            if item.static_window.as_ref().is_some_and(|old| window != (&old.0, &old.1)) {
+                moves.push(MoveSignal {
+                    task_id: item.task_id.clone(), external_id: item.event.external_id.clone(),
+                    new_start: item.event.start_at.clone(), new_end: item.event.end_at.clone(),
+                });
+            }
+        } else {
+            match CalendarTimeRange::parse(&item.event.start_at, &item.event.end_at) {
+                Ok(range) => {
+                    let seconds = (range.end.inner().unix_timestamp() - range.start.inner().unix_timestamp()) as u64;
+                    if seconds != item.declared_duration_seconds {
+                        resizes.push(ResizeSignal {
+                            task_id: item.task_id.clone(), external_id: item.event.external_id.clone(),
+                            new_duration_seconds: seconds,
+                        });
+                    }
+                }
+                Err(_) => diagnostics.push(DiagnosticBody {
+                    code: "calendar_resize_invalid_window".into(),
+                    message: format!("Task `{}` has no positive observed duration; resize ignored", item.task_id),
+                }),
+            }
+        }
+    }
+    (moves, resizes, diagnostics)
 }
 
 pub fn detect(
@@ -162,6 +238,14 @@ pub async fn observed_owned(
                 .get("static_window")
                 .is_some_and(|window| !window.is_null()),
             is_captured: payload["provenance"]["source"]["source_kind"] == "google_calendar",
+            static_window: payload["static_window"]["start"].as_str()
+                .zip(payload["static_window"]["end"].as_str())
+                .map(|(start, end)| (start.to_owned(), end.to_owned())),
+            declared_duration_seconds: payload["duration_estimate"]["seconds"].as_u64()
+                .or_else(|| payload["duration_estimate"]["mode_seconds"].as_u64())
+                .unwrap_or_else(|| super::planning_service::duration_seconds(&payload)),
+            routine_objective_id: payload["occurrence"]["routine_objective_id"].as_str().map(str::to_owned),
+            applied_window: (old.start_at.clone(), old.end_at.clone()),
             exported_uncoloured: old.color_id.is_none(),
             latest_completion: latest_completion(pool, &task.id).await?,
         });
