@@ -520,13 +520,8 @@ async fn palette_override_merges_defaults_and_matches_case_exactly() {
     generate(&state).await;
     let cal = calendar(&state).await;
     for step in cal["steps"].as_array().unwrap() {
-        assert_eq!(
-            step["gcal_color_id"].as_str(),
-            state
-                .inner()
-                .category_palette
-                .color(step["category_tag"].as_str())
-        );
+        assert!(step.get("gcal_color_id").is_none());
+        assert!(state.inner().category_palette.color(step["category_tag"].as_str()).is_some());
     }
 }
 
@@ -564,7 +559,8 @@ async fn admitted_add_tag_preserves_explicit_category_and_colour() {
     generate(&state).await;
     let cal = calendar(&state).await;
     assert_eq!(step(&cal, &task)["category_tag"], "commute");
-    assert_eq!(step(&cal, &task)["gcal_color_id"], "7");
+    assert!(step(&cal, &task).get("gcal_color_id").is_none());
+    assert_eq!(state.inner().category_palette.color(Some("commute")), Some("7"));
 }
 
 #[test]

@@ -859,7 +859,7 @@ fn scheduled_task_body(
         placement_authority,
         occupies_capacity: titles.get(&task.task_id).map(|display| display.occupies_capacity).unwrap_or(true),
         category_tag: titles.get(&task.task_id).and_then(|display| display.category_tag.clone()),
-        gcal_color_id: titles.get(&task.task_id).and_then(|display| display.gcal_color_id.clone()),
+        gcal_color_id: if task.static_anchor { titles.get(&task.task_id).and_then(|display| display.gcal_color_id.clone()) } else { None },
     })
 }
 

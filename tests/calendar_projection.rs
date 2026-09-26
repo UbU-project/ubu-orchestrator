@@ -169,9 +169,9 @@ async fn three_routines_project_colors_transparency_reminders_and_start_order() 
         .windows(2)
         .all(|pair| pair[0]["start_at"].as_str() <= pair[1]["start_at"].as_str()));
     for (title, color, transparent, reminders) in [
-        ("Breakfast", "3", false, json!([0])),
-        ("Work Time", "9", true, json!([])),
-        ("Standup", "6", false, json!([10, 0])),
+        ("Breakfast", Value::Null, false, json!([0])),
+        ("Work Time", Value::Null, true, json!([])),
+        ("Standup", Value::Null, false, json!([10, 0])),
     ] {
         let event = by_title(&projected, "events", title);
         assert_eq!(event["color_id"], color);
