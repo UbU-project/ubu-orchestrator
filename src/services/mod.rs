@@ -24,3 +24,4 @@ pub mod quick_ubu_import;
 pub mod routine_instantiation;
 pub mod routine_service;
 pub mod calendar_range;
+pub mod calendar_sources;

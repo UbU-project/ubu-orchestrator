@@ -95,17 +95,32 @@ pub async fn preview(
     let _guard = state.inner().calendar_projection_lock.lock().await;
     let calendar = planning_service::current_calendar(state.clone()).await?;
     let maps = planning_service::calendar_reminder_maps(state.inner().store.pool()).await?;
-    let desired = calendar_projection::desired_events(
+    let origins = super::calendar_sources::origins_by_task(state.inner().store.pool()).await?;
+    let mut desired = calendar_projection::desired_events(
         &calendar.steps,
         &maps.reminders_by_objective,
         &maps.objective_of_task,
+        &origins,
     );
     let existing = last_applied_events(state.inner().store.pool()).await?;
-    let operations = calendar_projection::diff(&desired, &existing);
+    // Capture does not import reminder settings or invent a category for an
+    // ambiguous/unmapped colour. Preserve these source fields across projection.
+    for event in &mut desired {
+        if origins.contains_key(&event.task_id) {
+            if let Some(old) = existing.iter().find(|old| old.external_id == event.external_id) {
+                event.reminders_minutes = old.reminders_minutes.clone();
+                if event.color_id.is_none() { event.color_id = old.color_id.clone(); }
+            }
+        }
+    }
+    let operations = calendar_projection::diff(&desired, &existing).into_iter().filter(|operation| {
+        // A captured Task leaving the plan must never delete the source meeting.
+        !matches!(operation, CalendarOperation::Delete { external_id, .. } if origins.values().any(|origin| origin == external_id))
+    }).collect();
     let diagnostics = calendar
         .steps
         .iter()
-        .filter(|step| calendar_projection::external_id(&step.task_id).is_none())
+        .filter(|step| calendar_projection::external_id_for(&step.task_id, origins.get(&step.task_id).map(String::as_str)).is_none())
         .map(|step| DiagnosticBody {
             code: "calendar_event_id_unmappable".into(),
             message: format!(

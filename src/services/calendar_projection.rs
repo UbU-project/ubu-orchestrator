@@ -26,16 +26,25 @@ pub fn external_id(task_id: &str) -> Option<String> {
     .then(|| tail.to_owned())
 }
 
+/// Captured ids must validate on their own; deriving a fallback would duplicate the meeting.
+pub fn external_id_for(task_id: &str, captured_event_id: Option<&str>) -> Option<String> {
+    match captured_event_id {
+        Some(origin) => external_id(&format!("task_{origin}")),
+        None => external_id(task_id),
+    }
+}
+
 pub fn desired_events(
     steps: &[ScheduledTaskBody],
     reminders_by_objective: &BTreeMap<String, Vec<i64>>,
     objective_of_task: &BTreeMap<String, String>,
+    captured_origins: &BTreeMap<String, String>,
 ) -> Vec<DesiredEvent> {
     let mut events: Vec<_> = steps
         .iter()
         .filter_map(|step| {
             Some(DesiredEvent {
-                external_id: external_id(&step.task_id)?,
+                external_id: external_id_for(&step.task_id, captured_origins.get(&step.task_id).map(String::as_str))?,
                 task_id: step.task_id.clone(),
                 summary: step.summary.clone(),
                 start_at: step.start_at.clone(),
@@ -115,9 +124,22 @@ mod tests {
         }
     }
     fn event(id: &str) -> DesiredEvent {
-        desired_events(&[step(id)], &BTreeMap::new(), &BTreeMap::new())
+        desired_events(&[step(id)], &BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new())
             .pop()
             .unwrap()
+    }
+
+    #[test]
+    fn captured_origins_override_derived_ids_and_never_fall_back() {
+        assert_eq!(external_id_for("task_aaaaa", None).as_deref(), Some("aaaaa"));
+        assert_eq!(external_id_for("task_aaaaa", Some("bbbbb")).as_deref(), Some("bbbbb"));
+        for invalid in ["bad!", "abc", "UPPER", "abcwx", "", &"a".repeat(1025)] {
+            assert!(external_id_for("task_aaaaa", Some(invalid)).is_none());
+            let origins = BTreeMap::from([("task_aaaaa".into(), invalid.into())]);
+            assert!(desired_events(&[step("aaaaa")], &BTreeMap::new(), &BTreeMap::new(), &origins).is_empty());
+        }
+        let origins = BTreeMap::from([("task_aaaaa".into(), "bbbbb".into())]);
+        assert_eq!(desired_events(&[step("aaaaa")], &BTreeMap::new(), &BTreeMap::new(), &origins)[0].external_id, "bbbbb");
     }
 
     #[test]
@@ -139,7 +161,7 @@ mod tests {
         ] {
             assert_eq!(external_id(id), None, "{id}");
         }
-        assert!(desired_events(&[step("bad!")], &BTreeMap::new(), &BTreeMap::new()).is_empty());
+        assert!(desired_events(&[step("bad!")], &BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new()).is_empty());
     }
 
     #[test]
@@ -152,6 +174,7 @@ mod tests {
         early.start_at = "2026-09-24T08:00:00Z".into();
         let events = desired_events(
             &[transparent, opaque, early],
+            &BTreeMap::new(),
             &BTreeMap::new(),
             &BTreeMap::new(),
         );
@@ -179,6 +202,7 @@ mod tests {
             &[step("aaaaa"), step("bbbbb"), step("ccccc")],
             &reminders,
             &objectives,
+            &BTreeMap::new(),
         );
         assert_eq!(events[0].reminders_minutes, vec![10, 0]);
         assert!(events[1].reminders_minutes.is_empty());
