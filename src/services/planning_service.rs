@@ -1005,7 +1005,7 @@ fn validate_canonical_plan(plan: &PlanBody) -> Result<()> {
     Ok(())
 }
 
-async fn resolve_time_window(
+pub(super) async fn resolve_time_window(
     state: &AppState,
     explicit: Option<&PlanningHorizonBody>,
     now: u64,

@@ -281,8 +281,8 @@ pub fn delete_request(base: &str, calendar_id: &str, event_id: &str) -> WireRequ
     }
 }
 
-pub fn list_request(base: &str, calendar_id: &str, page_token: Option<&str>) -> WireRequest {
-    let mut url = format!("{}?singleEvents=true", events_url(base, calendar_id, None));
+pub fn list_request(base: &str, calendar_id: &str, range: &super::calendar_range::CalendarTimeRange, page_token: Option<&str>) -> WireRequest {
+    let mut url = format!("{}?singleEvents=true&timeMin={}&timeMax={}", events_url(base, calendar_id, None), percent_encode(&range.start.to_string()), percent_encode(&range.end.to_string()));
     if let Some(token) = page_token {
         url.push_str(&format!("&pageToken={}", percent_encode(token)));
     }

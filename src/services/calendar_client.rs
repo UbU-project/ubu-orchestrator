@@ -1,4 +1,5 @@
 //! Offline Calendar client boundary. No provider types or transport live here.
+use super::calendar_range::CalendarTimeRange;
 use std::{
     collections::{BTreeMap, BTreeSet},
     future::Future,
@@ -14,7 +15,7 @@ use super::calendar_projection::DesiredEvent;
 pub type CalendarApiFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, String>> + Send + 'a>>;
 
 pub trait CalendarApi: Send + Sync {
-    fn list_events(&self) -> CalendarApiFuture<'_, Vec<DesiredEvent>>;
+    fn list_events<'a>(&'a self, range: &'a CalendarTimeRange) -> CalendarApiFuture<'a, Vec<DesiredEvent>>;
     fn insert_event<'a>(&'a self, event: &'a DesiredEvent) -> CalendarApiFuture<'a, ()>;
     fn patch_event<'a>(&'a self, event: &'a DesiredEvent) -> CalendarApiFuture<'a, ()>;
     fn delete_event<'a>(&'a self, external_id: &'a str) -> CalendarApiFuture<'a, ()>;
@@ -133,11 +134,11 @@ impl RecordingCalendarApi {
 }
 
 impl CalendarApi for RecordingCalendarApi {
-    fn list_events(&self) -> CalendarApiFuture<'_, Vec<DesiredEvent>> {
+    fn list_events<'a>(&'a self, range: &'a CalendarTimeRange) -> CalendarApiFuture<'a, Vec<DesiredEvent>> {
         Box::pin(async move {
             let mut state = self.state.lock().unwrap();
             state.calls.push(RecordedCalendarCall::ListEvents);
-            Ok(state.events.values().cloned().collect())
+            Ok(state.events.values().filter(|event| range.overlaps(event)).cloned().collect())
         })
     }
     fn insert_event<'a>(&'a self, event: &'a DesiredEvent) -> CalendarApiFuture<'a, ()> {
@@ -207,7 +208,7 @@ mod tests {
         let seed = event("aaaaa");
         let added = event("bbbbb");
         let api = RecordingCalendarApi::with_events([seed.clone()]);
-        assert_eq!(api.list_events().await.unwrap(), vec![seed.clone()]);
+        assert_eq!(api.list_events(&CalendarTimeRange::parse("2026-09-25T00:00:00Z", "2026-09-26T00:00:00Z").unwrap()).await.unwrap(), vec![seed.clone()]);
         api.insert_event(&added).await.unwrap();
         let mut changed = added.clone();
         changed.summary = "Updated".into();

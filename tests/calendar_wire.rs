@@ -193,10 +193,11 @@ fn urls_encode_both_ids_and_requests_choose_method_and_headers() {
         events_url(base, "fake ?#é", Some("a%2Fb")),
         format!("{base}/fake%20%3F%23%C3%A9/events/a%252Fb")
     );
-    let request = list_request(base, calendar, Some("synthetic/page+2"));
+    let range = ubu_orchestrator::services::calendar_range::CalendarTimeRange::parse("2026-09-25T08:00:00Z", "2026-09-25T20:00:00Z").unwrap();
+    let request = list_request(base, calendar, &range, Some("synthetic/page+2"));
     assert!(request
         .url
-        .ends_with("?singleEvents=true&pageToken=synthetic%2Fpage%2B2"));
+        .ends_with("?singleEvents=true&timeMin=2026-09-25T08%3A00%3A00Z&timeMax=2026-09-25T20%3A00%3A00Z&pageToken=synthetic%2Fpage%2B2"));
     assert_eq!(request.operation.method(), "GET");
     assert!(request.body.is_none());
     assert_eq!(request.headers("SYNTHETIC_NOT_A_TOKEN").len(), 2);

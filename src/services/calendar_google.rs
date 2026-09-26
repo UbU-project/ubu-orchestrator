@@ -1,4 +1,5 @@
 //! Thin OAuth/HTTP shell. Request and response policy lives in calendar_wire.
+use super::calendar_range::CalendarTimeRange;
 use std::{collections::BTreeSet, path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::{Mutex, Notify, OnceCell};
 use yup_oauth2::{
@@ -159,14 +160,14 @@ impl GoogleCalendarApi {
 }
 
 impl CalendarApi for GoogleCalendarApi {
-    fn list_events(&self) -> CalendarApiFuture<'_, Vec<DesiredEvent>> {
+    fn list_events<'a>(&'a self, range: &'a CalendarTimeRange) -> CalendarApiFuture<'a, Vec<DesiredEvent>> {
         Box::pin(async move {
             let mut events = Vec::new();
             let mut page = None;
             let mut seen = BTreeSet::new();
             loop {
                 let request =
-                    wire::list_request(&self.api_base, &self.calendar_id, page.as_deref());
+                    wire::list_request(&self.api_base, &self.calendar_id, range, page.as_deref());
                 let (status, body) = self.send(&request).await?;
                 match wire::response_action(Operation::List, "*", status, &body) {
                     ResponseAction::Done => {}

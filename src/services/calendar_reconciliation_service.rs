@@ -42,6 +42,8 @@ struct RecordedObservation {
     applied_events: Vec<DesiredEvent>,
     observed_events: Vec<DesiredEvent>,
     conflicts: Vec<CalendarConflict>,
+    #[serde(default)]
+    out_of_range_events: Vec<DesiredEvent>,
 }
 
 fn internal(error: impl std::fmt::Display) -> AppError {
@@ -86,7 +88,9 @@ pub async fn reconcile(
             .calendar_api()
             .unwrap_or_else(|| Arc::new(RecordingCalendarApi::with_events(applied.clone()))),
     };
-    let observed = client.list_events().await.map_err(AppError::Upstream)?;
+    let range = super::calendar_range::CalendarTimeRange::planning(state).await?;
+    let (applied, out_of_range_events): (Vec<_>, Vec<_>) = applied.into_iter().partition(|event| range.overlaps(event));
+    let observed = client.list_events(&range).await.map_err(AppError::Upstream)?;
     let diagnostics = match &google {
         Some(client) => client.take_diagnostics().await,
         None => Vec::new(),
@@ -112,6 +116,7 @@ pub async fn reconcile(
         "result_id": result_id,
         "status": status,
         "applied_events": applied,
+        "out_of_range_events": out_of_range_events,
         "observed_events": observed,
         "known_external_ids": known,
         "conflicts": conflicts,
@@ -179,13 +184,16 @@ pub async fn repair(state: &AppState, reconciliation_id: &str) -> Result<Calenda
         reconciliation_id: reconciliation_id.into(),
         dropped_events: observation.applied_events.len() - repaired.len(),
         updated_events,
-        applied_event_count: repaired.len(),
+        applied_event_count: repaired.len() + observation.out_of_range_events.len(),
         remaining_conflicts: observation
             .conflicts
             .into_iter()
             .filter(|conflict| matches!(conflict.conflict_type.as_str(), "foreign" | "unrecorded"))
             .collect(),
     };
+    let mut repaired = repaired;
+    repaired.extend(observation.out_of_range_events);
+    repaired.sort_by(|a, b| a.external_id.cmp(&b.external_id));
     let result = StoredCalendarResult {
         schema_version: CALENDAR_PROJECTION_RESULT_SCHEMA_VERSION.into(),
         preview_id: observation.preview_id,
