@@ -29,3 +29,5 @@ pub mod calendar_capture;
 pub mod calendar_interaction;
 
 pub mod routine_override;
+
+pub mod preference_authoring;

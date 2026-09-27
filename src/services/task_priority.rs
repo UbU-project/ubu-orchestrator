@@ -192,6 +192,43 @@ pub fn layer_preferences(eligible: &[String], preferences: &[Preference]) -> Tas
     TaskPriorities { tasks, cycles }
 }
 
+// Layering already detects the inconsistent component. Its members are sorted
+// by id, not edge order. Reconstruct one closed witness solely for authoring's
+// diagnostic; this does not replace SCC detection or change planning values.
+pub(crate) fn cycle_witness(members: &[String], preferences: &[Preference]) -> Vec<String> {
+    let members: BTreeSet<_> = members.iter().cloned().collect();
+    let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut strict = BTreeSet::new();
+    for p in preferences.iter().filter(|p| p.enabled) {
+        let PreferenceSubjects::Tasks { a, b } = &p.subjects else { continue; };
+        if !members.contains(a.as_str()) || !members.contains(b.as_str()) { continue; }
+        edges.entry(a.to_string()).or_default().insert(b.to_string());
+        if p.order == PreferenceOrder::AIndifferentToB {
+            edges.entry(b.to_string()).or_default().insert(a.to_string());
+        } else { strict.insert((a.to_string(),b.to_string())); }
+    }
+    for (a,b) in strict {
+        let mut queue = std::collections::VecDeque::from([b.clone()]);
+        let mut prior: BTreeMap<String, Option<String>> = BTreeMap::from([(b.clone(), None)]);
+        while let Some(node) = queue.pop_front() {
+            if node == a {
+                let mut path = vec![a.clone()];
+                while let Some(Some(parent)) = prior.get(path.last().unwrap()) { path.push(parent.clone()); }
+                path.reverse();
+                path.insert(0,a);
+                return path;
+            }
+            for next in edges.get(&node).into_iter().flatten() {
+                if !prior.contains_key(next) {
+                    prior.insert(next.clone(),Some(node.clone()));
+                    queue.push_back(next.clone());
+                }
+            }
+        }
+    }
+    unreachable!("a detected preference cycle contains a strict edge and a return path")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
