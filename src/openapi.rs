@@ -4,6 +4,10 @@ use utoipa::OpenApi;
 #[derive(OpenApi)]
 #[openapi(
     paths(
+        crate::api::preference::create,
+        crate::api::preference::list,
+        crate::api::preference::set_enabled,
+        crate::api::preference::delete,
         crate::api::routines::summaries,
         crate::api::routine_override::set,
         crate::api::routine_override::clear,
@@ -47,6 +51,11 @@ use utoipa::OpenApi;
         crate::api::reports::human_complete
     ),
     components(schemas(
+        crate::api::preference::CreatePreferenceRequest,
+        crate::api::preference::EnablePreferenceRequest,
+        crate::api::preference::PreferenceWriteResponse,
+        crate::api::preference::PreferenceSummary,
+        crate::api::preference::PreferenceListResponse,
         crate::api::routine_override::OverrideRequest,
         crate::api::routine_override::OverrideResponse,
         crate::api::calendar_capture::CalendarCaptureRequest,
