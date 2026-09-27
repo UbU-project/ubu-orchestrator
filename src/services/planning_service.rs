@@ -678,6 +678,18 @@ async fn build_request_from_store_with_context(
     for task in &task_bodies { if mandatory.contains(&task.id) && task.static_anchor.is_none() { time_window.end = time_window.end.max(task.window.as_ref().unwrap().end); } }
     let eligible = task_bodies.iter().filter(|task| !mandatory.contains(&task.id)).map(|task| task.id.clone()).collect::<Vec<_>>();
     let priorities = super::task_priority::layer_preferences(&eligible, &preferences);
+    let eligible_set: HashSet<_> = eligible.iter().map(String::as_str).collect();
+    for preference in preferences.iter().filter(|preference| preference.enabled) {
+        let ubu_core::core::PreferenceSubjects::Tasks { a, b } = &preference.subjects else { continue; };
+        for id in [a, b] {
+            if !eligible_set.contains(id.as_str()) {
+                diagnostics.push(DiagnosticBody {
+                    code: "preference_ignored_unknown_task".into(),
+                    message: format!("Preference `{}` is ignored because Task `{id}` is absent from the eligible planning set", preference.id),
+                });
+            }
+        }
+    }
     let priority_order = priorities.order_keys();
     let values: HashMap<_, _> = priorities.tasks.iter().map(|task| (task.task_id.as_str(), task.value)).collect();
     for task in &mut task_bodies { task.value = if mandatory.contains(&task.id) { 0.0 } else { values[task.id.as_str()] }; }

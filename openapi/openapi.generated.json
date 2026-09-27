@@ -632,6 +632,132 @@
         }
       }
     },
+    "/preference": {
+      "post": {
+        "tags": [
+          "crate::api::preference"
+        ],
+        "operationId": "create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePreferenceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreferenceWriteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid subjects, duplicate, contradiction or cycle"
+          }
+        }
+      }
+    },
+    "/preference/{preference_id}": {
+      "delete": {
+        "tags": [
+          "crate::api::preference"
+        ],
+        "operationId": "delete",
+        "parameters": [
+          {
+            "name": "preference_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Preference withdrawn"
+          },
+          "404": {
+            "description": "Unknown Preference"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "crate::api::preference"
+        ],
+        "operationId": "set_enabled",
+        "parameters": [
+          {
+            "name": "preference_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnablePreferenceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreferenceWriteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or conflicting enabled relation"
+          },
+          "404": {
+            "description": "Unknown Preference"
+          },
+          "409": {
+            "description": "Version conflict"
+          }
+        }
+      }
+    },
+    "/preferences": {
+      "get": {
+        "tags": [
+          "crate::api::preference"
+        ],
+        "operationId": "list",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreferenceListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projection/approve": {
       "post": {
         "tags": [
@@ -2517,6 +2643,48 @@
           }
         }
       },
+      "CreatePreferenceRequest": {
+        "type": "object",
+        "required": [
+          "order"
+        ],
+        "properties": {
+          "objective_a": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "objective_b": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "order": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task_a": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task_b": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "DiagnosticBody": {
         "type": "object",
         "required": [
@@ -2610,6 +2778,29 @@
             }
           }
         ]
+      },
+      "EnablePreferenceRequest": {
+        "type": "object",
+        "required": [
+          "expected_version",
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "expected_version": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "schema_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
       },
       "FailurePattern": {
         "type": "string",
@@ -3833,6 +4024,109 @@
           "depleted",
           "at_risk"
         ]
+      },
+      "PreferenceListResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "preferences"
+        ],
+        "properties": {
+          "preferences": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PreferenceSummary"
+            }
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        }
+      },
+      "PreferenceSummary": {
+        "type": "object",
+        "required": [
+          "preference_id",
+          "version",
+          "order",
+          "enabled",
+          "acquired_date"
+        ],
+        "properties": {
+          "acquired_date": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "objective_a": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Imported Objective pairs remain readable even though authoring rejects them."
+          },
+          "objective_b": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "order": {
+            "type": "string"
+          },
+          "preference_id": {
+            "type": "string"
+          },
+          "task_a": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task_a_title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task_b": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task_b_title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "PreferenceWriteResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "preference_id",
+          "version"
+        ],
+        "properties": {
+          "preference_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
       },
       "ProbabilityQualityBody": {
         "type": "string",
