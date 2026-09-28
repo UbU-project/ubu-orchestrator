@@ -1,7 +1,7 @@
 //! User-authored one-off Tasks, admitted through the ordinary store boundary.
 use axum::http::StatusCode;
 use serde_json::{json, Map, Value};
-use ubu_core::{core::Task, AuthoritySource, ObjectType, UbuId, VersionRef};
+use ubu_core::{core::Task, AuthoritySource, MutationEnvelope, ObjectType, UbuId, VersionRef};
 use ubu_store::{models::object_record::NewObjectRecord, queries};
 
 use crate::{
@@ -58,6 +58,16 @@ fn validate(payload: &Value) -> Result<()> {
 }
 
 pub async fn capture(state: &AppState, fields: Value) -> Result<(String, i64)> {
+    let (envelope, record) = prepare(state, fields, "user-capture")?;
+    let record = queries::admit_object(state.inner().store.pool(), &envelope, record).await?;
+    Ok((record.id, record.version))
+}
+
+pub(crate) fn prepare(
+    state: &AppState,
+    fields: Value,
+    compartment_label: &str,
+) -> Result<(MutationEnvelope, NewObjectRecord)> {
     let fields = editable_fields(&fields)?;
     let id = UbuId::new(ObjectType::Task);
     let now = state.planning_now();
@@ -69,22 +79,19 @@ pub async fn capture(state: &AppState, fields: Value) -> Result<(String, i64)> {
         AuthoritySource::User,
         now,
     )?;
-    let record = queries::admit_object(
-        state.inner().store.pool(),
-        &envelope,
+    Ok((
+        envelope,
         NewObjectRecord {
             id: id.to_string(),
             object_type: ObjectType::Task.as_str().into(),
             version: 1,
             status: "active".into(),
-            compartment_label: "user-capture".into(),
+            compartment_label: compartment_label.into(),
             payload,
             created_at: now.to_string(),
             updated_at: now.to_string(),
         },
-    )
-    .await?;
-    Ok((record.id, record.version))
+    ))
 }
 
 pub async fn edit(
@@ -131,8 +138,13 @@ pub async fn edit(
         });
     }
     let fields = editable_fields(&fields)?;
-    if payload["provenance"]["source"]["source_kind"] == "google_calendar" && fields.get("static_window").is_some_and(Value::is_null) {
-        return Err(AppError::bad_request_diagnostic("capture_static_required", "a captured Calendar Task must retain its static_window"));
+    if payload["provenance"]["source"]["source_kind"] == "google_calendar"
+        && fields.get("static_window").is_some_and(Value::is_null)
+    {
+        return Err(AppError::bad_request_diagnostic(
+            "capture_static_required",
+            "a captured Calendar Task must retain its static_window",
+        ));
     }
     let object = payload
         .as_object_mut()
