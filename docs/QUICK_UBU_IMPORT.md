@@ -100,3 +100,11 @@ routines, local windows, first collision date, pair counts, and date counts.
 At most 25 groups are shown, followed by an omitted-group count when needed.
 The entire file is rejected without writes, including under `dry_run`. Stagger
 start times, shorten a routine, or make it transparent before retrying.
+
+A live routine with no `provenance.source` was authored in mainline, not
+imported, and is named as `natively authored` in the rejection. It is not in
+`routine.json`, so the summary then adds that such routines are edited through
+`PATCH /objective/:objective_id`. Which imports are rejected is unchanged.
+Native authoring refuses these overlaps when they are written
+([OBJECTIVE_AUTHORING.md](OBJECTIVE_AUTHORING.md)); this gate remains for
+routines admitted by any other path.

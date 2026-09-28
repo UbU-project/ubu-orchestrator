@@ -227,7 +227,12 @@ fn routine_payload(
     let mut mutations = Vec::new();
     for target in &r.establishes {
         if !target.starts_with("facts.") || !requirement_target_valid(target) {
-            skip(response, "routine", &r.id, format!("establishes_invalid_target: {target}"));
+            skip(
+                response,
+                "routine",
+                &r.id,
+                format!("establishes_invalid_target: {target}"),
+            );
             continue;
         }
         mutations.push(json!({"operation":"set_fact","target":target,"payload":true}));
@@ -237,7 +242,10 @@ fn routine_payload(
     }
     // Verification and ordering are independent: even a requirement whose
     // establisher cannot be resolved in the second pass keeps its precondition.
-    let mut preconditions: Vec<_> = r.requires.iter().filter(|r| r.verify)
+    let mut preconditions: Vec<_> = r
+        .requires
+        .iter()
+        .filter(|r| r.verify)
         .map(|r| json!({"target":r.fact,"predicate":"equals","expected":true}))
         .collect();
     if preconditions.len() == 1 {
@@ -265,11 +273,15 @@ fn requirement_target_valid(target: &str) -> bool {
     let Some((collection, key)) = target.split_once('.') else {
         return false;
     };
-    matches!(collection, "facts" | "numeric_values" | "set_memberships" | "event_markers")
-        && key.split('.').all(|part| {
-            !part.is_empty()
-                && part.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-        })
+    matches!(
+        collection,
+        "facts" | "numeric_values" | "set_memberships" | "event_markers"
+    ) && key.split('.').all(|part| {
+        !part.is_empty()
+            && part
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    })
 }
 fn local_seconds(value: &str) -> Option<i64> {
     validate_local_time(value).ok()?;
@@ -291,7 +303,11 @@ fn resolve_requirement<'a>(
         return Err("requirement_fractional_bound");
     }
     // Mainline after minima are nonnegative. Reject at the edge, not at admission.
-    if offset.0 < 0 || requirement.maximum.is_some_and(|(maximum, _)| maximum < offset.0) {
+    if offset.0 < 0
+        || requirement
+            .maximum
+            .is_some_and(|(maximum, _)| maximum < offset.0)
+    {
         return Err("requirement_inverted_bounds");
     }
     let start = local_seconds(&requiring.start_time);
@@ -307,7 +323,8 @@ fn resolve_requirement<'a>(
             continue;
         }
         let Some(end) = local_seconds(&routine.start_time)
-            .and_then(|seconds| seconds.checked_add(routine.duration.0)) else {
+            .and_then(|seconds| seconds.checked_add(routine.duration.0))
+        else {
             continue;
         };
         established = true;
@@ -328,25 +345,38 @@ fn resolve_requirement<'a>(
     } else if tied {
         Err("requirement_ambiguous")
     } else {
-        nearest.map(|(_, routine)| routine).ok_or("requirement_unestablished_before")
+        nearest
+            .map(|(_, routine)| routine)
+            .ok_or("requirement_unestablished_before")
     }
 }
 fn merge_requirement(after: &mut Vec<Value>, mut edge: Value) -> bool {
     let id = edge["objective_id"].clone();
-    for previous in after.iter().filter(|previous| previous["objective_id"] == id) {
-        edge["minimum_seconds"] = json!(edge["minimum_seconds"].as_i64().unwrap()
+    for previous in after
+        .iter()
+        .filter(|previous| previous["objective_id"] == id)
+    {
+        edge["minimum_seconds"] = json!(edge["minimum_seconds"]
+            .as_i64()
+            .unwrap()
             .max(previous["minimum_seconds"].as_i64().unwrap()));
         if let Some(maximum) = previous["maximum_seconds"].as_i64() {
-            edge["maximum_seconds"] = json!(edge["maximum_seconds"].as_i64()
+            edge["maximum_seconds"] = json!(edge["maximum_seconds"]
+                .as_i64()
                 .map_or(maximum, |current| current.min(maximum)));
         }
     }
-    if edge["maximum_seconds"].as_i64()
-        .is_some_and(|maximum| maximum < edge["minimum_seconds"].as_i64().unwrap()) {
+    if edge["maximum_seconds"]
+        .as_i64()
+        .is_some_and(|maximum| maximum < edge["minimum_seconds"].as_i64().unwrap())
+    {
         return false;
     }
     // A contradictory intersection must not discard the routine or its earlier valid edges.
-    if let Some(index) = after.iter().position(|previous| previous["objective_id"] == id) {
+    if let Some(index) = after
+        .iter()
+        .position(|previous| previous["objective_id"] == id)
+    {
         after[index] = edge;
         let mut first = true;
         after.retain(|previous| {
@@ -543,11 +573,19 @@ pub async fn import(
         let routine = &snapshot.store.routines[source];
         for requirement in &routine.requires {
             let establisher = match resolve_requirement(
-                routine, requirement, &snapshot.store.routines, &routine_ids,
+                routine,
+                requirement,
+                &snapshot.store.routines,
+                &routine_ids,
             ) {
                 Ok(establisher) => establisher,
                 Err(reason) => {
-                    skip(&mut response, "routine", source, format!("{reason}: {}", requirement.fact));
+                    skip(
+                        &mut response,
+                        "routine",
+                        source,
+                        format!("{reason}: {}", requirement.fact),
+                    );
                     continue;
                 }
             };
@@ -557,8 +595,12 @@ pub async fn import(
                 edge["maximum_seconds"] = json!(maximum);
             }
             if !merge_requirement(&mut after, edge) {
-                skip(&mut response, "routine", source,
-                    format!("requirement_inverted_bounds: {}", requirement.fact));
+                skip(
+                    &mut response,
+                    "routine",
+                    source,
+                    format!("requirement_inverted_bounds: {}", requirement.fact),
+                );
             } else {
                 response.resolved.push(QuickUbuResolved {
                     quick_ubu_id: source.clone(),
@@ -810,9 +852,9 @@ pub async fn import(
             });
         }
     }
-    response.resolved.sort_by(|a, b| {
-        (&a.quick_ubu_id, &a.target).cmp(&(&b.quick_ubu_id, &b.target))
-    });
+    response
+        .resolved
+        .sort_by(|a, b| (&a.quick_ubu_id, &a.target).cmp(&(&b.quick_ubu_id, &b.target)));
     Ok(response)
 }
 
@@ -826,11 +868,16 @@ async fn reject_routine_overlaps(
 ) -> Result<()> {
     use super::routine_instantiation::{static_overlaps, RoutineDefinition};
     let live = super::routine_service::live_definitions(state.inner().store.pool()).await?;
+    let native = live.native;
     let mut names: BTreeMap<_, _> = live
         .titles
         .into_iter()
         .map(|(id, title)| {
-            let name = format!("`{id}` ({title})");
+            let name = if native.contains(&id) {
+                format!("`{id}` ({title}; natively authored)")
+            } else {
+                format!("`{id}` ({title})")
+            };
             (id, name)
         })
         .collect();
@@ -877,12 +924,13 @@ async fn reject_routine_overlaps(
     if pairs.is_empty() {
         return Ok(());
     }
-    Err(overlap_rejection(&pairs, &names))
+    Err(overlap_rejection(&pairs, &names, &native))
 }
 
 fn overlap_rejection(
     pairs: &[super::routine_instantiation::RoutineOverlap],
     names: &BTreeMap<String, String>,
+    native: &std::collections::HashSet<String>,
 ) -> AppError {
     fn root(parents: &mut [usize], mut n: usize) -> usize {
         while parents[n] != n {
@@ -970,7 +1018,14 @@ fn overlap_rejection(
         groups.push((date.to_owned(), smallest, message));
     }
     groups.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
-    let summary=format!("{} in {}; nothing was imported. Routines must not overlap: stagger their start times, shorten one, or make one transparent.",count(pairs.len(),"overlapping routine pair"),count(groups.len(),"group"));
+    let mut summary=format!("{} in {}; nothing was imported. Routines must not overlap: stagger their start times, shorten one, or make one transparent.",count(pairs.len(),"overlapping routine pair"),count(groups.len(),"group"));
+    // The advice above is about routine.json, which holds no native routine.
+    if pairs.iter().any(|p| {
+        native.contains(p.first.objective_id.as_str())
+            || native.contains(p.second.objective_id.as_str())
+    }) {
+        summary.push_str(" Routines marked natively authored are not in routine.json: edit them through PATCH /objective/:objective_id.");
+    }
     let mut items: Vec<_> = groups
         .iter()
         .take(25)

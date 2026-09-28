@@ -226,6 +226,8 @@ pub(crate) struct LiveRoutines {
     pub unevaluable: HashSet<String>,
     pub diagnostics: Vec<DiagnosticBody>,
     pub titles: BTreeMap<String, String>,
+    /// Routines with no `provenance.source`: authored here, absent from any snapshot.
+    pub native: HashSet<String>,
 }
 
 /// Callers hold their own locks; acquiring the import lock here would deadlock.
@@ -236,6 +238,7 @@ pub(crate) async fn live_definitions(pool: &sqlx::SqlitePool) -> Result<LiveRout
     let mut diagnostics = Vec::new();
     let mut labels = BTreeMap::new();
     let mut unevaluable = HashSet::new();
+    let mut native = HashSet::new();
     for row in rows {
         let value: Value = serde_json::from_str(&row.payload_json).map_err(internal)?;
         if row.status != "active"
@@ -255,6 +258,9 @@ pub(crate) async fn live_definitions(pool: &sqlx::SqlitePool) -> Result<LiveRout
                         unevaluable.insert(row.id.clone());
                     }
                     titles.insert(row.id.clone(), objective.title.clone());
+                    if value["provenance"].get("source").is_none_or(Value::is_null) {
+                        native.insert(row.id.clone());
+                    }
                     labels.insert(row.id.clone(), row.compartment_label);
                     definitions.push(RoutineDefinition {
                         objective_id: objective.id,
@@ -279,6 +285,7 @@ pub(crate) async fn live_definitions(pool: &sqlx::SqlitePool) -> Result<LiveRout
         unevaluable,
         diagnostics,
         titles,
+        native,
     })
 }
 
@@ -458,10 +465,15 @@ pub async fn materialize(
                         .and_modify(|v| *v = (*v).max(floor))
                         .or_insert(floor);
                     if let Some(maximum) = maximum {
-                        let ceiling = end.saturating_add(*maximum as u64)
-                            .saturating_add(o.template.duration_estimate.scalar_seconds()).min(o.declared_end);
-                        context.realized_ceilings.entry(id.clone())
-                            .and_modify(|value| *value = (*value).min(ceiling)).or_insert(ceiling);
+                        let ceiling = end
+                            .saturating_add(*maximum as u64)
+                            .saturating_add(o.template.duration_estimate.scalar_seconds())
+                            .min(o.declared_end);
+                        context
+                            .realized_ceilings
+                            .entry(id.clone())
+                            .and_modify(|value| *value = (*value).min(ceiling))
+                            .or_insert(ceiling);
                     }
                 }
             }
@@ -484,7 +496,9 @@ pub(crate) async fn refresh_override_window(
     for row in rows {
         let old = Stored::parse(row)?;
         let mut next = old.payload.clone();
-        let object = next.as_object_mut().ok_or_else(|| internal("stored Task is not an object"))?;
+        let object = next
+            .as_object_mut()
+            .ok_or_else(|| internal("stored Task is not an object"))?;
         object.remove("static_window");
         object.remove("allowed_time_range");
         if occurrence.overridden || occurrence.template.placement == RoutinePlacement::Static {
@@ -493,7 +507,15 @@ pub(crate) async fn refresh_override_window(
             next["allowed_time_range"] = json!({"earliest_start":timestamp_at(occurrence.start)?,"latest_finish":timestamp_at(occurrence.end)?});
         }
         if canonical(&next) != canonical(&old.payload) {
-            write(state, &old.row.id, Some(&old), &old.row.compartment_label, next, now).await?;
+            write(
+                state,
+                &old.row.id,
+                Some(&old),
+                &old.row.compartment_label,
+                next,
+                now,
+            )
+            .await?;
         }
     }
     Ok(())
