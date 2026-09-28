@@ -6,12 +6,12 @@ use axum::{
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
-use ubu_core::{core::Objective, ObjectType, UbuId, UbuTimestamp};
+use ubu_core::{core::Objective, AuthoritySource, ObjectType, UbuId, UbuTimestamp, VersionRef};
 use ubu_orchestrator::{
     api::planning::TimeWindowBody, build_router, config::ServerConfig, planning_time::FixedClock,
     services::routine_service::materialize, state::AppState,
 };
-use ubu_store::queries;
+use ubu_store::{models::object_record::NewObjectRecord, queries};
 
 const NOW: &str = "2026-09-28T09:00:00Z";
 const VERSION: &str = "ubu.orchestrator.objective.v1";
@@ -408,4 +408,329 @@ async fn reads_return_the_authored_routine_with_its_template() {
     let (status, body) = request(&s, "GET", &format!("/objective/{missing}"), Value::Null).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     code(&body, "unknown_objective");
+}
+
+fn routine_at(title: &str, start: &str) -> Value {
+    let mut body = routine();
+    body["title"] = json!(title);
+    body["routine_instance_template"]["title"] = json!(title);
+    body["routine_instance_template"]["nominal_start"] = json!(start);
+    body
+}
+fn quick_routine(n: u8, title: &str, start: &str) -> Value {
+    json!({"id":format!("00000000-0000-4000-8000-{n:012}"),"title":title,"recurrence":"Daily",
+        "start_time":start,"duration":[300,0],"dynamic":false,"transparent":false,"reminders":[],"after":[]})
+}
+fn quick_snapshot(routines: Vec<Value>) -> Value {
+    let routines: serde_json::Map<String, Value> = routines
+        .into_iter()
+        .map(|r| (r["id"].as_str().unwrap().to_owned(), r))
+        .collect();
+    json!({"snapshot_version":1,"task_origins":{},"store":{"routines":routines,"tasks":{},
+        "objectives":{},"bundles":{},"preferences":[]}})
+}
+fn fixture() -> Value {
+    serde_json::from_str(include_str!("../fixtures/quick-ubu/snapshot-small.json")).unwrap()
+}
+async fn try_import(s: &AppState, snapshot: &Value) -> (StatusCode, Value) {
+    let path = std::env::temp_dir().join(format!("p1b39-{}.json", UbuId::new(ObjectType::Task)));
+    std::fs::write(&path, snapshot.to_string()).unwrap();
+    let result = request(
+        s,
+        "POST",
+        "/import/quick-ubu",
+        json!({"snapshot_path":path,"dry_run":false}),
+    )
+    .await;
+    std::fs::remove_file(path).unwrap();
+    result
+}
+/// Admission at the store boundary, as any writer that predates or sidesteps
+/// `objective_authoring` would do it. Nothing here consults the overlap check.
+async fn admit_unchecked(s: &AppState, title: &str, start: &str) -> String {
+    let id = UbuId::new(ObjectType::Objective);
+    let now = UbuTimestamp::parse(NOW).unwrap();
+    let mut payload = routine_at(title, start);
+    let object = payload.as_object_mut().unwrap();
+    object.remove("schema_version");
+    object.insert("id".into(), json!(id));
+    object.insert("status".into(), json!("active"));
+    object.insert(
+        "provenance".into(),
+        json!({"created_at":NOW,"authority_source":"user"}),
+    );
+    payload["recurrence"]["schedule_version"] = json!(1);
+    payload["routine_instance_template"]["template_version"] = json!(1);
+    let envelope = s
+        .envelope_for(
+            [(id.clone(), VersionRef::Absent)].into_iter().collect(),
+            AuthoritySource::User,
+            now,
+        )
+        .unwrap();
+    queries::admit_object(
+        s.inner().store.pool(),
+        &envelope,
+        NewObjectRecord {
+            id: id.to_string(),
+            object_type: "Objective".into(),
+            version: 1,
+            status: "active".into(),
+            compartment_label: "user-capture".into(),
+            payload,
+            created_at: NOW.into(),
+            updated_at: NOW.into(),
+        },
+    )
+    .await
+    .unwrap();
+    id.to_string()
+}
+fn overlap_evidence(label: &str, value: &Value) {
+    println!(
+        "P1B39_{label}_BEGIN\n{}\nP1B39_{label}_END",
+        serde_json::to_string_pretty(value).unwrap()
+    );
+}
+fn overlap_codes(body: &Value) {
+    let diagnostics = body["diagnostics"].as_array().unwrap();
+    assert!(!diagnostics.is_empty(), "{body}");
+    assert!(
+        diagnostics
+            .iter()
+            .all(|d| d["code"] == "objective_routine_overlap"),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn an_overlapping_native_routine_is_rejected_and_the_import_still_succeeds() {
+    let s = state().await;
+    let first = create(&s, routine_at("Synthetic stretch", "03:00:00")).await;
+    let (objects, ledger) = (
+        count(&s, "objects").await,
+        count(&s, "mutation_envelopes").await,
+    );
+    let (status, body) = request(
+        &s,
+        "POST",
+        "/objective",
+        routine_at("Synthetic walk", "03:02:00"),
+    )
+    .await;
+    overlap_evidence("TEST1_REJECTION", &body);
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    overlap_codes(&body);
+    assert_eq!(body["diagnostics"].as_array().unwrap().len(), 1);
+    let message = body["diagnostics"][0]["message"].as_str().unwrap();
+    for expected in [
+        "Conflict with another routine",
+        "(Synthetic walk) 03:02:00-03:07:00",
+        &format!("`{first}` (Synthetic stretch) 03:00:00-03:05:00"),
+        "first on 2026-09-29",
+    ] {
+        assert!(message.contains(expected), "{message}");
+    }
+    assert_eq!(count(&s, "objects").await, objects);
+    assert_eq!(count(&s, "mutation_envelopes").await, ledger);
+    assert_eq!(objects, 1);
+
+    let (status, imported) = try_import(&s, &fixture()).await;
+    overlap_evidence(
+        "TEST1_IMPORT",
+        &json!({"status":status.as_u16(),"body":imported}),
+    );
+    assert_eq!(status, StatusCode::OK, "{imported}");
+    assert_eq!(imported["routines"]["created"], 5, "{imported}");
+    let routines: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM objects WHERE object_type='Objective'")
+            .fetch_one(s.inner().store.pool())
+            .await
+            .unwrap();
+    assert_eq!(routines, 6);
+}
+
+#[tokio::test]
+async fn overlapping_routines_admitted_past_the_check_still_lock_the_importer() {
+    let s = state().await;
+    admit_unchecked(&s, "Synthetic stretch", "03:00:00").await;
+    admit_unchecked(&s, "Synthetic walk", "03:02:00").await;
+    let objects = count(&s, "objects").await;
+    assert_eq!(objects, 2);
+    let (status, body) = try_import(&s, &fixture()).await;
+    overlap_evidence(
+        "TEST2_LOCKOUT",
+        &json!({"status":status.as_u16(),"body":body}),
+    );
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["diagnostics"][0]["code"], "overlapping_routines");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("nothing was imported"),
+        "{body}"
+    );
+    assert_eq!(count(&s, "objects").await, objects);
+}
+
+#[tokio::test]
+async fn a_native_routine_overlapping_an_imported_one_is_rejected_naming_both() {
+    let s = state().await;
+    let (status, imported) = try_import(
+        &s,
+        &quick_snapshot(vec![quick_routine(1, "Imported stretch", "12:00:00")]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{imported}");
+    let imported_id: String =
+        sqlx::query_scalar("SELECT id FROM objects WHERE object_type='Objective'")
+            .fetch_one(s.inner().store.pool())
+            .await
+            .unwrap();
+    let objects = count(&s, "objects").await;
+    let (status, body) = request(
+        &s,
+        "POST",
+        "/objective",
+        routine_at("Synthetic walk", "12:02:00"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    overlap_codes(&body);
+    let message = body["diagnostics"][0]["message"].as_str().unwrap();
+    assert!(
+        message.contains(&format!(
+            "`{imported_id}` (Imported stretch) 12:00:00-12:05:00"
+        )),
+        "{message}"
+    );
+    assert!(
+        message.contains("(Synthetic walk) 12:02:00-12:07:00"),
+        "{message}"
+    );
+    assert_eq!(count(&s, "objects").await, objects);
+    // Clear of the imported routine, the same routine is admitted.
+    create(&s, routine_at("Synthetic walk", "12:05:00")).await;
+}
+
+#[tokio::test]
+async fn an_edit_that_moves_a_routine_onto_another_is_rejected_unchanged() {
+    let s = state().await;
+    let first = create(&s, routine_at("Synthetic stretch", "03:00:00")).await;
+    let second = create(&s, routine_at("Synthetic walk", "04:00:00")).await;
+    let before = record(&s, &second).await;
+    let ledger = count(&s, "mutation_envelopes").await;
+    let mut moved = template();
+    moved["title"] = json!("Synthetic walk");
+    moved["nominal_start"] = json!("03:02:00");
+    let (status, body) = edit(&s, &second, 1, json!({"routine_instance_template":moved})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    overlap_codes(&body);
+    let message = body["diagnostics"][0]["message"].as_str().unwrap();
+    for expected in [
+        format!("`{second}` (Synthetic walk) 03:02:00-03:07:00"),
+        format!("`{first}` (Synthetic stretch) 03:00:00-03:05:00"),
+    ] {
+        assert!(message.contains(&expected), "{message}");
+    }
+    assert_eq!(record(&s, &second).await, before);
+    assert_eq!(before["version"], 1);
+    assert_eq!(count(&s, "mutation_envelopes").await, ledger);
+    // Withdrawing a routine is never an overlap, whatever its template says.
+    let (status, body) = edit(
+        &s,
+        &second,
+        1,
+        json!({"status":"abandoned","routine_instance_template":moved}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
+async fn an_edit_onto_the_routines_own_previous_window_succeeds() {
+    let s = state().await;
+    let id = create(&s, routine_at("Synthetic stretch", "03:00:00")).await;
+    let mut moved = template();
+    moved["nominal_start"] = json!("03:02:00");
+    let (status, body) = edit(&s, &id, 1, json!({"routine_instance_template":moved})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let row = record(&s, &id).await;
+    assert_eq!(row["version"], 2);
+    assert_eq!(
+        row["payload"]["routine_instance_template"]["nominal_start"],
+        "03:02:00"
+    );
+    // A rename of an unchanged routine is compared with nothing but itself.
+    let (status, body) = edit(&s, &id, 2, json!({"title":"Synthetic stretch, renamed"})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // A routine longer than its own period collides with itself, on either path.
+    let mut marathon = template();
+    marathon["duration_estimate"] = json!({"type":"fixed","seconds":36 * 3600});
+    let (status, body) = edit(&s, &id, 3, json!({"routine_instance_template":marathon})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    overlap_codes(&body);
+    assert!(
+        body["diagnostics"][0]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("Conflict with itself"),
+        "{body}"
+    );
+    assert_eq!(record(&s, &id).await["version"], 3);
+}
+
+#[tokio::test]
+async fn the_import_rejection_says_which_routines_are_native() {
+    const ADVICE: &str = "1 overlapping routine pair in 1 group; nothing was imported. Routines must not overlap: stagger their start times, shorten one, or make one transparent.";
+    let native = state().await;
+    let id = create(&native, routine_at("Synthetic stretch", "12:00:00")).await;
+    let (status, with_native) = try_import(
+        &native,
+        &quick_snapshot(vec![quick_routine(1, "Imported walk", "12:02:00")]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{with_native}");
+    let imported = state().await;
+    let (status, imported_only) = try_import(
+        &imported,
+        &quick_snapshot(vec![
+            quick_routine(1, "Imported walk", "12:02:00"),
+            quick_routine(2, "Imported stretch", "12:00:00"),
+        ]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{imported_only}");
+    overlap_evidence("TEST6_NATIVE", &with_native);
+    overlap_evidence("TEST6_IMPORTED", &imported_only);
+
+    assert_eq!(
+        with_native["error"],
+        format!("{ADVICE} Routines marked natively authored are not in routine.json: edit them through PATCH /objective/:objective_id.")
+    );
+    assert_eq!(
+        with_native["diagnostics"][0]["code"],
+        "overlapping_routines"
+    );
+    let message = with_native["diagnostics"][0]["message"].as_str().unwrap();
+    assert!(
+        message.contains(&format!(
+            "`{id}` (Synthetic stretch; natively authored) 12:00:00-12:05:00"
+        )),
+        "{message}"
+    );
+    assert!(
+        message
+            .contains("`00000000-0000-4000-8000-000000000001` (Imported walk) 12:02:00-12:07:00"),
+        "{message}"
+    );
+
+    assert_eq!(imported_only["error"], ADVICE);
+    assert_eq!(
+        imported_only["diagnostics"][0]["message"],
+        "Routines overlap each other, first 2026-09-28: `00000000-0000-4000-8000-000000000002` (Imported stretch) 12:00:00-12:05:00; `00000000-0000-4000-8000-000000000001` (Imported walk) 12:02:00-12:07:00 (1 pair, up to 366 dates in the next year)"
+    );
+    assert_eq!(count(&native, "objects").await, 1);
+    assert_eq!(count(&imported, "objects").await, 0);
 }
