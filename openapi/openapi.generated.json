@@ -638,6 +638,139 @@
         }
       }
     },
+    "/objective": {
+      "post": {
+        "tags": [
+          "crate::api::objective"
+        ],
+        "operationId": "create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateObjectiveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectiveWriteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing title, incomplete routine fields, non-evergreen routine, or an Objective the core type rejects"
+          }
+        }
+      }
+    },
+    "/objective/{objective_id}": {
+      "get": {
+        "tags": [
+          "crate::api::objective"
+        ],
+        "operationId": "read",
+        "parameters": [
+          {
+            "name": "objective_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectiveReadResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown Objective"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "crate::api::objective"
+        ],
+        "operationId": "edit",
+        "parameters": [
+          {
+            "name": "objective_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditObjectiveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectiveWriteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid edit"
+          },
+          "404": {
+            "description": "Unknown Objective"
+          },
+          "409": {
+            "description": "Version conflict"
+          }
+        }
+      }
+    },
+    "/objectives": {
+      "get": {
+        "tags": [
+          "crate::api::objective"
+        ],
+        "operationId": "list",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectiveListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/planning/generate": {
       "post": {
         "tags": [
@@ -1325,6 +1458,49 @@
       }
     },
     "/task/{task_id}": {
+      "get": {
+        "tags": [
+          "crate::api::task"
+        ],
+        "operationId": "read",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "schema_version",
+            "in": "query",
+            "description": "A read has no body; when supplied, it must name the read contract.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskReadResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown Task"
+          }
+        }
+      },
       "patch": {
         "tags": [
           "crate::api::task"
@@ -1600,6 +1776,54 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/tasks": {
+      "get": {
+        "tags": [
+          "crate::api::task"
+        ],
+        "operationId": "list",
+        "parameters": [
+          {
+            "name": "schema_version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "One of active, completed, failed, moot. Defaults to active.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown status"
           }
         }
       }
@@ -2725,6 +2949,50 @@
           }
         }
       },
+      "CreateObjectiveRequest": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`one_time` (default) or `evergreen`. A routine must be `evergreen`."
+          },
+          "priority": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "recurrence": {
+            "description": "Supplied together with `routine_instance_template`; `schedule_version` is set by the server."
+          },
+          "routine_instance_template": {
+            "description": "Supplied together with `recurrence`; `template_version` is set by the server."
+          },
+          "schema_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "CreatePreferenceRequest": {
         "type": "object",
         "required": [
@@ -2893,6 +3161,33 @@
             }
           }
         ]
+      },
+      "EditObjectiveRequest": {
+        "type": "object",
+        "required": [
+          "expected_version"
+        ],
+        "properties": {
+          "description": {},
+          "expected_version": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "priority": {},
+          "recurrence": {},
+          "routine_instance_template": {},
+          "schema_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "description": "One of open, active, satisfied, abandoned. Objectives are withdrawn, never deleted."
+          },
+          "title": {}
+        },
+        "additionalProperties": false
       },
       "EditRequest": {
         "allOf": [
@@ -3661,6 +3956,116 @@
           },
           "object_type": {
             "type": "string"
+          }
+        }
+      },
+      "ObjectiveListResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "objectives"
+        ],
+        "properties": {
+          "objectives": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObjectiveSummary"
+            }
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        }
+      },
+      "ObjectiveReadResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "objective_id",
+          "version",
+          "is_routine",
+          "payload"
+        ],
+        "properties": {
+          "is_routine": {
+            "type": "boolean"
+          },
+          "objective_id": {
+            "type": "string"
+          },
+          "payload": {},
+          "schema_version": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ObjectiveSummary": {
+        "type": "object",
+        "required": [
+          "objective_id",
+          "title",
+          "status",
+          "mode",
+          "is_routine",
+          "version"
+        ],
+        "properties": {
+          "is_routine": {
+            "type": "boolean"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "objective_id": {
+            "type": "string"
+          },
+          "priority": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ObjectiveWriteResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "objective_id",
+          "version"
+        ],
+        "properties": {
+          "notice": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Set when a routine template changed: materialized occurrences are unaffected."
+          },
+          "objective_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -5498,6 +5903,35 @@
           "moot"
         ]
       },
+      "TaskListResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "status",
+          "tasks"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskSummary"
+            }
+          }
+        }
+      },
+      "TaskPlacement": {
+        "type": "string",
+        "enum": [
+          "static",
+          "planned"
+        ]
+      },
       "TaskPriorityBody": {
         "type": "object",
         "description": "Request-local explanation only; never part of a persisted Plan.",
@@ -5533,6 +5967,36 @@
           "value": {
             "type": "number",
             "format": "double"
+          }
+        }
+      },
+      "TaskReadResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "task_id",
+          "version",
+          "status",
+          "is_routine_occurrence",
+          "payload"
+        ],
+        "properties": {
+          "is_routine_occurrence": {
+            "type": "boolean"
+          },
+          "payload": {},
+          "schema_version": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -5616,6 +6080,65 @@
           },
           "status": {
             "$ref": "#/components/schemas/TaskLifecycleStatus"
+          }
+        }
+      },
+      "TaskSummary": {
+        "type": "object",
+        "required": [
+          "task_id",
+          "title",
+          "status",
+          "version",
+          "placement",
+          "is_routine_occurrence"
+        ],
+        "properties": {
+          "category_tag": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "container_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Present only for a child of an active Container."
+          },
+          "due_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "duration_estimate": {},
+          "is_routine_occurrence": {
+            "type": "boolean",
+            "description": "Occurrences are listed but rejected by `PATCH /task/{task_id}`."
+          },
+          "objective_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "placement": {
+            "$ref": "#/components/schemas/TaskPlacement"
+          },
+          "status": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
