@@ -265,33 +265,26 @@ async fn changed_day_patches_one_event_and_deletes_one_event() {
     );
 }
 
+/// P1B-29 required a `user` approve to be rejected here. P1B-43 reversed that:
+/// the request's authority names the approver and is not what the gate sees.
 #[tokio::test]
-async fn user_authority_is_rejected_without_client_calls_and_logged() {
-    let (state, client) = setup().await;
-    let p = preview(&state).await;
-    let applied = approve(&state, &p, "user").await;
-    assert_eq!(applied["status"], "failed");
-    assert!(client.recorded_calls().is_empty());
-    let logs = boundaries(&state).await;
-    assert_eq!(logs.len(), 3);
-    assert!(logs.iter().all(|l| l["adjudication_result"] == "rejected"
-        && l["authority_source"] == "user"
-        && l["reason"].as_str().unwrap().contains("user-equivalent")));
-    let reasons: Vec<_> = logs.iter().map(|l| l["reason"].clone()).collect();
-    println!("P1B29_REJECT_USER {}", json!(reasons));
-    assert!(applied["operation_results"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .all(|r| r["status"] == "skipped"));
-    assert_eq!(results(&state).await[0]["applied_events"], json!([]));
-    assert_eq!(
-        preview(&state).await["operations"]
-            .as_array()
-            .unwrap()
-            .len(),
-        3
-    );
+async fn every_approver_authority_exports_as_the_automation_worker() {
+    for approver in [
+        "user",
+        "user_override",
+        "delegated",
+        "automation_worker",
+        "policy",
+        "system",
+    ] {
+        let (state, client) = setup().await;
+        let p = preview(&state).await;
+        let applied = approve(&state, &p, approver).await;
+        assert_eq!(applied["status"], "applied", "{approver}: {applied}");
+        assert_eq!(client.recorded_calls().len(), 3, "{approver}");
+        assert_eq!(applied["diagnostics"], json!([]), "{approver}");
+        assert_eq!(preview(&state).await["operations"], json!([]), "{approver}");
+    }
 }
 
 #[tokio::test]

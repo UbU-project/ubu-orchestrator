@@ -225,10 +225,14 @@ fn internal(error: impl std::fmt::Display) -> AppError {
 
 /// Apply exactly the stored preview under the same single-Device lock used by
 /// preview. The client never supplies the diff's existing side.
+///
+/// `_approver_authority` is the request's `authority_source`. It describes who
+/// approved and is not used at the gate: the export itself is performed by the
+/// automation worker, as in `projection_service::approve_projection`.
 pub async fn approve(
     state: &AppState,
     preview_id: &str,
-    authority: ubu_core::AuthoritySource,
+    _approver_authority: ubu_core::AuthoritySource,
     mode: super::calendar_client::CalendarExportMode,
 ) -> Result<StoredCalendarResult> {
     use super::calendar_client::{CalendarApi, CalendarExportMode, RecordingCalendarApi};
@@ -265,7 +269,12 @@ pub async fn approve(
     let mut diagnostics = Vec::new();
     for operation in &stored.operations {
         let core = lower_operation(operation)?;
-        let gate = gate_export_operation(state, &core, stored.policy_summary.as_ref(), authority);
+        let gate = gate_export_operation(
+            state,
+            &core,
+            stored.policy_summary.as_ref(),
+            ubu_core::AuthoritySource::AutomationWorker,
+        );
         append_boundary_log(state, preview_id, &core, &gate.decision.log_payload).await?;
         let Some(permit) = gate.permit() else {
             let message = gate.decision.adjudication_reasons.join(" ");
@@ -280,13 +289,7 @@ pub async fn approve(
             });
             continue;
         };
-        if permit.operation_id() != core.operation_id
-            || permit.authority_source() != ubu_core::AuthoritySource::AutomationWorker
-        {
-            return Err(AppError::Internal(
-                "Calendar export permit does not match the operation".into(),
-            ));
-        }
+        ensure_permit_matches(permit, &core)?;
         let applied = match operation {
             CalendarOperation::Create(event) => client.insert_event(event).await,
             CalendarOperation::Update(event) => client.patch_event(event).await,
@@ -391,6 +394,22 @@ pub fn lower_operation(
         summary: summary.clone(),
         payload: Some(payload),
     })
+}
+
+/// The invariant between the gate and dispatch: a permit is for one operation
+/// and is only ever the automation worker's.
+pub fn ensure_permit_matches(
+    permit: &ubu_core::projection::ExportPermit,
+    operation: &ubu_core::projection::ProjectionOperation,
+) -> Result<()> {
+    if permit.operation_id() != operation.operation_id
+        || permit.authority_source() != ubu_core::AuthoritySource::AutomationWorker
+    {
+        return Err(AppError::Internal(
+            "Calendar export permit does not match the operation".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn gate_export_operation(
