@@ -378,3 +378,215 @@ async fn partial_apply_persists_only_landed_events_and_reproposes_the_failure() 
     );
     assert_eq!(preview(&recovered).await["operations"], json!([]));
 }
+
+// P1B-43: the export is performed by the automation worker whoever approves.
+
+async fn boundary_rows(state: &AppState) -> Vec<Value> {
+    let rows: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT object_refs_json, payload_json, provenance_json FROM logs WHERE event_type='compartment_boundary_decided' ORDER BY rowid",
+    )
+    .fetch_all(state.inner().store.pool())
+    .await
+    .unwrap();
+    rows.into_iter()
+        .map(|(refs, payload, provenance)| {
+            json!({
+                "object_refs": serde_json::from_str::<Value>(&refs).unwrap(),
+                "payload": serde_json::from_str::<Value>(&payload).unwrap(),
+                "provenance": serde_json::from_str::<Value>(&provenance).unwrap(),
+            })
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn user_approval_applies_every_operation_to_the_client() {
+    let (state, client) = setup().await;
+    let p = preview(&state).await;
+    assert_eq!(p["operations"].as_array().unwrap().len(), 3);
+    assert!(client.recorded_calls().is_empty());
+    let (status, applied) = request(&state,"POST",APPROVE,json!({"schema_version":SCHEMA,"preview_id":p["preview_id"],"authority_source":"user","export_mode":"mock"})).await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    assert_eq!(applied["status"], "applied", "{applied}");
+    // The response alone proves nothing; the client must have been called.
+    let calls = serde_json::to_value(client.recorded_calls()).unwrap();
+    assert_eq!(calls, expected_inserts(&p));
+    assert_eq!(calls.as_array().unwrap().len(), 3);
+    println!("P1B43_CALLS_1 {calls}");
+    assert_eq!(
+        applied["applied_events"],
+        serde_json::to_value(client.events()).unwrap()
+    );
+    assert_eq!(applied["diagnostics"], json!([]));
+    assert_eq!(preview(&state).await["operations"], json!([]));
+}
+
+#[tokio::test]
+async fn user_approved_results_match_what_the_github_path_reports() {
+    let (state, client) = setup().await;
+    let p = preview(&state).await;
+    let applied = approve(&state, &p, "user").await;
+    let outcomes = applied["operation_results"].as_array().unwrap();
+    assert_eq!(outcomes.len(), 3);
+    for (outcome, operation) in outcomes.iter().zip(p["operations"].as_array().unwrap()) {
+        assert_eq!(outcome["status"], "applied", "{outcome}");
+        assert!(outcome["operation_id"]
+            .as_str()
+            .unwrap()
+            .ends_with(operation["event"]["external_id"].as_str().unwrap()));
+        // Nothing in a Calendar result attributes the export to the approver.
+        assert!(!outcome.to_string().contains("\"user\""), "{outcome}");
+    }
+    println!("P1B43_RESULTS_2 {}", applied["operation_results"]);
+    assert_eq!(client.recorded_calls().len(), 3);
+
+    // The same approver on the GitHub path, in the same process.
+    let github_preview = ok(&state,"POST","/projection/preview",json!({"schema_version":"ubu.orchestrator.projection_preview.v1","owner":"UbU-project","repo":"ubu-orchestrator","issue_number":7,"observed_labels":[],"desired_labels":["ubu-managed"],"existing_repository_labels":["ubu","ubu-managed"]})).await;
+    let github = ok(&state,"POST","/projection/approve",json!({"schema_version":"ubu.orchestrator.projection_approval.v1","preview_id":github_preview["preview_id"],"approved":true,"authority_source":"user"})).await;
+    assert_eq!(github["status"], "applied", "{github}");
+    assert_eq!(
+        github["operation_results"][0]["authority_source"],
+        "automation_worker"
+    );
+    println!("P1B43_GITHUB_RESULTS_2 {}", github["operation_results"]);
+
+    // Both paths recorded the automation worker at the boundary for a `user` approve.
+    let logged: Vec<Value> = boundary_rows(&state)
+        .await
+        .into_iter()
+        .map(|row| row["payload"]["authority_source"].clone())
+        .collect();
+    assert_eq!(logged, vec![json!("automation_worker"); 4]);
+}
+
+#[tokio::test]
+async fn user_approval_is_logged_at_the_boundary_as_the_automation_worker() {
+    let (state, _client) = setup().await;
+    let p = preview(&state).await;
+    let applied = approve(&state, &p, "user").await;
+    let rows = boundary_rows(&state).await;
+    assert_eq!(rows.len(), 3);
+    for (row, outcome) in rows.iter().zip(applied["operation_results"].as_array().unwrap()) {
+        // The entry is for the same operation the result reports as applied.
+        assert_eq!(
+            row["object_refs"],
+            json!([p["preview_id"], outcome["operation_id"]])
+        );
+        assert_eq!(outcome["status"], "applied");
+        assert_eq!(row["payload"]["adjudication_result"], "accepted");
+        assert_eq!(row["payload"]["authority_source"], "automation_worker");
+        assert_eq!(
+            row["payload"]["provenance"]["authority_source"],
+            "automation_worker"
+        );
+        assert_eq!(
+            row["payload"]["provenance"]["source"]["source_kind"],
+            "google_calendar"
+        );
+        assert_eq!(row["provenance"]["authority_source"], "automation_worker");
+        assert!(!row.to_string().contains("\"user\""), "{row}");
+    }
+    println!("P1B43_BOUNDARY_3 {}", json!(rows));
+}
+
+#[tokio::test]
+async fn no_external_export_still_refuses_a_user_approval() {
+    let (state, client) = setup().await;
+    let p = ok(
+        &state,
+        "GET",
+        "/projection/calendar/preview?no_external_export=true",
+        Value::Null,
+    )
+    .await;
+    let applied = approve(&state, &p, "user").await;
+    assert_eq!(applied["status"], "failed");
+    assert!(client.recorded_calls().is_empty());
+    assert!(applied["operation_results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|r| r["status"] == "skipped"));
+    let diagnostics = applied["diagnostics"].as_array().unwrap();
+    assert_eq!(diagnostics.len(), 3);
+    assert!(diagnostics
+        .iter()
+        .all(|d| d["code"] == "calendar_export_rejected"));
+    let logs = boundaries(&state).await;
+    assert_eq!(logs.len(), 3);
+    // Refused by the policy member, and not for the approver's authority.
+    assert!(logs.iter().all(|l| l["adjudication_result"] == "rejected"
+        && l["member_evaluated"] == "no_external_export"
+        && l["authority_source"] == "automation_worker"
+        && l["reason"].as_str().unwrap().contains("no_external_export")
+        && !l["reason"].as_str().unwrap().contains("user-equivalent")));
+    assert_eq!(results(&state).await[0]["applied_events"], json!([]));
+    assert_eq!(
+        preview(&state).await["operations"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+}
+
+#[tokio::test]
+async fn a_permit_for_another_operation_is_an_internal_error() {
+    use axum::response::IntoResponse;
+    use ubu_core::{
+        projection::{ExportProjectionContext, Legitimizer},
+        AuthoritySource, ObjectRef, Provenance,
+    };
+    use ubu_orchestrator::errors::AppError;
+
+    let (state, client) = setup().await;
+    let p = preview(&state).await;
+    let stored = calendar_apply::load_preview(
+        state.inner().store.pool(),
+        p["preview_id"].as_str().unwrap(),
+    )
+    .await
+    .unwrap();
+    let first = calendar_apply::lower_operation(&stored.operations[0]).unwrap();
+    let second = calendar_apply::lower_operation(&stored.operations[1]).unwrap();
+    assert_ne!(first.operation_id, second.operation_id);
+
+    let now = UbuTimestamp::parse(NOW).unwrap();
+    let compartment = ObjectRef {
+        id: UbuId::new(ObjectType::Compartment),
+        object_type: ObjectType::Compartment,
+    };
+    let actor = ObjectRef {
+        id: UbuId::new(ObjectType::Identity),
+        object_type: ObjectType::Identity,
+    };
+    let provenance = Provenance {
+        created_at: now,
+        created_by: None,
+        authority_source: AuthoritySource::AutomationWorker,
+        source: Some(first.target.clone()),
+        source_refs: None,
+    };
+    let gate = Legitimizer::gate_export_projection(ExportProjectionContext {
+        operation: &first,
+        effective_policy: stored.policy_summary.as_ref(),
+        compartment_ref: &compartment,
+        actor_identity_ref: &actor,
+        authority_source: AuthoritySource::AutomationWorker,
+        effective_time: now,
+        provenance: &provenance,
+    });
+    let permit = gate.permit().expect("the worker is permitted");
+
+    calendar_apply::ensure_permit_matches(permit, &first).expect("its own operation");
+    let error = calendar_apply::ensure_permit_matches(permit, &second).unwrap_err();
+    assert!(
+        matches!(&error, AppError::Internal(message) if message == "Calendar export permit does not match the operation"),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.into_response().status(),
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+    assert!(client.recorded_calls().is_empty());
+}
