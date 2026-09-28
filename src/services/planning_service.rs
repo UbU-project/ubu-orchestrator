@@ -107,7 +107,7 @@ pub async fn generate(
         response.plan_candidates
     };
     diagnostics.extend(precondition_diagnostics(&blocked_tasks, &invalid_tasks));
-    let titles = task_titles(state.inner().store.pool(), &state.inner().category_palette).await?;
+    let titles = task_titles(state.inner().store.pool(), &crate::category_palette::CategoryPalette::from_pool(state.inner().store.pool()).await?).await?;
     let unplaced_tasks = expand_unplaced(
         unplaced_bodies(&kernel_unplaced, &diagnostics, &titles),
         &compiled_segments,
@@ -991,7 +991,7 @@ async fn persist_kernel_plan(
     direct: &DirectPlacements<'_>,
 ) -> Result<PlanBody> {
     let now = UbuTimestamp::now_utc().to_string();
-    let titles = task_titles(state.inner().store.pool(), &state.inner().category_palette).await?;
+    let titles = task_titles(state.inner().store.pool(), &crate::category_palette::CategoryPalette::from_pool(state.inner().store.pool()).await?).await?;
     let steps = merge_steps(
         frozen_steps,
         kernel_plan

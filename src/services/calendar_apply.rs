@@ -93,7 +93,17 @@ pub async fn preview(
     no_external_export: bool,
 ) -> Result<CalendarProjectionPreviewResponse> {
     let _guard = state.inner().calendar_projection_lock.lock().await;
-    let calendar = planning_service::current_calendar(state.clone()).await?;
+    let mut calendar = planning_service::current_calendar(state.clone()).await?;
+    // Colour is current configuration, not frozen planning output. Preserve the
+    // Static/Dynamic partition while letting the next preview see Setting edits.
+    let palette = crate::category_palette::CategoryPalette::from_pool(state.inner().store.pool()).await?;
+    for step in &mut calendar.steps {
+        step.gcal_color_id = if step.static_anchor {
+            palette.color(step.category_tag.as_deref()).map(str::to_owned)
+        } else {
+            None
+        };
+    }
     let maps = planning_service::calendar_reminder_maps(state.inner().store.pool()).await?;
     let origins = super::calendar_sources::origins_by_task(state.inner().store.pool()).await?;
     let mut desired = calendar_projection::desired_events(

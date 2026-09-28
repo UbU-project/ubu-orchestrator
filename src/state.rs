@@ -24,7 +24,6 @@ pub struct OrchestratorState {
     pub config: ServerConfig,
     pub planning_horizon_seconds: u64,
     pub planner_strategy: PlannerStrategyChoice,
-    pub category_palette: CategoryPalette,
     pub store: UbuStore,
     pub device_registration: DeviceRegistration,
     pub causality_issuer: LocalIssuer,
@@ -90,7 +89,6 @@ impl AppState {
             calendar_api: None,
             inner: Arc::new(OrchestratorState {
                 config,
-                category_palette,
                 planning_horizon_seconds,
                 planner_strategy,
                 store,

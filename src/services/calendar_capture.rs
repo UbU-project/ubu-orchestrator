@@ -186,7 +186,7 @@ pub async fn capture(
         .collect();
     let (tasks, plan_diagnostics) = plan_capture(
         &foreign,
-        &state.inner().category_palette.inverse(),
+        &crate::category_palette::CategoryPalette::from_pool(pool).await?.inverse(),
         &by_source,
     );
     let invalid = foreign
