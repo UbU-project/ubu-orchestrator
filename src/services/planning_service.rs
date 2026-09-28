@@ -710,6 +710,20 @@ async fn build_request_from_store_with_context(
         .collect::<Vec<_>>();
     let compiled_segments =
         compile_segments(&mut task_bodies, &containers, &task_rows, &mut diagnostics);
+    // Direct non-capacity Static entries also retain valid references after
+    // ordinary request members have been removed by compilation.
+    for task in &mut non_capacity_tasks {
+        for dependency in &mut task.depends_on {
+            if let Some((carrier, _)) = compiled_segments
+                .iter()
+                .find(|(_, segment)| segment.members.iter().skip(1).any(|m| m.id == *dependency))
+            {
+                *dependency = carrier.clone();
+            }
+        }
+        task.depends_on.sort();
+        task.depends_on.dedup();
+    }
     let (covered_static_tasks, carrier_windows) =
         committed_clusters(&mut task_bodies, &mandatory, &mut diagnostics);
     for task in &covered_static_tasks {

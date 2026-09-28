@@ -364,7 +364,10 @@ pub async fn decompose(
     }
     let container_id = UbuId::new(ObjectType::Container).to_string();
     let log_id = UbuId::new(ObjectType::LogEntry).to_string();
-    let items:Vec<_>=prepared.iter().map(|(_,r)| json!({"ref":{"id":r.id,"object_type":"Task"},"summary":r.payload["title"]})).collect();
+    let items: Vec<_> = prepared
+        .iter()
+        .map(|(_, r)| json!({"ref":{"id":r.id,"object_type":"Task"},"summary":r.payload["title"]}))
+        .collect();
     let value = json!({"id":container_id,"name":original["title"],"status":"active","origin_task_ref":id,"origin_task_version":request.expected_version,
         "mutation_reason":"decomposition","mutation_log_ref":log_id,"items":items,"segment_split_points":splits,
         "provenance":{"created_at":state.planning_now(),"authority_source":"user"}});
@@ -375,7 +378,7 @@ pub async fn decompose(
         "task_decomposed",
         json!([id, container_id]),
         json!({"origin_task_snapshot":original,"container_id":container_id,"child_task_ids":ids}),
-        envelope(state, id, observed.clone())?,
+        envelope(state, id, observed)?,
     )];
     writes.extend(
         prepared
@@ -450,20 +453,34 @@ pub async fn undo(state: &AppState, id: &str, request: UndoRequest) -> Result<Un
         }
     }
     let now = state.planning_now().inner().unix_timestamp();
-    for (key, end) in [
-        ("static_window", "end"),
-        ("allowed_time_range", "latest_finish"),
-    ] {
-        if let Some(value) = fields.get(key) {
-            if !seconds(&value[end]).is_ok_and(|end| end > now) {
-                fields.as_object_mut().unwrap().remove(key);
-            }
-        }
+    let duration = i64::try_from(placement_seconds(&fields)).ok();
+    if fields.get("static_window").is_some_and(|v| {
+        !seconds(&v["start"]).is_ok_and(|start| start >= now)
+            || !seconds(&v["end"]).is_ok_and(|end| end > now)
+    }) {
+        fields.as_object_mut().unwrap().remove("static_window");
     }
-    if fields
-        .get("due_at")
-        .is_some_and(|v| !seconds(v).is_ok_and(|end| end > now))
-    {
+    if fields.get("allowed_time_range").is_some_and(|v| {
+        let finish = seconds(&v["earliest_start"])
+            .ok()
+            .and_then(|start| duration.and_then(|d| start.max(now).checked_add(d)));
+        finish
+            .zip(seconds(&v["latest_finish"]).ok())
+            .is_none_or(|(finish, end)| finish > end)
+    }) {
+        fields.as_object_mut().unwrap().remove("allowed_time_range");
+    }
+    let earliest = fields
+        .get("allowed_time_range")
+        .and_then(|v| seconds(&v["earliest_start"]).ok())
+        .unwrap_or(now)
+        .max(now);
+    if fields.get("due_at").is_some_and(|v| {
+        duration
+            .and_then(|d| earliest.checked_add(d))
+            .zip(seconds(v).ok())
+            .is_none_or(|(finish, end)| finish > end)
+    }) {
         fields.as_object_mut().unwrap().remove("due_at");
     }
     let (prepared, record) = task_capture::prepare(state, fields, &origin.compartment_label)?;
