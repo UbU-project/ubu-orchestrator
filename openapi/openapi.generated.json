@@ -363,6 +363,72 @@
         }
       }
     },
+    "/container/{container_id}/undo": {
+      "post": {
+        "tags": [
+          "crate::api::container"
+        ],
+        "operationId": "undo",
+        "parameters": [
+          {
+            "name": "container_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UndoRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UndoResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid Container"
+          },
+          "409": {
+            "description": "Version conflict"
+          }
+        }
+      }
+    },
+    "/containers": {
+      "get": {
+        "tags": [
+          "crate::api::container"
+        ],
+        "operationId": "list",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContainerListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/desktop/session/github-token": {
       "post": {
         "tags": [
@@ -1358,7 +1424,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/UserActionRequest"
+                "$ref": "#/components/schemas/DecomposeRequest"
               }
             }
           },
@@ -1370,7 +1436,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LogEntryResponse"
+                  "$ref": "#/components/schemas/DecomposeResponse"
                 }
               }
             }
@@ -2518,6 +2584,22 @@
           }
         }
       },
+      "ContainerListResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "containers"
+        ],
+        "properties": {
+          "containers": {
+            "type": "array",
+            "items": {}
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        }
+      },
       "CorrelationGroupBody": {
         "type": "object",
         "required": [
@@ -2684,6 +2766,62 @@
           }
         },
         "additionalProperties": false
+      },
+      "DecomposeRequest": {
+        "type": "object",
+        "required": [
+          "expected_version",
+          "children"
+        ],
+        "properties": {
+          "children": {
+            "type": "array",
+            "items": {},
+            "description": "Task fields; blocked_by may name proposed siblings with one-based child:N references."
+          },
+          "expected_version": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "schema_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "segment_split_points": {}
+        },
+        "additionalProperties": false
+      },
+      "DecomposeResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "container_id",
+          "origin_task_id",
+          "child_task_ids",
+          "log_id"
+        ],
+        "properties": {
+          "child_task_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "container_id": {
+            "type": "string"
+          },
+          "log_id": {
+            "type": "string"
+          },
+          "origin_task_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        }
       },
       "DiagnosticBody": {
         "type": "object",
@@ -5518,6 +5656,55 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          }
+        }
+      },
+      "UndoRequest": {
+        "type": "object",
+        "properties": {
+          "schema_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "UndoResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "container_id",
+          "restored_task_id",
+          "children_mooted",
+          "children_left_completed",
+          "log_id"
+        ],
+        "properties": {
+          "children_left_completed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "children_mooted": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "container_id": {
+            "type": "string"
+          },
+          "log_id": {
+            "type": "string"
+          },
+          "restored_task_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
           }
         }
       },

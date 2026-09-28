@@ -210,6 +210,14 @@ pub async fn generate(
             }
         };
 
+    if let Some(plan) = &plan {
+        let containers = super::decomposition::containers(&state)
+            .await?
+            .into_iter()
+            .map(|(_, c)| c)
+            .collect::<Vec<_>>();
+        diagnostics.extend(scatter_guard(&plan.steps, &containers));
+    }
     Ok(PlanningResponseBody {
         status: if plan.is_none() {
             "rejected"
@@ -2971,4 +2979,32 @@ fn expand_unplaced(
             child
         }).collect::<Vec<_>>()
     }).collect()
+}
+
+fn scatter_guard(
+    steps: &[ScheduledTaskBody],
+    containers: &[ubu_core::core::Container],
+) -> Vec<DiagnosticBody> {
+    let mut diagnostics = Vec::new();
+    for container in containers
+        .iter()
+        .filter(|c| c.status == ubu_core::core::ContainerStatus::Active)
+    {
+        for (index, range) in container.segments().into_iter().enumerate() {
+            let placed: Vec<_> = container.items[range]
+                .iter()
+                .filter_map(|i| steps.iter().find(|s| s.task_id == i.object_ref.id.as_str()))
+                .collect();
+            if placed.windows(2).any(|pair| pair[0].end != pair[1].start) {
+                let largest_gap = placed
+                    .windows(2)
+                    .map(|pair| pair[1].start.saturating_sub(pair[0].end) / 60)
+                    .max()
+                    .unwrap_or(0);
+                diagnostics.push(DiagnosticBody{code:"container_segment_scattered".into(),
+                    message:format!("Container `{}` segment {index} is not contiguous; largest gap is {largest_gap} whole minutes",container.id)});
+            }
+        }
+    }
+    diagnostics
 }

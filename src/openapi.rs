@@ -4,6 +4,8 @@ use utoipa::OpenApi;
 #[derive(OpenApi)]
 #[openapi(
     paths(
+        crate::api::container::list,
+        crate::api::container::undo,
         crate::api::preference::create,
         crate::api::preference::list,
         crate::api::preference::set_enabled,
@@ -51,6 +53,11 @@ use utoipa::OpenApi;
         crate::api::reports::human_complete
     ),
     components(schemas(
+        crate::api::container::DecomposeRequest,
+        crate::api::container::DecomposeResponse,
+        crate::api::container::UndoRequest,
+        crate::api::container::UndoResponse,
+        crate::api::container::ContainerListResponse,
         crate::api::preference::CreatePreferenceRequest,
         crate::api::preference::EnablePreferenceRequest,
         crate::api::preference::PreferenceWriteResponse,
