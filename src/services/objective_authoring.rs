@@ -1,13 +1,14 @@
 //! Native Objective authoring. A routine is an evergreen Objective (UBU-D0286),
 //! so it is written here and nowhere else. No `provenance.source` is ever set:
 //! the importer reconciles only `source_kind = 'quick_ubu'` rows.
+use super::routine_instantiation::{static_overlaps, OverlapSide, RoutineDefinition};
 use crate::{
     errors::{AppError, Result},
     state::AppState,
 };
 use axum::http::StatusCode;
 use serde_json::{json, Map, Value};
-use ubu_core::{core::Objective, AuthoritySource, ObjectType, UbuId, VersionRef};
+use ubu_core::{core::Objective, AuthoritySource, ObjectType, UbuId, UbuTimestamp, VersionRef};
 use ubu_store::{
     models::object_record::{NewObjectRecord, ObjectRecord},
     queries,
@@ -118,6 +119,91 @@ fn row_status(payload: &Value) -> String {
     }
 }
 
+/// The importer's overlap gate, applied while the operator still remembers what
+/// they meant: same expansion, same one-year window, same DST exemption. Only
+/// pairs involving the routine being written are this write's to answer for.
+/// The caller holds `quick_ubu_import_lock`.
+async fn reject_overlaps(state: &AppState, payload: &Value, now: UbuTimestamp) -> Result<()> {
+    if !is_routine(payload) || !matches!(payload["status"].as_str(), Some("open" | "active")) {
+        return Ok(());
+    }
+    let objective: Objective = serde_json::from_value(payload.clone()).map_err(internal)?;
+    let (Some(schedule), Some(template)) =
+        (objective.recurrence, objective.routine_instance_template)
+    else {
+        return Ok(());
+    };
+    let id = objective.id.to_string();
+    let live = super::routine_service::live_definitions(state.inner().store.pool()).await?;
+    let mut titles = live.titles;
+    titles.insert(id.clone(), objective.title);
+    // On edit the stored definition is replaced by the prospective one.
+    let mut definitions: Vec<_> = live
+        .definitions
+        .into_iter()
+        .filter(|definition| definition.objective_id != objective.id)
+        .collect();
+    definitions.push(RoutineDefinition {
+        objective_id: objective.id,
+        schedule,
+        template,
+    });
+    let start = u64::try_from(now.inner().unix_timestamp()).map_err(internal)?;
+    let (pairs, _) = static_overlaps(&definitions, start, start.saturating_add(366 * 86400));
+    let name = |side: &OverlapSide| {
+        let id = side.objective_id.as_str();
+        format!(
+            "`{id}` ({}) {}-{}",
+            titles.get(id).map_or("", String::as_str),
+            side.window.0,
+            side.window.1
+        )
+    };
+    let dates = |n: usize| format!("{n} date{} in the next year", if n == 1 { "" } else { "s" });
+    let items: Vec<_> = pairs
+        .iter()
+        .filter(|pair| !pair.dst_only)
+        .filter(|pair| {
+            pair.first.objective_id.as_str() == id || pair.second.objective_id.as_str() == id
+        })
+        .map(|pair| {
+            let message = if pair.self_overlap {
+                format!(
+                    "Conflict with itself: routine {} would run into its own next occurrence, first on {} ({})",
+                    name(&pair.first),
+                    pair.first.local_date,
+                    dates(pair.dates)
+                )
+            } else {
+                let (own, other) = if pair.first.objective_id.as_str() == id {
+                    (&pair.first, &pair.second)
+                } else {
+                    (&pair.second, &pair.first)
+                };
+                format!(
+                    "Conflict with another routine: routine {} would overlap routine {}, first on {} (up to {})",
+                    name(own),
+                    name(other),
+                    pair.first.local_date,
+                    dates(pair.dates)
+                )
+            };
+            ("objective_routine_overlap".to_owned(), message)
+        })
+        .collect();
+    if items.is_empty() {
+        return Ok(());
+    }
+    Err(AppError::bad_request_diagnostics(
+        format!(
+            "{} routine overlap{}; nothing was written. Routines must not overlap: stagger the start time, shorten the routine, or set occupies_capacity to false.",
+            items.len(),
+            if items.len() == 1 { "" } else { "s" }
+        ),
+        items,
+    ))
+}
+
 pub async fn create(state: &AppState, fields: Map<String, Value>) -> Result<(String, i64)> {
     let _import = state.inner().quick_ubu_import_lock.lock().await;
     let id = UbuId::new(ObjectType::Objective);
@@ -134,6 +220,7 @@ pub async fn create(state: &AppState, fields: Map<String, Value>) -> Result<(Str
         set_counter(&mut payload, field, counter, 1)?;
     }
     let payload = normalize(payload)?;
+    reject_overlaps(state, &payload, now).await?;
     let envelope = state.envelope_for(
         [(id.clone(), VersionRef::Absent)].into_iter().collect(),
         AuthoritySource::User,
@@ -229,6 +316,8 @@ pub async fn edit(
         }
     }
     let payload = normalize(payload)?;
+    let now = state.planning_now();
+    reject_overlaps(state, &payload, now).await?;
     let observed = u64::try_from(row.version).map_err(internal)?;
     let version = row.version.checked_add(1).ok_or_else(|| {
         AppError::Store(ubu_store::StoreError::ObjectVersionExhausted {
@@ -236,7 +325,6 @@ pub async fn edit(
             version: observed,
         })
     })?;
-    let now = state.planning_now();
     let envelope = state.envelope_for(
         [(UbuId::parse(id)?, VersionRef::Version(observed))]
             .into_iter()

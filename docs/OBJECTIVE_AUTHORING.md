@@ -129,16 +129,41 @@ template, the response says so in `notice`:
 > The routine template changed. Occurrences already materialized keep the
 > template they were created with; the change applies at the next materialize.
 
-## Overlapping routines are not rejected here
+## Overlapping routines are rejected when written
 
-The importer refuses a snapshot whose Static routines would overlap any live
-routine (`overlapping_routines`, "nothing was imported"). Native authoring has
-exactly the three rejections above and does not run that check. Measured in
-P1B-38: two native Static routines at the same hour are both admitted;
-planning then reports `routine_occurrences_overlap`, and every later
-`POST /import/quick-ubu` is refused until one of the two is moved, shortened
-or withdrawn. The operator can recover with `PATCH /objective/:objective_id`,
-but nothing warns at authoring time. Recorded as found, not fixed.
+P1B-38 left native routines unchecked, and measured the consequence: two
+native Static routines at the same hour were both admitted, and every later
+`POST /import/quick-ubu` was then refused until one was moved. Since P1B-39
+the overlap is refused at the write, while the operator still remembers what
+they meant.
+
+`POST /objective` and `PATCH /objective/:objective_id` run the importer's own
+check, `static_overlaps`, over the live routines plus the routine being
+written, across the same window the importer uses: now to 366 days from now.
+A pair the importer would reject is a pair authoring rejects.
+
+- The rejection is HTTP 400 with one `objective_routine_overlap` diagnostic
+  per conflict. Each names both routines by Objective id and title with their
+  local windows, the first colliding local date, and whether it is a
+  `Conflict with another routine` or a `Conflict with itself`. Nothing is
+  written.
+- An edit is compared against the other routines and its own *new*
+  definition. Its stored definition is left out, so moving a routine onto the
+  window it used to occupy is allowed.
+- A routine whose own occurrences collide, such as a daily routine lasting
+  longer than a day, is rejected like any other overlap.
+- An overlap that exists only across a daylight-saving shift is exempt, as it
+  is at import.
+- Only conflicts involving the routine being written are reported. An overlap
+  between two other routines is not this write's to answer for, and does not
+  block it.
+- A write that leaves the Objective `satisfied` or `abandoned` is not
+  checked, so withdrawing a routine always succeeds.
+
+The import-time check remains as the backstop for anything that arrives by
+import or was admitted before this check existed. When it names a native
+routine it says so, and points at `PATCH /objective/:objective_id` rather
+than `routine.json`.
 
 ## Status, and why there is no delete
 
