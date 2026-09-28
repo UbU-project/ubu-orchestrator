@@ -83,6 +83,7 @@ impl AppState {
         ensure_orchestrator_projection_tables(store.pool())
             .await
             .map_err(StartupError::projection_tables)?;
+        category_palette.seed(store.pool()).await.map_err(StartupError::projection_tables)?;
         let causality_issuer = LocalIssuer::new(registration.device_id.clone());
         Ok(Self {
             clock: Arc::new(crate::planning_time::SystemClock),

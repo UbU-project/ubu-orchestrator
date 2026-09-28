@@ -1427,6 +1427,96 @@
         }
       }
     },
+    "/setting/{name}": {
+      "put": {
+        "tags": [
+          "crate::api::setting"
+        ],
+        "operationId": "put",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingWriteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingWriteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid name, colour or schema version"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "crate::api::setting"
+        ],
+        "operationId": "delete",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Setting removed; fallback applies"
+          },
+          "400": {
+            "description": "Unknown namespace"
+          },
+          "404": {
+            "description": "No Setting override"
+          }
+        }
+      }
+    },
+    "/settings": {
+      "get": {
+        "tags": [
+          "crate::api::setting"
+        ],
+        "operationId": "list",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/task": {
       "post": {
         "tags": [
@@ -3599,6 +3689,28 @@
           }
         }
       },
+      "InversePaletteEntry": {
+        "type": "object",
+        "required": [
+          "color_id",
+          "categories",
+          "status"
+        ],
+        "properties": {
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "color_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
       "LastRoutineOccurrence": {
         "type": "object",
         "required": [
@@ -4117,6 +4229,25 @@
             "type": "boolean"
           },
           "schema_version": {
+            "type": "string"
+          }
+        }
+      },
+      "PaletteEntry": {
+        "type": "object",
+        "required": [
+          "category",
+          "color_id",
+          "origin"
+        ],
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "color_id": {
+            "type": "string"
+          },
+          "origin": {
             "type": "string"
           }
         }
@@ -5825,6 +5956,100 @@
               "boolean",
               "null"
             ]
+          }
+        }
+      },
+      "SettingSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "value",
+          "authority_source",
+          "version"
+        ],
+        "properties": {
+          "authority_source": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "value": {},
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "SettingWriteRequest": {
+        "type": "object",
+        "required": [
+          "value"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "value": {}
+        },
+        "additionalProperties": false
+      },
+      "SettingWriteResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "setting_id",
+          "version"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "string"
+          },
+          "setting_id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "SettingsResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "settings",
+          "palette",
+          "inverse"
+        ],
+        "properties": {
+          "inverse": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InversePaletteEntry"
+            }
+          },
+          "palette": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PaletteEntry"
+            }
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "settings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SettingSummary"
+            }
           }
         }
       },

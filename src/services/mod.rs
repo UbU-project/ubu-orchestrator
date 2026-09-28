@@ -36,3 +36,5 @@ pub mod preference_authoring;
 pub mod task_read;
 
 pub mod objective_authoring;
+
+pub mod setting_authoring;

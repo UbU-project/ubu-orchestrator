@@ -4,6 +4,9 @@ use utoipa::OpenApi;
 #[derive(OpenApi)]
 #[openapi(
     paths(
+        crate::api::setting::list,
+        crate::api::setting::put,
+        crate::api::setting::delete,
         crate::api::container::list,
         crate::api::container::undo,
         crate::api::objective::create,
@@ -59,6 +62,12 @@ use utoipa::OpenApi;
         crate::api::reports::human_complete
     ),
     components(schemas(
+        crate::api::setting::SettingWriteRequest,
+        crate::api::setting::SettingWriteResponse,
+        crate::api::setting::SettingSummary,
+        crate::api::setting::PaletteEntry,
+        crate::api::setting::InversePaletteEntry,
+        crate::api::setting::SettingsResponse,
         crate::api::container::DecomposeRequest,
         crate::api::container::DecomposeResponse,
         crate::api::container::UndoRequest,

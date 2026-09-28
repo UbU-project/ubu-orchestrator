@@ -24,3 +24,5 @@ pub mod routine_override;
 pub mod container;
 pub mod objective;
 pub mod preference;
+
+pub mod setting;
