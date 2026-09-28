@@ -73,6 +73,12 @@ pub fn build_router(state: AppState) -> Router {
             "/preference/:preference_id",
             axum::routing::patch(api::preference::set_enabled).delete(api::preference::delete),
         )
+        .route("/objective", post(api::objective::create))
+        .route("/objectives", get(api::objective::list))
+        .route(
+            "/objective/:objective_id",
+            get(api::objective::read).patch(api::objective::edit),
+        )
         .route("/task", post(api::task::capture))
         .route("/tasks", get(api::task::list))
         .route(
