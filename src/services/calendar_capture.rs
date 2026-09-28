@@ -39,6 +39,14 @@ pub struct CapturedTask {
     pub category_tag: Option<String>,
 }
 
+/// One ownership rule and one operator-facing reason for capture and reconciliation.
+pub fn not_ownable_diagnostic(external_id: &str) -> Option<DiagnosticBody> {
+    external_id_for("", Some(external_id)).is_none().then(|| DiagnosticBody {
+        code: "capture_event_not_ownable".into(),
+        message: format!("Calendar event `{external_id}` cannot be captured: its id cannot be a UbU Task handle, so UbU cannot own it"),
+    })
+}
+
 pub fn plan_capture(
     foreign: &[DesiredEvent],
     palette_inverse: &BTreeMap<String, Option<String>>,
@@ -52,13 +60,14 @@ pub fn plan_capture(
             continue;
         }
         let window = CalendarTimeRange::parse(&event.start_at, &event.end_at);
-        if external_id_for("", Some(&event.external_id)).is_none()
-            || window.is_err()
-            || event.summary.trim().is_empty()
-        {
+        if let Some(diagnostic) = not_ownable_diagnostic(&event.external_id) {
+            diagnostics.push(diagnostic);
+            continue;
+        }
+        if window.is_err() || event.summary.trim().is_empty() {
             diagnostics.push(DiagnosticBody {
                 code: "capture_event_invalid".into(),
-                message: "Calendar event has an unusable id, title or concrete time span; skipped"
+                message: "Calendar event has an unusable title or concrete time span; skipped"
                     .into(),
             });
             continue;

@@ -55,7 +55,9 @@ pub fn classify(
             conflicts.push(conflict(
                 event,
                 "foreign",
-                "this event was not created by UbU and will not be touched",
+                &super::calendar_capture::not_ownable_diagnostic(&event.external_id)
+                    .map(|diagnostic| diagnostic.message)
+                    .unwrap_or_else(|| "this event was not created by UbU and will not be touched".into()),
             ));
         }
     }

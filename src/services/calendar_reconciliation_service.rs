@@ -108,6 +108,11 @@ pub async fn reconcile(
     }
     let known = known_external_ids(pool).await?;
     let conflicts = calendar_reconcile::classify(&applied, &observed, &known);
+    // Carry the capture refusal through the existing diagnostic contract. The UI
+    // groups by this backend reason rather than duplicating the ownership rule.
+    diagnostics.extend(conflicts.iter()
+        .filter(|conflict| conflict.conflict_type == "foreign")
+        .filter_map(|conflict| super::calendar_capture::not_ownable_diagnostic(&conflict.external_id)));
     let status = if conflicts.is_empty() {
         "matched"
     } else if conflicts
