@@ -6,6 +6,9 @@ use ubu_core::core::{
     evaluate_universe_precondition, validate_precondition_for_mode, InstanceMode,
     UniversePrecondition, UniversePreconditionError, UniverseState,
 };
+use ubu_core::core::{
+    AllowedTimeRange, Preference, StaticWindow, TaskCorrelationGroup, TaskDurationEstimate,
+};
 use ubu_core::id_registry::ObjectType;
 use ubu_core::{UbuId, UbuTimestamp};
 use ubu_planning_core::{
@@ -14,7 +17,6 @@ use ubu_planning_core::{
 };
 use ubu_store::models::log_record::NewLogRecord;
 use ubu_store::models::plan_record::NewPlanRecord;
-use ubu_core::core::{Preference, AllowedTimeRange, StaticWindow, TaskCorrelationGroup, TaskDurationEstimate};
 use ubu_store::queries;
 
 use crate::adapters::planner_adapter::{CpuPlannerAdapter, PlannerAdapter};
@@ -24,12 +26,12 @@ use crate::api::planning::{
     probability_quality_body, score_summary_body, semi_legitimization_summary_body,
     AffectDirectionBody, AffectLegitimizationModeBody, AffectObservationBody,
     AffectObservationValueBody, AffectProfileBody, AffectToleranceBody, BlockedTaskBody,
-    ComputeBudgetBody, CorrelationGroupBody, DiagnosticBody, DurationEstimateBody,
-    GeneratePlanningRequest, InvalidTaskBody, LegitimizationReportBody, PlanBody,
-    PlanCandidateBody, PlanningHorizonBody, PlanningModeBody, PlanningRequestBody, PlanningResponseBody,
-    ProbabilityQualityBody, RepairContextBody, RepairScopeBody, ScheduledTaskBody,
-    ScoringPolicyBody, StaticAnchorBody, TaskGraphBody, TaskGraphEdgeBody, TaskSpecBody,
-    TimeWindowBody, TaskPriorityBody, UnplacedTaskBody, HorizonPolicyBody, CoverageBody, CoverageBoundaryBody,
+    ComputeBudgetBody, CorrelationGroupBody, CoverageBody, CoverageBoundaryBody, DiagnosticBody,
+    DurationEstimateBody, GeneratePlanningRequest, HorizonPolicyBody, InvalidTaskBody,
+    LegitimizationReportBody, PlanBody, PlanCandidateBody, PlanningHorizonBody, PlanningModeBody,
+    PlanningRequestBody, PlanningResponseBody, ProbabilityQualityBody, RepairContextBody,
+    RepairScopeBody, ScheduledTaskBody, ScoringPolicyBody, StaticAnchorBody, TaskGraphBody,
+    TaskGraphEdgeBody, TaskPriorityBody, TaskSpecBody, TimeWindowBody, UnplacedTaskBody,
 };
 use crate::errors::{AppError, Result};
 use crate::reports::planning_analysis::{self, PlanningAnalysisInput};
@@ -54,6 +56,7 @@ pub async fn generate(
         non_capacity_tasks,
         covered_static_tasks,
         carrier_windows,
+        compiled_segments,
     } = match request.request {
         Some(body) => {
             validate_optional_schema_version(body.schema_version.as_deref())?;
@@ -66,6 +69,7 @@ pub async fn generate(
                 non_capacity_tasks: Vec::new(),
                 covered_static_tasks: Vec::new(),
                 carrier_windows: HashMap::new(),
+                compiled_segments: HashMap::new(),
             }
         }
         None => {
@@ -80,7 +84,12 @@ pub async fn generate(
         }
     };
 
-    let direct = DirectPlacements { non_capacity: &non_capacity_tasks, covered: &covered_static_tasks, carriers: &carrier_windows };
+    let direct = DirectPlacements {
+        non_capacity: &non_capacity_tasks,
+        covered: &covered_static_tasks,
+        carriers: &carrier_windows,
+        compiled: &compiled_segments,
+    };
     validate_task_models(&planning_request)?;
     let kernel_request = PlanningRequest::from(planning_request.clone());
     let adapter = CpuPlannerAdapter {
@@ -88,7 +97,8 @@ pub async fn generate(
     };
     add_empty_capacity_diagnostic(&planning_request, &mut diagnostics);
     let mut kernel_unplaced = Vec::new();
-    let mut candidates = if has_static_conflicts(&diagnostics) || planning_request.tasks.is_empty() {
+    let mut candidates = if has_static_conflicts(&diagnostics) || planning_request.tasks.is_empty()
+    {
         Vec::new()
     } else {
         let response = adapter.plan(kernel_request.clone());
@@ -118,7 +128,9 @@ pub async fn generate(
                     kernel_candidate_body(&selected, &titles, &planning_request, &direct)?;
                 let alternatives = candidates
                     .iter()
-                    .map(|candidate| kernel_candidate_body(candidate, &titles, &planning_request, &direct))
+                    .map(|candidate| {
+                        kernel_candidate_body(candidate, &titles, &planning_request, &direct)
+                    })
                     .collect::<Result<Vec<_>>>()?;
                 let (risk_report, plan_quality) = planning_analysis::analyze(
                     state.inner().store.pool(),
@@ -195,7 +207,14 @@ pub async fn generate(
         };
 
     Ok(PlanningResponseBody {
-        status: if plan.is_none() { "rejected" } else if unplaced_tasks.is_empty() { "ok" } else { "partial" }.into(),
+        status: if plan.is_none() {
+            "rejected"
+        } else if unplaced_tasks.is_empty() {
+            "ok"
+        } else {
+            "partial"
+        }
+        .into(),
         unplaced_tasks,
         task_priorities,
         schema_version: PLANNING_SCHEMA_VERSION.to_owned(),
@@ -274,11 +293,15 @@ pub async fn current_calendar(state: AppState) -> Result<CalendarResponse> {
 }
 
 pub async fn build_request_from_store(state: &AppState) -> Result<PlanningRequestBody> {
-    Ok(
-        build_request_from_store_with_context(state, PlanningModeBody::FreshGeneration, None, &[], None)
-            .await?
-            .request,
+    Ok(build_request_from_store_with_context(
+        state,
+        PlanningModeBody::FreshGeneration,
+        None,
+        &[],
+        None,
     )
+    .await?
+    .request)
 }
 
 pub async fn build_repair_request_from_store(
@@ -348,7 +371,12 @@ pub async fn persist_repair_plan(
             human_complete_plan_quality: None,
         },
         frozen_steps,
-        &DirectPlacements { non_capacity: &context.non_capacity_tasks, covered: &context.covered_static_tasks, carriers: &context.carrier_windows },
+        &DirectPlacements {
+            non_capacity: &context.non_capacity_tasks,
+            covered: &context.covered_static_tasks,
+            carriers: &context.carrier_windows,
+            compiled: &context.compiled_segments,
+        },
     )
     .await
 }
@@ -400,25 +428,27 @@ pub fn kernel_plan_body(plan: KernelPlan) -> Result<PlanBody> {
             .steps
             .into_iter()
             .enumerate()
-            .map(|(index, task)| Ok(ScheduledTaskBody {
-                index: index as u32,
-                task_id: task.task_id.clone(),
-                summary: task.task_id,
-                start: task.start,
-                end: task.end,
-                start_at: crate::planning_time::timestamp_at(task.start)?,
-                end_at: crate::planning_time::timestamp_at(task.end)?,
-                depends_on: task.depends_on,
-                static_anchor: task.static_anchor,
-                occupies_capacity: true,
-                category_tag: None,
-                gcal_color_id: None,
-                placement_authority: if task.static_anchor {
-                    "user_override".to_owned()
-                } else {
-                    "planner".to_owned()
-                },
-            }))
+            .map(|(index, task)| {
+                Ok(ScheduledTaskBody {
+                    index: index as u32,
+                    task_id: task.task_id.clone(),
+                    summary: task.task_id,
+                    start: task.start,
+                    end: task.end,
+                    start_at: crate::planning_time::timestamp_at(task.start)?,
+                    end_at: crate::planning_time::timestamp_at(task.end)?,
+                    depends_on: task.depends_on,
+                    static_anchor: task.static_anchor,
+                    occupies_capacity: true,
+                    category_tag: None,
+                    gcal_color_id: None,
+                    placement_authority: if task.static_anchor {
+                        "user_override".to_owned()
+                    } else {
+                        "planner".to_owned()
+                    },
+                })
+            })
             .collect::<Result<Vec<_>>>()?,
         created_at,
         supersedes_plan_id: None,
@@ -449,7 +479,8 @@ async fn build_request_from_store_with_context(
 ) -> Result<StorePlanningRequest> {
     let now = timestamp_seconds(&state.planning_now().to_string())?;
     let pre_repair_horizon = resolve_time_window(state, explicit_horizon, now).await?;
-    let routine_context = super::routine_service::materialize(state, &pre_repair_horizon, now).await?;
+    let routine_context =
+        super::routine_service::materialize(state, &pre_repair_horizon, now).await?;
     let pool = state.inner().store.pool();
     let tasks = queries::query_active_tasks(pool)
         .await
@@ -478,52 +509,84 @@ async fn build_request_from_store_with_context(
         .await?;
 
     // Resolve H using the existing fallback before applying participation rules.
-    let mut task_bodies = task_rows.iter().map(|task| TaskSpecBody {
-        mandatory: false,
-                value: 1.0,        id: task.id.clone(), duration: duration_seconds(&task.payload),
-        duration_estimate: None, correlation_groups: Vec::new(),
-        depends_on: Vec::new(), window: None, static_anchor: None,
-    }).collect::<Vec<_>>();
+    let mut task_bodies = task_rows
+        .iter()
+        .map(|task| TaskSpecBody {
+            mandatory: false,
+            value: 1.0,
+            id: task.id.clone(),
+            duration: duration_seconds(&task.payload),
+            duration_estimate: None,
+            correlation_groups: Vec::new(),
+            depends_on: Vec::new(),
+            window: None,
+            static_anchor: None,
+        })
+        .collect::<Vec<_>>();
 
     let mut time_window = pre_repair_horizon.clone();
     if repair_context.is_some() {
         time_window.start = time_window.start.max(now);
         if let Some(prior_plan) = latest_admitted_plan(state).await? {
-            if let Some(max_frozen_end) = prior_plan.steps.iter()
-                .filter(|step| excluded.contains(&step.task_id)).map(|step| step.end).max() {
+            if let Some(max_frozen_end) = prior_plan
+                .steps
+                .iter()
+                .filter(|step| excluded.contains(&step.task_id))
+                .map(|step| step.end)
+                .max()
+            {
                 time_window.start = time_window.start.max(max_frozen_end);
             }
         }
         if time_window.end <= time_window.start {
-            let remaining_duration = task_bodies.iter().map(|task| task.duration)
-                .sum::<u64>().max(DEFAULT_TASK_DURATION_SECONDS);
+            let remaining_duration = task_bodies
+                .iter()
+                .map(|task| task.duration)
+                .sum::<u64>()
+                .max(DEFAULT_TASK_DURATION_SECONDS);
             time_window.end = time_window.start.saturating_add(remaining_duration);
         }
     }
 
     let horizon = time_window.clone();
-    let mandatory: HashSet<_> = task_rows.iter().filter(|t| t.payload.get("occurrence").is_some_and(|v| !v.is_null())).map(|t| t.id.clone()).collect();
+    let mandatory: HashSet<_> = task_rows
+        .iter()
+        .filter(|t| t.payload.get("occurrence").is_some_and(|v| !v.is_null()))
+        .map(|t| t.id.clone())
+        .collect();
     let mut diagnostics = routine_context.diagnostics;
     let mut non_capacity_tasks = Vec::new();
     let mut absent_static_windows = HashMap::new();
     task_bodies.clear();
     let mut participating = Vec::new();
     for task in &task_rows {
-        let capacity = task.payload.get("occupies_capacity").and_then(Value::as_bool).unwrap_or(true);
+        let capacity = task
+            .payload
+            .get("occupies_capacity")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
         let window = static_windows.get(&task.id);
         if let Some(window) = window {
             let outside_horizon = window.start >= horizon.end || window.end <= horizon.start;
             if !capacity || outside_horizon {
                 absent_static_windows.insert(task.id.clone(), window.clone());
             }
-            if outside_horizon { continue; }
+            if outside_horizon {
+                continue;
+            }
             participating.push((task, window, capacity));
             let spec = TaskSpecBody {
                 mandatory: mandatory.contains(&task.id),
-                value: 1.0,                id: task.id.clone(), duration: window.end - window.start,
-                duration_estimate: None, correlation_groups: Vec::new(),
-                depends_on: dependency_ids(&task.payload), window: Some(window.clone()),
-                static_anchor: Some(StaticAnchorBody { start: window.start }),
+                value: 1.0,
+                id: task.id.clone(),
+                duration: window.end - window.start,
+                duration_estimate: None,
+                correlation_groups: Vec::new(),
+                depends_on: dependency_ids(&task.payload),
+                window: Some(window.clone()),
+                static_anchor: Some(StaticAnchorBody {
+                    start: window.start,
+                }),
             };
             if capacity {
                 time_window.start = time_window.start.min(window.start);
@@ -535,30 +598,53 @@ async fn build_request_from_store_with_context(
         } else if capacity || mandatory.contains(&task.id) {
             let mut window = horizon.clone();
             if let Some(range) = task.payload.get("allowed_time_range") {
-                let range: AllowedTimeRange = serde_json::from_value(range.clone())
-                    .map_err(|e| AppError::Internal(format!("failed to deserialize Task range: {e}")))?;
-                window.start = window.start.max(timestamp_seconds(&range.earliest_start.to_string())?);
+                let range: AllowedTimeRange =
+                    serde_json::from_value(range.clone()).map_err(|e| {
+                        AppError::Internal(format!("failed to deserialize Task range: {e}"))
+                    })?;
+                window.start = window
+                    .start
+                    .max(timestamp_seconds(&range.earliest_start.to_string())?);
                 let end = timestamp_seconds(&range.latest_finish.to_string())?;
                 if mandatory.contains(&task.id) {
-                    if timestamp_seconds(&range.earliest_start.to_string())? >= pre_repair_horizon.end || end <= pre_repair_horizon.start { continue; }
+                    if timestamp_seconds(&range.earliest_start.to_string())?
+                        >= pre_repair_horizon.end
+                        || end <= pre_repair_horizon.start
+                    {
+                        continue;
+                    }
                     window.end = end;
-                    window.start = window.start.max(routine_context.realized_floors.get(&task.id).copied().unwrap_or(0));
-                    if let Some(ceiling) = routine_context.realized_ceilings.get(&task.id).copied() {
+                    window.start = window.start.max(
+                        routine_context
+                            .realized_floors
+                            .get(&task.id)
+                            .copied()
+                            .unwrap_or(0),
+                    );
+                    if let Some(ceiling) = routine_context.realized_ceilings.get(&task.id).copied()
+                    {
                         window.end = ceiling;
                     }
-                } else { window.end = window.end.min(end); }
+                } else {
+                    window.end = window.end.min(end);
+                }
             }
             task_bodies.push(TaskSpecBody {
                 mandatory: mandatory.contains(&task.id),
-                value: 1.0,                id: task.id.clone(), duration: duration_seconds(&task.payload),
+                value: 1.0,
+                id: task.id.clone(),
+                duration: duration_seconds(&task.payload),
                 duration_estimate: task_duration_estimate(&task.payload)?,
                 correlation_groups: task_correlation_groups(&task.payload)?,
-                depends_on: dependency_ids(&task.payload), window: Some(window),
+                depends_on: dependency_ids(&task.payload),
+                window: Some(window),
                 static_anchor: None,
             });
         } else {
-            diagnostics.push(DiagnosticBody { code: "non_capacity_dynamic_task_unsupported".into(),
-                message: format!("Dynamic non-capacity Task `{}` is unsupported", task.id) });
+            diagnostics.push(DiagnosticBody {
+                code: "non_capacity_dynamic_task_unsupported".into(),
+                message: format!("Dynamic non-capacity Task `{}` is unsupported", task.id),
+            });
         }
     }
     // One diagnostic per pair, even if both occupancy and precedence conflict.
@@ -567,8 +653,14 @@ async fn build_request_from_store_with_context(
     let mut dropped_edges = HashSet::new();
     for (i, (task, window, capacity)) in participating.iter().enumerate() {
         for (other, other_window, other_capacity) in participating.iter().skip(i + 1) {
-            if *capacity && *other_capacity && window.start < other_window.end && window.end > other_window.start
-                && !mandatory.contains(&task.id) && !mandatory.contains(&other.id) && !nested(window, other_window) {
+            if *capacity
+                && *other_capacity
+                && window.start < other_window.end
+                && window.end > other_window.start
+                && !mandatory.contains(&task.id)
+                && !mandatory.contains(&other.id)
+                && !nested(window, other_window)
+            {
                 add_static_conflict(&mut conflicts, &task.id, window, &other.id, other_window);
             }
         }
@@ -578,7 +670,15 @@ async fn build_request_from_store_with_context(
                     if mandatory.contains(&task.id) && mandatory.contains(&dependency) {
                         dropped_edges.insert((task.id.clone(), dependency.clone()));
                         diagnostics.push(DiagnosticBody { code: "routine_occurrence_edge_dropped".into(), message: format!("Routine occurrence `{}` has a stale Static edge to `{dependency}`; both retain their fixed placement",task.id) });
-                    } else if !nested(window, other_window) { add_static_conflict(&mut conflicts, &task.id, window, &dependency, other_window); }
+                    } else if !nested(window, other_window) {
+                        add_static_conflict(
+                            &mut conflicts,
+                            &task.id,
+                            window,
+                            &dependency,
+                            other_window,
+                        );
+                    }
                 }
             }
         }
@@ -588,16 +688,33 @@ async fn build_request_from_store_with_context(
         message: format!("Static Tasks `{first}` and `{second}` have conflicting fixed placements or dependencies"),
     }));
     for task in task_bodies.iter_mut().chain(non_capacity_tasks.iter_mut()) {
-        task.depends_on.retain(|parent| !dropped_edges.contains(&(task.id.clone(), parent.clone())));
+        task.depends_on
+            .retain(|parent| !dropped_edges.contains(&(task.id.clone(), parent.clone())));
     }
-    let (covered_static_tasks, carrier_windows) = committed_clusters(&mut task_bodies, &mandatory, &mut diagnostics);
-    for task in &covered_static_tasks { absent_static_windows.insert(task.id.clone(), task.window.clone().unwrap()); }
-    let fixed: Vec<_> = task_bodies.iter().filter(|t| t.static_anchor.is_some()).filter_map(|t|t.window.clone()).collect();
+    let containers = super::decomposition::containers(state)
+        .await?
+        .into_iter()
+        .map(|(_, c)| c)
+        .collect::<Vec<_>>();
+    let compiled_segments =
+        compile_segments(&mut task_bodies, &containers, &task_rows, &mut diagnostics);
+    let (covered_static_tasks, carrier_windows) =
+        committed_clusters(&mut task_bodies, &mandatory, &mut diagnostics);
+    for task in &covered_static_tasks {
+        absent_static_windows.insert(task.id.clone(), task.window.clone().unwrap());
+    }
+    let fixed: Vec<_> = task_bodies
+        .iter()
+        .filter(|t| t.static_anchor.is_some())
+        .filter_map(|t| t.window.clone())
+        .collect();
     // Keep original dependencies through every exclusion, including the fixpoint.
     let planned_ids: HashSet<_> = task_bodies.iter().map(|task| task.id.clone()).collect();
     let mut removed = HashSet::new();
     task_bodies.retain_mut(|task| {
-        if task.static_anchor.is_some() { return true; }
+        if task.static_anchor.is_some() {
+            return true;
+        }
         let window = task.window.as_mut().expect("Dynamic Tasks have a window");
         let mut dependency_outside_horizon = false;
         for dependency in &task.depends_on {
@@ -614,56 +731,101 @@ async fn build_request_from_store_with_context(
         let code = if dependency_outside_horizon {
             Some("dependency_outside_horizon")
         } else if window.end <= window.start
-            || window.end - window.start < task_duration_model(task).placement_seconds() {
+            || window.end - window.start < task_duration_model(task).placement_seconds()
+        {
             Some("task_unplaceable")
-        } else if mandatory.contains(&task.id) && !has_free_gap(task.window.as_ref().unwrap(), &fixed, task_duration_model(task).placement_seconds()) {
+        } else if mandatory.contains(&task.id)
+            && !has_free_gap(
+                task.window.as_ref().unwrap(),
+                &fixed,
+                task_duration_model(task).placement_seconds(),
+            )
+        {
             Some("routine_no_free_time")
-        } else { None };
+        } else {
+            None
+        };
         if let Some(code) = code {
             removed.insert(task.id.clone());
-            let reason = if dependency_outside_horizon { "a Static prerequisite ends outside the horizon" }
-                else if code == "routine_no_free_time" { "fixed commitments leave no free time in its allowed range" }
-                else { "it cannot fit its allowed occupancy window at placement duration" };
-            diagnostics.push(exclusion_diagnostic(&task.id, mandatory.contains(&task.id), code, reason));
+            let reason = if dependency_outside_horizon {
+                "a Static prerequisite ends outside the horizon"
+            } else if code == "routine_no_free_time" {
+                "fixed commitments leave no free time in its allowed range"
+            } else {
+                "it cannot fit its allowed occupancy window at placement duration"
+            };
+            diagnostics.push(exclusion_diagnostic(
+                &task.id,
+                mandatory.contains(&task.id),
+                code,
+                reason,
+            ));
             return false;
         }
         true
     });
     let unseatable = unseatable_mandatory(&task_bodies, &mandatory, &fixed);
     task_bodies.retain(|task| {
-        if !unseatable.contains(&task.id) { return true; }
+        if !unseatable.contains(&task.id) {
+            return true;
+        }
         removed.insert(task.id.clone());
-        diagnostics.push(exclusion_diagnostic(&task.id, true, "routine_no_free_time", "the other routine occurrences due in its allowed range use the free time first"));
+        diagnostics.push(exclusion_diagnostic(
+            &task.id,
+            true,
+            "routine_no_free_time",
+            "the other routine occurrences due in its allowed range use the free time first",
+        ));
         false
     });
     loop {
         let before = removed.len();
         task_bodies.retain(|task| {
-            if task.static_anchor.is_none() && task.depends_on.iter().any(|id| removed.contains(id)) {
+            if task.static_anchor.is_none() && task.depends_on.iter().any(|id| removed.contains(id))
+            {
                 removed.insert(task.id.clone());
-                diagnostics.push(exclusion_diagnostic(&task.id, mandatory.contains(&task.id), "prerequisite_unplaceable", "it depends on an unplaceable Task"));
+                diagnostics.push(exclusion_diagnostic(
+                    &task.id,
+                    mandatory.contains(&task.id),
+                    "prerequisite_unplaceable",
+                    "it depends on an unplaceable Task",
+                ));
                 false
-            } else { true }
+            } else {
+                true
+            }
         });
-        if removed.len() == before { break; }
+        if removed.len() == before {
+            break;
+        }
     }
     // Only now drop edges to unplanned Tasks. Kept Statics break propagation;
     // lifecycle, precondition and frozen exclusions retain their old behavior.
     let planned_ids: HashSet<_> = task_bodies.iter().map(|task| task.id.clone()).collect();
     for task in &mut task_bodies {
-        task.depends_on.retain(|dependency| planned_ids.contains(dependency));
+        task.depends_on
+            .retain(|dependency| planned_ids.contains(dependency));
     }
 
     let groups = super::duration_model::by_group(observed_routine_events(pool).await?, now as i64);
     let titles = routine_titles(pool).await?;
-    let task_groups: HashMap<_, _> = task_rows.iter().filter_map(|row| {
-        row.payload["occurrence"]["routine_objective_id"].as_str().map(|group| (row.id.as_str(), group))
-    }).collect();
+    let task_groups: HashMap<_, _> = task_rows
+        .iter()
+        .filter_map(|row| {
+            row.payload["occurrence"]["routine_objective_id"]
+                .as_str()
+                .map(|group| (row.id.as_str(), group))
+        })
+        .collect();
     for (group, observations) in groups {
-        let Ok(model) = super::duration_model::derive(&observations) else { continue; };
+        let Ok(model) = super::duration_model::derive(&observations) else {
+            continue;
+        };
         let mut applied = false;
         for task in &mut task_bodies {
-            if task.static_anchor.is_none() && task_groups.get(task.id.as_str()) == Some(&group.as_str()) {
+            if task.static_anchor.is_none()
+                && task_groups.get(task.id.as_str()) == Some(&group.as_str())
+            {
                 task.duration = model.mode_seconds;
                 task.duration_estimate = Some(model.estimate.clone());
                 applied = true;
@@ -671,16 +833,38 @@ async fn build_request_from_store_with_context(
         }
         if applied {
             let title = titles.get(&group).unwrap_or(&group);
-            diagnostics.push(DiagnosticBody { code: "duration_model_observed".into(), message: format!("`{title}` is planned from {} observed runs, not its declared duration ({})", model.observations, describe_estimate(&model)) });
+            diagnostics.push(DiagnosticBody {
+                code: "duration_model_observed".into(),
+                message: format!(
+                    "`{title}` is planned from {} observed runs, not its declared duration ({})",
+                    model.observations,
+                    describe_estimate(&model)
+                ),
+            });
         }
     }
     let preferences = active_task_preferences(pool).await?;
-    for task in &task_bodies { if mandatory.contains(&task.id) && task.static_anchor.is_none() { time_window.end = time_window.end.max(task.window.as_ref().unwrap().end); } }
-    let eligible = task_bodies.iter().filter(|task| !mandatory.contains(&task.id)).map(|task| task.id.clone()).collect::<Vec<_>>();
+    for task in &task_bodies {
+        if mandatory.contains(&task.id) && task.static_anchor.is_none() {
+            time_window.end = time_window.end.max(task.window.as_ref().unwrap().end);
+        }
+    }
+    let eligible = task_bodies
+        .iter()
+        .filter(|task| !mandatory.contains(&task.id))
+        .flat_map(|task| {
+            compiled_segments
+                .get(&task.id)
+                .map(|s| s.members.iter().map(|m| m.id.clone()).collect::<Vec<_>>())
+                .unwrap_or_else(|| vec![task.id.clone()])
+        })
+        .collect::<Vec<_>>();
     let priorities = super::task_priority::layer_preferences(&eligible, &preferences);
     let eligible_set: HashSet<_> = eligible.iter().map(String::as_str).collect();
     for preference in preferences.iter().filter(|preference| preference.enabled) {
-        let ubu_core::core::PreferenceSubjects::Tasks { a, b } = &preference.subjects else { continue; };
+        let ubu_core::core::PreferenceSubjects::Tasks { a, b } = &preference.subjects else {
+            continue;
+        };
         for id in [a, b] {
             if !eligible_set.contains(id.as_str()) {
                 diagnostics.push(DiagnosticBody {
@@ -691,8 +875,26 @@ async fn build_request_from_store_with_context(
         }
     }
     let priority_order = priorities.order_keys();
-    let values: HashMap<_, _> = priorities.tasks.iter().map(|task| (task.task_id.as_str(), task.value)).collect();
-    for task in &mut task_bodies { task.value = if mandatory.contains(&task.id) { 0.0 } else { values[task.id.as_str()] }; }
+    let values: HashMap<_, _> = priorities
+        .tasks
+        .iter()
+        .map(|task| (task.task_id.as_str(), task.value))
+        .collect();
+    for task in &mut task_bodies {
+        task.value = if mandatory.contains(&task.id) {
+            0.0
+        } else {
+            compiled_segments
+                .get(&task.id)
+                .map(|s| {
+                    s.members
+                        .iter()
+                        .map(|m| values[m.id.as_str()])
+                        .fold(0.0, f64::max)
+                })
+                .unwrap_or(values[task.id.as_str()])
+        };
+    }
     diagnostics.extend(priorities.cycles.iter().map(|members| DiagnosticBody {
         code: "preference_cycle".into(),
         message: format!("Preference cycle among Tasks [{}]; please resolve this high-priority consistency error", members.join(", ")),
@@ -700,15 +902,24 @@ async fn build_request_from_store_with_context(
     let mut deadlines = HashMap::new();
     for row in &task_rows {
         if let Some(range) = row.payload.get("allowed_time_range") {
-            let range: AllowedTimeRange = serde_json::from_value(range.clone())
-                .map_err(|e| AppError::Internal(format!("failed to deserialize Task range: {e}")))?;
-            deadlines.insert(row.id.clone(), timestamp_seconds(&range.latest_finish.to_string())?);
+            let range: AllowedTimeRange = serde_json::from_value(range.clone()).map_err(|e| {
+                AppError::Internal(format!("failed to deserialize Task range: {e}"))
+            })?;
+            deadlines.insert(
+                row.id.clone(),
+                timestamp_seconds(&range.latest_finish.to_string())?,
+            );
         }
     }
     let task_graph = if has_static_conflicts(&diagnostics) {
         // Conflicts must return all diagnostics even if their dependency graph cycles.
-        TaskGraphBody { topological_order: Vec::new(), edges: Vec::new() }
-    } else { task_graph(&task_bodies, &priority_order, &deadlines, &mandatory)? };
+        TaskGraphBody {
+            topological_order: Vec::new(),
+            edges: Vec::new(),
+        }
+    } else {
+        task_graph(&task_bodies, &priority_order, &deadlines, &mandatory)?
+    };
     let request_id = UbuId::new(ObjectType::Plan).to_string();
     let rng_seed = stable_seed(&request_id, &time_window, &task_graph.topological_order);
     let affect_profile = build_affect_profile(pool).await?;
@@ -739,6 +950,7 @@ async fn build_request_from_store_with_context(
         non_capacity_tasks,
         covered_static_tasks,
         carrier_windows,
+        compiled_segments,
     })
 }
 
@@ -754,11 +966,17 @@ async fn persist_kernel_plan(
 ) -> Result<PlanBody> {
     let now = UbuTimestamp::now_utc().to_string();
     let titles = task_titles(state.inner().store.pool(), &state.inner().category_palette).await?;
-    let steps = merge_steps(frozen_steps, kernel_plan.steps.iter()
-        .map(|task| restored_task_body(task, &titles, request, direct.carriers))
-        .collect::<Result<Vec<_>>>()?.into_iter()
-        .chain(direct_static_steps(direct.non_capacity, &titles, false)?)
-        .chain(direct_static_steps(direct.covered, &titles, true)?));
+    let steps = merge_steps(
+        frozen_steps,
+        kernel_plan
+            .steps
+            .iter()
+            .map(|task| restored_task_body(task, &titles, request, direct.carriers))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .chain(direct_static_steps(direct.non_capacity, &titles, false)?)
+            .chain(direct_static_steps(direct.covered, &titles, true)?),
+    );
 
     let plan = PlanBody {
         id: plan_id.to_owned(),
@@ -812,8 +1030,11 @@ async fn raise_blocking_recalculation(
         .filter(|finding| finding.blocking)
         .map(|finding| format!("{:?}", finding.category).to_ascii_lowercase())
         .collect::<Vec<_>>();
-    let envelope = state.envelope_for(Default::default(), ubu_core::AuthoritySource::System,
-        UbuTimestamp::parse(&now)?)?;
+    let envelope = state.envelope_for(
+        Default::default(),
+        ubu_core::AuthoritySource::System,
+        UbuTimestamp::parse(&now)?,
+    )?;
     queries::append_log_entry(
         state.inner().store.pool(),
         &envelope,
@@ -869,44 +1090,86 @@ fn scheduled_task_body(
         depends_on: task.depends_on.clone(),
         static_anchor: task.static_anchor,
         placement_authority,
-        occupies_capacity: titles.get(&task.task_id).map(|display| display.occupies_capacity).unwrap_or(true),
-        category_tag: titles.get(&task.task_id).and_then(|display| display.category_tag.clone()),
-        gcal_color_id: if task.static_anchor { titles.get(&task.task_id).and_then(|display| display.gcal_color_id.clone()) } else { None },
+        occupies_capacity: titles
+            .get(&task.task_id)
+            .map(|display| display.occupies_capacity)
+            .unwrap_or(true),
+        category_tag: titles
+            .get(&task.task_id)
+            .and_then(|display| display.category_tag.clone()),
+        gcal_color_id: if task.static_anchor {
+            titles
+                .get(&task.task_id)
+                .and_then(|display| display.gcal_color_id.clone())
+        } else {
+            None
+        },
     })
 }
 
 /// Non-capacity Static steps bypass the kernel and enter merged candidate bodies
 /// for risk and plan-quality analysis. Mandatory Dynamic occurrences still enter
 /// the kernel even when their Task declares that they do not occupy capacity.
-fn direct_static_steps(tasks: &[TaskSpecBody], titles: &HashMap<String, TaskDisplay>, occupies_capacity: bool) -> Result<Vec<ScheduledTaskBody>> {
-    tasks.iter().map(|task| {
-        let window = task.window.as_ref().expect("direct Static Task has a window");
-        let display = titles.get(&task.id);
-        Ok(ScheduledTaskBody {
-            index: 0, task_id: task.id.clone(),
-            summary: display.map(|d| d.title.clone()).unwrap_or_else(|| task.id.clone()),
-            start_at: crate::planning_time::timestamp_at(window.start)?,
-            end_at: crate::planning_time::timestamp_at(window.end)?,
-            start: window.start, end: window.end, depends_on: task.depends_on.clone(),
-            static_anchor: true, placement_authority: "user_override".into(), occupies_capacity,
-            category_tag: display.and_then(|d| d.category_tag.clone()),
-            gcal_color_id: display.and_then(|d| d.gcal_color_id.clone()),
+fn direct_static_steps(
+    tasks: &[TaskSpecBody],
+    titles: &HashMap<String, TaskDisplay>,
+    occupies_capacity: bool,
+) -> Result<Vec<ScheduledTaskBody>> {
+    tasks
+        .iter()
+        .map(|task| {
+            let window = task
+                .window
+                .as_ref()
+                .expect("direct Static Task has a window");
+            let display = titles.get(&task.id);
+            Ok(ScheduledTaskBody {
+                index: 0,
+                task_id: task.id.clone(),
+                summary: display
+                    .map(|d| d.title.clone())
+                    .unwrap_or_else(|| task.id.clone()),
+                start_at: crate::planning_time::timestamp_at(window.start)?,
+                end_at: crate::planning_time::timestamp_at(window.end)?,
+                start: window.start,
+                end: window.end,
+                depends_on: task.depends_on.clone(),
+                static_anchor: true,
+                placement_authority: "user_override".into(),
+                occupies_capacity,
+                category_tag: display.and_then(|d| d.category_tag.clone()),
+                gcal_color_id: display.and_then(|d| d.gcal_color_id.clone()),
+            })
         })
-    }).collect()
+        .collect()
 }
 
-fn merge_steps(mut frozen: Vec<ScheduledTaskBody>, others: impl IntoIterator<Item = ScheduledTaskBody>) -> Vec<ScheduledTaskBody> {
+fn merge_steps(
+    mut frozen: Vec<ScheduledTaskBody>,
+    others: impl IntoIterator<Item = ScheduledTaskBody>,
+) -> Vec<ScheduledTaskBody> {
     let mut seen: HashSet<_> = frozen.iter().map(|step| step.task_id.clone()).collect();
-    frozen.extend(others.into_iter().filter(|step| seen.insert(step.task_id.clone())));
+    frozen.extend(
+        others
+            .into_iter()
+            .filter(|step| seen.insert(step.task_id.clone())),
+    );
     frozen.sort_by(|a, b| (a.start, a.end, &a.task_id).cmp(&(b.start, b.end, &b.task_id)));
-    for (index, step) in frozen.iter_mut().enumerate() { step.index = index as u32; }
+    for (index, step) in frozen.iter_mut().enumerate() {
+        step.index = index as u32;
+    }
     frozen
 }
 
-pub fn add_empty_capacity_diagnostic(request: &PlanningRequestBody, diagnostics: &mut Vec<DiagnosticBody>) {
+pub fn add_empty_capacity_diagnostic(
+    request: &PlanningRequestBody,
+    diagnostics: &mut Vec<DiagnosticBody>,
+) {
     if request.tasks.is_empty() {
-        diagnostics.push(DiagnosticBody { code: "no_capacity_tasks_to_plan".into(),
-            message: "No capacity Tasks remain for the planning kernel".into() });
+        diagnostics.push(DiagnosticBody {
+            code: "no_capacity_tasks_to_plan".into(),
+            message: "No capacity Tasks remain for the planning kernel".into(),
+        });
     }
 }
 
@@ -916,39 +1179,61 @@ fn kernel_candidate_body(
     request: &PlanningRequestBody,
     direct: &DirectPlacements<'_>,
 ) -> Result<PlanCandidateBody> {
-    let steps = merge_steps(Vec::new(), candidate.schedule.steps.iter()
-        .map(|task| restored_task_body(task, titles, request, direct.carriers))
-        .collect::<Result<Vec<_>>>()?.into_iter()
-        .chain(direct_static_steps(direct.non_capacity, titles, false)?)
-        .chain(direct_static_steps(direct.covered, titles, true)?));
+    let steps = merge_steps(
+        Vec::new(),
+        candidate
+            .schedule
+            .steps
+            .iter()
+            .map(|task| restored_task_body(task, titles, request, direct.carriers))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .chain(direct_static_steps(direct.non_capacity, titles, false)?)
+            .chain(direct_static_steps(direct.covered, titles, true)?),
+    );
 
-    let coverage = candidate.coverage.as_ref().map(|coverage| -> Result<CoverageBody> {
-        let summary = &coverage.outcome_continuation_summary;
-        Ok(CoverageBody {
-            scope: serde_json::to_value(coverage.coverage_scope).expect("serializable coverage scope").as_str().expect("scope string").to_owned(),
-            estimate: coverage.coverage_estimate,
-            uncovered_mass: coverage.uncovered_mass_estimate,
-            threshold_used: coverage.coverage_threshold_used,
-            below_threshold: coverage.coverage_below_threshold,
-            confidence_low: coverage.coverage_confidence.lower,
-            confidence_high: coverage.coverage_confidence.upper,
-            n_rollouts: coverage.coverage_confidence.n_rollouts,
-            quantization_rule: summary.quantization_rule.clone(),
-            covered_outcome_count: summary.covered_outcome_count,
-            uncovered_outcome_count: summary.uncovered_outcome_count,
-            boundaries: summary.boundaries.iter().map(|boundary| {
-                Ok(CoverageBoundaryBody {
-                    task_id: boundary.boundary_task_ref.clone(),
-                    summary: titles.get(&boundary.boundary_task_ref).map_or_else(|| boundary.boundary_task_ref.clone(), |display| display.title.clone()),
-                    start: boundary.boundary_start,
-                    start_at: crate::planning_time::timestamp_at(boundary.boundary_start)?,
-                    covered_outcome_count: boundary.covered_outcome_count,
-                    uncovered_outcome_count: boundary.uncovered_outcome_count,
-                    uncovered_mass: boundary.uncovered_mass,
-                })
-            }).collect::<Result<Vec<_>>>()?,
+    let coverage = candidate
+        .coverage
+        .as_ref()
+        .map(|coverage| -> Result<CoverageBody> {
+            let summary = &coverage.outcome_continuation_summary;
+            Ok(CoverageBody {
+                scope: serde_json::to_value(coverage.coverage_scope)
+                    .expect("serializable coverage scope")
+                    .as_str()
+                    .expect("scope string")
+                    .to_owned(),
+                estimate: coverage.coverage_estimate,
+                uncovered_mass: coverage.uncovered_mass_estimate,
+                threshold_used: coverage.coverage_threshold_used,
+                below_threshold: coverage.coverage_below_threshold,
+                confidence_low: coverage.coverage_confidence.lower,
+                confidence_high: coverage.coverage_confidence.upper,
+                n_rollouts: coverage.coverage_confidence.n_rollouts,
+                quantization_rule: summary.quantization_rule.clone(),
+                covered_outcome_count: summary.covered_outcome_count,
+                uncovered_outcome_count: summary.uncovered_outcome_count,
+                boundaries: summary
+                    .boundaries
+                    .iter()
+                    .map(|boundary| {
+                        Ok(CoverageBoundaryBody {
+                            task_id: boundary.boundary_task_ref.clone(),
+                            summary: titles.get(&boundary.boundary_task_ref).map_or_else(
+                                || boundary.boundary_task_ref.clone(),
+                                |display| display.title.clone(),
+                            ),
+                            start: boundary.boundary_start,
+                            start_at: crate::planning_time::timestamp_at(boundary.boundary_start)?,
+                            covered_outcome_count: boundary.covered_outcome_count,
+                            uncovered_outcome_count: boundary.uncovered_outcome_count,
+                            uncovered_mass: boundary.uncovered_mass,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            })
         })
-    }).transpose()?;
+        .transpose()?;
     Ok(PlanCandidateBody {
         coverage,
         candidate_id: candidate.candidate_id.clone(),
@@ -1023,10 +1308,17 @@ pub(super) async fn resolve_time_window(
     now: u64,
 ) -> Result<TimeWindowBody> {
     if let Some(explicit) = explicit {
-        let invalid = || AppError::bad_request_diagnostic("invalid_horizon", "horizon requires RFC 3339 timestamps with start before end");
+        let invalid = || {
+            AppError::bad_request_diagnostic(
+                "invalid_horizon",
+                "horizon requires RFC 3339 timestamps with start before end",
+            )
+        };
         let start = timestamp_seconds(&explicit.start).map_err(|_| invalid())?;
         let end = timestamp_seconds(&explicit.end).map_err(|_| invalid())?;
-        if start >= end { return Err(invalid()); }
+        if start >= end {
+            return Err(invalid());
+        }
         return Ok(TimeWindowBody { start, end });
     }
     let pool = state.inner().store.pool();
@@ -1072,8 +1364,20 @@ fn timestamp_seconds(value: &str) -> Result<u64> {
     Ok(seconds as u64)
 }
 
-fn task_graph(tasks: &[TaskSpecBody], priorities: &BTreeMap<String, u32>, deadlines: &HashMap<String, u64>, mandatory: &HashSet<String>) -> Result<TaskGraphBody> {
-    let key = |id: &String| (if mandatory.contains(id) { 0 } else { 1 }, priorities.get(id).copied().unwrap_or(0), deadlines.get(id).copied().unwrap_or(u64::MAX), id.clone());
+fn task_graph(
+    tasks: &[TaskSpecBody],
+    priorities: &BTreeMap<String, u32>,
+    deadlines: &HashMap<String, u64>,
+    mandatory: &HashSet<String>,
+) -> Result<TaskGraphBody> {
+    let key = |id: &String| {
+        (
+            if mandatory.contains(id) { 0 } else { 1 },
+            priorities.get(id).copied().unwrap_or(0),
+            deadlines.get(id).copied().unwrap_or(u64::MAX),
+            id.clone(),
+        )
+    };
     let mut children: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut indegree: BTreeMap<String, usize> = BTreeMap::new();
     let mut edges = Vec::new();
@@ -1202,23 +1506,21 @@ fn task_correlation_groups(payload: &Value) -> Result<Vec<CorrelationGroupBody>>
 }
 
 fn task_duration_model(task: &TaskSpecBody) -> DurationModel {
-match &task.duration_estimate {
-            Some(DurationEstimateBody::Fixed { seconds }) => {
-                DurationModel::Fixed { seconds: *seconds }
-            }
-            Some(DurationEstimateBody::ShiftedLognormalP95 {
-                min_seconds,
-                mode_seconds,
-                p95_seconds,
-            }) => DurationModel::ShiftedLognormalP95 {
-                min_seconds: *min_seconds,
-                mode_seconds: *mode_seconds,
-                p95_seconds: *p95_seconds,
-            },
-            None => DurationModel::Fixed {
-                seconds: task.duration,
-            },
-        }
+    match &task.duration_estimate {
+        Some(DurationEstimateBody::Fixed { seconds }) => DurationModel::Fixed { seconds: *seconds },
+        Some(DurationEstimateBody::ShiftedLognormalP95 {
+            min_seconds,
+            mode_seconds,
+            p95_seconds,
+        }) => DurationModel::ShiftedLognormalP95 {
+            min_seconds: *min_seconds,
+            mode_seconds: *mode_seconds,
+            p95_seconds: *p95_seconds,
+        },
+        None => DurationModel::Fixed {
+            seconds: task.duration,
+        },
+    }
 }
 
 fn validate_task_models(request: &PlanningRequestBody) -> Result<()> {
@@ -1231,7 +1533,10 @@ fn validate_task_models(request: &PlanningRequestBody) -> Result<()> {
             ));
         }
         if !task.value.is_finite() || task.value < 0.0 {
-            return Err(AppError::bad_request_diagnostic("invalid_task_value", "Task value must be finite and non-negative"));
+            return Err(AppError::bad_request_diagnostic(
+                "invalid_task_value",
+                "Task value must be finite and non-negative",
+            ));
         }
         let kernel_task = TaskSpec {
             id: task.id.clone(),
@@ -1353,7 +1658,9 @@ async fn build_affect_profile(pool: &sqlx::SqlitePool) -> Result<AffectProfileBo
     Ok(profile)
 }
 
-pub(super) async fn observed_routine_events(pool: &sqlx::SqlitePool) -> Result<Vec<(String, i64, bool)>> {
+pub(super) async fn observed_routine_events(
+    pool: &sqlx::SqlitePool,
+) -> Result<Vec<(String, i64, bool)>> {
     let rows = sqlx::query_as::<_, (String, String, bool)>("SELECT json_extract(o.payload_json, '$.occurrence.routine_objective_id') AS routine_id,
         l.created_at, (l.event_type = 'task_started' OR
             (l.event_type = 'decision_recorded' AND json_extract(l.payload_json, '$.action') = 'start')) AS is_start
@@ -1364,7 +1671,9 @@ pub(super) async fn observed_routine_events(pool: &sqlx::SqlitePool) -> Result<V
         .fetch_all(pool).await.map_err(|e| AppError::Internal(e.to_string()))?;
     let mut events = Vec::new();
     for (group, created_at, is_start) in rows {
-        let Ok(time) = UbuTimestamp::parse(&created_at) else { continue; };
+        let Ok(time) = UbuTimestamp::parse(&created_at) else {
+            continue;
+        };
         events.push((group, time.inner().unix_timestamp(), is_start));
     }
     Ok(events)
@@ -1373,23 +1682,42 @@ pub(super) async fn observed_routine_events(pool: &sqlx::SqlitePool) -> Result<V
 async fn routine_titles(pool: &sqlx::SqlitePool) -> Result<BTreeMap<String, String>> {
     let rows = sqlx::query_as::<_, (String, Option<String>)>("SELECT id, json_extract(payload_json, '$.title') FROM objects WHERE object_type = 'Objective'")
         .fetch_all(pool).await.map_err(|e| AppError::Internal(e.to_string()))?;
-    Ok(rows.into_iter().filter_map(|(id, title)| title.map(|title| (id, title))).collect())
+    Ok(rows
+        .into_iter()
+        .filter_map(|(id, title)| title.map(|title| (id, title)))
+        .collect())
 }
 
 fn describe_estimate(model: &super::duration_model::DerivedDuration) -> String {
     match model.estimate {
-        DurationEstimateBody::Fixed { seconds } => format!("{} min every observed run", seconds.div_ceil(60)),
-        DurationEstimateBody::ShiftedLognormalP95 { .. } => format!("usually {} min, {} min at worst, {} min at best", model.mode_seconds.div_ceil(60), model.p95_seconds.div_ceil(60), model.min_seconds.div_ceil(60)),
+        DurationEstimateBody::Fixed { seconds } => {
+            format!("{} min every observed run", seconds.div_ceil(60))
+        }
+        DurationEstimateBody::ShiftedLognormalP95 { .. } => format!(
+            "usually {} min, {} min at worst, {} min at best",
+            model.mode_seconds.div_ceil(60),
+            model.p95_seconds.div_ceil(60),
+            model.min_seconds.div_ceil(60)
+        ),
     }
 }
 
 async fn active_task_preferences(pool: &sqlx::SqlitePool) -> Result<Vec<Preference>> {
-    let rows = sqlx::query("SELECT payload_json FROM objects WHERE object_type = 'Preference' AND status = 'active'")
-        .fetch_all(pool).await.map_err(|e| AppError::Internal(e.to_string()))?;
-    rows.into_iter().map(|row| {
-        let payload: String = row.try_get("payload_json").map_err(|e| AppError::Internal(e.to_string()))?;
-        serde_json::from_str(&payload).map_err(|e| AppError::Internal(format!("failed to deserialize Preference: {e}")))
-    }).collect()
+    let rows = sqlx::query(
+        "SELECT payload_json FROM objects WHERE object_type = 'Preference' AND status = 'active'",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?;
+    rows.into_iter()
+        .map(|row| {
+            let payload: String = row
+                .try_get("payload_json")
+                .map_err(|e| AppError::Internal(e.to_string()))?;
+            serde_json::from_str(&payload)
+                .map_err(|e| AppError::Internal(format!("failed to deserialize Preference: {e}")))
+        })
+        .collect()
 }
 
 async fn active_settings(pool: &sqlx::SqlitePool) -> Result<HashMap<String, Value>> {
@@ -1470,10 +1798,7 @@ fn finite_0_to_10(value: f64) -> Option<f64> {
     (value.is_finite() && (0.0..=10.0).contains(&value)).then_some(value)
 }
 
-fn setting_freshness_seconds(
-    settings: &HashMap<String, Value>,
-    dimension: &str,
-) -> Option<u64> {
+fn setting_freshness_seconds(settings: &HashMap<String, Value>, dimension: &str) -> Option<u64> {
     let per_dimension = format!("{dimension}_freshness_seconds");
     settings
         .get(&per_dimension)
@@ -1642,10 +1967,7 @@ fn stale_profile_dimensions(
         let Some(observed) = observation.dimensions.get(dimension) else {
             return false;
         };
-        time_window
-            .start
-            .saturating_sub(observed.observed_at)
-            > freshness_seconds
+        time_window.start.saturating_sub(observed.observed_at) > freshness_seconds
     })
 }
 
@@ -1686,20 +2008,34 @@ pub async fn calendar_reminder_maps(pool: &sqlx::SqlitePool) -> Result<CalendarR
         objective_of_task: BTreeMap::new(),
     };
     for row in rows {
-        let id: String = row.try_get("id").map_err(|e| AppError::Internal(e.to_string()))?;
-        let kind: String = row.try_get("object_type").map_err(|e| AppError::Internal(e.to_string()))?;
-        let raw: String = row.try_get("payload_json").map_err(|e| AppError::Internal(e.to_string()))?;
-        let payload: Value = serde_json::from_str(&raw).map_err(|e| AppError::Internal(e.to_string()))?;
+        let id: String = row
+            .try_get("id")
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        let kind: String = row
+            .try_get("object_type")
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        let raw: String = row
+            .try_get("payload_json")
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        let payload: Value =
+            serde_json::from_str(&raw).map_err(|e| AppError::Internal(e.to_string()))?;
         if kind == "Objective" {
-            if let Some(template) = payload.get("routine_instance_template").and_then(Value::as_object) {
-                let reminders = template.get("reminder_minutes")
+            if let Some(template) = payload
+                .get("routine_instance_template")
+                .and_then(Value::as_object)
+            {
+                let reminders = template
+                    .get("reminder_minutes")
                     .and_then(|value| serde_json::from_value::<Vec<i64>>(value.clone()).ok())
                     .filter(|minutes| minutes.iter().all(|minute| *minute >= 0))
                     .unwrap_or_default();
                 maps.reminders_by_objective.insert(id, reminders);
             }
-        } else if let Some(objective) = payload.get("occurrence")
-            .and_then(|occurrence| occurrence.get("routine_objective_id")).and_then(Value::as_str) {
+        } else if let Some(objective) = payload
+            .get("occurrence")
+            .and_then(|occurrence| occurrence.get("routine_objective_id"))
+            .and_then(Value::as_str)
+        {
             maps.objective_of_task.insert(id, objective.to_owned());
         }
     }
@@ -1713,7 +2049,10 @@ struct TaskDisplay {
     gcal_color_id: Option<String>,
 }
 
-async fn task_titles(pool: &sqlx::SqlitePool, palette: &crate::category_palette::CategoryPalette) -> Result<HashMap<String, TaskDisplay>> {
+async fn task_titles(
+    pool: &sqlx::SqlitePool,
+    palette: &crate::category_palette::CategoryPalette,
+) -> Result<HashMap<String, TaskDisplay>> {
     let rows = sqlx::query("SELECT id, payload_json FROM objects WHERE object_type = ?")
         .bind(ObjectType::Task.as_str())
         .fetch_all(pool)
@@ -1729,14 +2068,27 @@ async fn task_titles(pool: &sqlx::SqlitePool, palette: &crate::category_palette:
             .map_err(|e| AppError::Internal(e.to_string()))?;
         let payload: Value = serde_json::from_str(&payload_json)
             .map_err(|e| AppError::Internal(format!("failed to deserialize task: {e}")))?;
-        let category_tag = payload.get("category_tag").and_then(Value::as_str).map(str::to_owned);
+        let category_tag = payload
+            .get("category_tag")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
         let gcal_color_id = palette.color(category_tag.as_deref()).map(str::to_owned);
-        titles.insert(id.clone(), TaskDisplay {
-            title: payload.get("title").and_then(Value::as_str).unwrap_or(&id).to_owned(),
-            occupies_capacity: payload.get("occupies_capacity").and_then(Value::as_bool).unwrap_or(true),
-            category_tag,
-            gcal_color_id,
-        });
+        titles.insert(
+            id.clone(),
+            TaskDisplay {
+                title: payload
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or(&id)
+                    .to_owned(),
+                occupies_capacity: payload
+                    .get("occupies_capacity")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true),
+                category_tag,
+                gcal_color_id,
+            },
+        );
     }
     Ok(titles)
 }
@@ -1797,30 +2149,46 @@ pub struct StorePlanningRequest {
     pub non_capacity_tasks: Vec<TaskSpecBody>,
     pub covered_static_tasks: Vec<TaskSpecBody>,
     pub carrier_windows: HashMap<String, TimeWindowBody>,
+    pub compiled_segments: HashMap<String, CompiledSegment>,
 }
 
 pub fn has_static_conflicts(diagnostics: &[DiagnosticBody]) -> bool {
-    diagnostics.iter().any(|d| d.code == "static_task_collision")
+    diagnostics
+        .iter()
+        .any(|d| d.code == "static_task_collision")
 }
 
-fn add_static_conflict(conflicts: &mut BTreeSet<(u64, String, String)>,
-    first: &str, first_window: &TimeWindowBody, second: &str, second_window: &TimeWindowBody) {
+fn add_static_conflict(
+    conflicts: &mut BTreeSet<(u64, String, String)>,
+    first: &str,
+    first_window: &TimeWindowBody,
+    second: &str,
+    second_window: &TimeWindowBody,
+) {
     let (first, start, second) = if (first_window.start, first) <= (second_window.start, second) {
         (first, first_window.start, second)
-    } else { (second, second_window.start, first) };
+    } else {
+        (second, second_window.start, first)
+    };
     conflicts.insert((start, first.to_owned(), second.to_owned()));
 }
 
 async fn stored_static_windows(pool: &sqlx::SqlitePool) -> Result<HashMap<String, TimeWindowBody>> {
-    let rows = queries::query_active_tasks(pool).await.map_err(AppError::from)?;
+    let rows = queries::query_active_tasks(pool)
+        .await
+        .map_err(AppError::from)?;
     let mut windows = HashMap::new();
     for row in rows {
         let id = row.id;
         let payload: Value = serde_json::from_str(&row.payload_json)
             .map_err(|e| AppError::Internal(format!("failed to deserialize Task `{id}`: {e}")))?;
-        if let Some(value) = payload.get("static_window").filter(|value| !value.is_null()) {
-            let window: StaticWindow = serde_json::from_value(value.clone())
-                .map_err(|e| AppError::Internal(format!("invalid Static window for `{id}`: {e}")))?;
+        if let Some(value) = payload
+            .get("static_window")
+            .filter(|value| !value.is_null())
+        {
+            let window: StaticWindow = serde_json::from_value(value.clone()).map_err(|e| {
+                AppError::Internal(format!("invalid Static window for `{id}`: {e}"))
+            })?;
             let start = timestamp_seconds(&window.start.to_string())?;
             let end = timestamp_seconds(&window.end.to_string())?;
             windows.insert(id, TimeWindowBody { start, end });
@@ -1907,12 +2275,15 @@ async fn partition_tasks_by_preconditions(
 /// none has been recorded yet. Used by the precondition path, which evaluates
 /// against an empty universe when nothing has been captured.
 async fn current_universe_state(pool: &sqlx::SqlitePool) -> Result<UniverseState> {
-    Ok(read_current_universe_state(pool).await?.map(|(state, _)| state).unwrap_or_else(|| {
-        UniverseState::new(
-            UbuTimestamp::now_utc(),
-            "empty UniverseState synthesized by orchestrator",
-        )
-    }))
+    Ok(read_current_universe_state(pool)
+        .await?
+        .map(|(state, _)| state)
+        .unwrap_or_else(|| {
+            UniverseState::new(
+                UbuTimestamp::now_utc(),
+                "empty UniverseState synthesized by orchestrator",
+            )
+        }))
 }
 
 /// Read the current (latest) persisted `UniverseState`, or `None` when none has
@@ -1940,7 +2311,9 @@ pub(crate) async fn read_current_universe_state(
     let payload_json: String = row
         .try_get("payload_json")
         .map_err(|e| AppError::Internal(e.to_string()))?;
-    let version: i64 = row.try_get("version").map_err(|e| AppError::Internal(e.to_string()))?;
+    let version: i64 = row
+        .try_get("version")
+        .map_err(|e| AppError::Internal(e.to_string()))?;
     serde_json::from_str(&payload_json)
         .map(|state| Some((state, version)))
         .map_err(|e| AppError::Internal(format!("failed to deserialize UniverseState: {e}")))
@@ -2048,138 +2421,477 @@ struct DirectPlacements<'a> {
     non_capacity: &'a [TaskSpecBody],
     covered: &'a [TaskSpecBody],
     carriers: &'a HashMap<String, TimeWindowBody>,
+    #[allow(dead_code)] // Used by expansion in section D.
+    compiled: &'a HashMap<String, CompiledSegment>,
 }
-fn restored_task_body(task: &ScheduledTask, titles: &HashMap<String,TaskDisplay>, request: &PlanningRequestBody, carriers: &HashMap<String,TimeWindowBody>) -> Result<ScheduledTaskBody> {
-    let mut step = scheduled_task_body(task,titles,request)?;
+fn restored_task_body(
+    task: &ScheduledTask,
+    titles: &HashMap<String, TaskDisplay>,
+    request: &PlanningRequestBody,
+    carriers: &HashMap<String, TimeWindowBody>,
+) -> Result<ScheduledTaskBody> {
+    let mut step = scheduled_task_body(task, titles, request)?;
     if let Some(window) = carriers.get(&task.task_id) {
-        step.start = window.start; step.end = window.end;
+        step.start = window.start;
+        step.end = window.end;
         step.start_at = crate::planning_time::timestamp_at(window.start)?;
         step.end_at = crate::planning_time::timestamp_at(window.end)?;
     }
     Ok(step)
 }
 fn exclusion_diagnostic(id: &str, mandatory: bool, code: &str, reason: &str) -> DiagnosticBody {
-    if mandatory { DiagnosticBody { code: "mandatory_occurrence_unplaceable".into(), message: format!("Mandatory routine occurrence `{id}` was left out of the Plan: {reason}; do it late, skip it, or change other commitments") } }
-    else { DiagnosticBody {code:code.into(), message:format!("Task `{id}` {reason}")} }
+    if mandatory {
+        DiagnosticBody { code: "mandatory_occurrence_unplaceable".into(), message: format!("Mandatory routine occurrence `{id}` was left out of the Plan: {reason}; do it late, skip it, or change other commitments") }
+    } else {
+        DiagnosticBody {
+            code: code.into(),
+            message: format!("Task `{id}` {reason}"),
+        }
+    }
 }
-fn earliest_fit(window: &TimeWindowBody, occupied: &[TimeWindowBody], duration: u64) -> Option<TimeWindowBody> {
-    let mut intervals: Vec<_> = occupied.iter().filter(|w| w.start < window.end && w.end > window.start).collect();
+fn earliest_fit(
+    window: &TimeWindowBody,
+    occupied: &[TimeWindowBody],
+    duration: u64,
+) -> Option<TimeWindowBody> {
+    let mut intervals: Vec<_> = occupied
+        .iter()
+        .filter(|w| w.start < window.end && w.end > window.start)
+        .collect();
     intervals.sort_by_key(|w| (w.start, w.end));
     let mut cursor = window.start;
     for interval in intervals {
-        if let Some(end) = cursor.checked_add(duration).filter(|end| *end <= interval.start.min(window.end)) {
+        if let Some(end) = cursor
+            .checked_add(duration)
+            .filter(|end| *end <= interval.start.min(window.end))
+        {
             return Some(TimeWindowBody { start: cursor, end });
         }
         cursor = cursor.max(interval.end);
     }
-    cursor.checked_add(duration).filter(|end| *end <= window.end).map(|end| TimeWindowBody { start: cursor, end })
+    cursor
+        .checked_add(duration)
+        .filter(|end| *end <= window.end)
+        .map(|end| TimeWindowBody { start: cursor, end })
 }
 fn has_free_gap(window: &TimeWindowBody, fixed: &[TimeWindowBody], duration: u64) -> bool {
     earliest_fit(window, fixed, duration).is_some()
 }
 /// Equal spans carry no "during" relationship and remain collisions.
 fn contains(outer: &TimeWindowBody, inner: &TimeWindowBody) -> bool {
-    outer.start <= inner.start && outer.end >= inner.end
+    outer.start <= inner.start
+        && outer.end >= inner.end
         && (outer.start < inner.start || outer.end > inner.end)
 }
 fn nested(a: &TimeWindowBody, b: &TimeWindowBody) -> bool {
     contains(a, b) || contains(b, a)
 }
-fn unseatable_mandatory(tasks: &[TaskSpecBody], mandatory: &HashSet<String>, fixed: &[TimeWindowBody]) -> HashSet<String> {
-    let mut pending: Vec<_> = tasks.iter().filter(|t| mandatory.contains(&t.id) && t.static_anchor.is_none()).collect();
+fn unseatable_mandatory(
+    tasks: &[TaskSpecBody],
+    mandatory: &HashSet<String>,
+    fixed: &[TimeWindowBody],
+) -> HashSet<String> {
+    let mut pending: Vec<_> = tasks
+        .iter()
+        .filter(|t| mandatory.contains(&t.id) && t.static_anchor.is_none())
+        .collect();
     pending.sort_by_key(|t| (t.window.as_ref().map_or(u64::MAX, |w| w.end), &t.id));
     let mut occupied = fixed.to_vec();
-    let mut ends: HashMap<_, _> = tasks.iter().filter(|t| t.static_anchor.is_some()).filter_map(|t| t.window.as_ref().map(|w| (t.id.clone(), w.end))).collect();
+    let mut ends: HashMap<_, _> = tasks
+        .iter()
+        .filter(|t| t.static_anchor.is_some())
+        .filter_map(|t| t.window.as_ref().map(|w| (t.id.clone(), w.end)))
+        .collect();
     let dynamic_ids: HashSet<_> = pending.iter().map(|t| t.id.clone()).collect();
     let mut failed = HashSet::new();
-    while let Some(index) = pending.iter().position(|task| task.depends_on.iter().filter(|dep| dynamic_ids.contains(*dep)).all(|dep| ends.contains_key(dep) || failed.contains(dep))) {
+    while let Some(index) = pending.iter().position(|task| {
+        task.depends_on
+            .iter()
+            .filter(|dep| dynamic_ids.contains(*dep))
+            .all(|dep| ends.contains_key(dep) || failed.contains(dep))
+    }) {
         let task = pending.remove(index);
         if task.depends_on.iter().any(|dep| failed.contains(dep)) {
             failed.insert(task.id.clone());
             continue;
         }
-        let Some(mut window) = task.window.clone() else { failed.insert(task.id.clone()); continue; };
-        for dep in &task.depends_on { if let Some(end) = ends.get(dep) { window.start = window.start.max(*end); } }
-        if let Some(interval) = earliest_fit(&window, &occupied, task_duration_model(task).placement_seconds()) {
+        let Some(mut window) = task.window.clone() else {
+            failed.insert(task.id.clone());
+            continue;
+        };
+        for dep in &task.depends_on {
+            if let Some(end) = ends.get(dep) {
+                window.start = window.start.max(*end);
+            }
+        }
+        if let Some(interval) = earliest_fit(
+            &window,
+            &occupied,
+            task_duration_model(task).placement_seconds(),
+        ) {
             ends.insert(task.id.clone(), interval.end);
             occupied.push(interval);
-        } else { failed.insert(task.id.clone()); }
+        } else {
+            failed.insert(task.id.clone());
+        }
     }
     // Unsettled cycles remain in the request for the existing graph validation.
     failed
 }
 /// Reserve each connected committed-time span once, retaining individual Calendar windows.
-fn committed_clusters(tasks: &mut Vec<TaskSpecBody>, mandatory: &HashSet<String>, diagnostics: &mut Vec<DiagnosticBody>) -> (Vec<TaskSpecBody>,HashMap<String,TimeWindowBody>) {
-    fn root(parents:&mut [usize], mut n:usize)->usize {
-        while parents[n]!=n {parents[n]=parents[parents[n]];n=parents[n];} n
+fn committed_clusters(
+    tasks: &mut Vec<TaskSpecBody>,
+    mandatory: &HashSet<String>,
+    diagnostics: &mut Vec<DiagnosticBody>,
+) -> (Vec<TaskSpecBody>, HashMap<String, TimeWindowBody>) {
+    fn root(parents: &mut [usize], mut n: usize) -> usize {
+        while parents[n] != n {
+            parents[n] = parents[parents[n]];
+            n = parents[n];
+        }
+        n
     }
-    let mut parents:Vec<_>=(0..tasks.len()).collect();
+    let mut parents: Vec<_> = (0..tasks.len()).collect();
     for i in 0..tasks.len() {
-        if tasks[i].static_anchor.is_none() {continue;}
-        for j in i+1..tasks.len() {
-            if tasks[j].static_anchor.is_none() {continue;}
-            let a=tasks[i].window.as_ref().unwrap();let b=tasks[j].window.as_ref().unwrap();
-            let joins = mandatory.contains(&tasks[i].id) || mandatory.contains(&tasks[j].id) || nested(a, b);
-            if joins && a.start<b.end && a.end>b.start {let x=root(&mut parents,i);let y=root(&mut parents,j);parents[x]=y;}
+        if tasks[i].static_anchor.is_none() {
+            continue;
+        }
+        for j in i + 1..tasks.len() {
+            if tasks[j].static_anchor.is_none() {
+                continue;
+            }
+            let a = tasks[i].window.as_ref().unwrap();
+            let b = tasks[j].window.as_ref().unwrap();
+            let joins = mandatory.contains(&tasks[i].id)
+                || mandatory.contains(&tasks[j].id)
+                || nested(a, b);
+            if joins && a.start < b.end && a.end > b.start {
+                let x = root(&mut parents, i);
+                let y = root(&mut parents, j);
+                parents[x] = y;
+            }
         }
     }
-    let mut groups=BTreeMap::<usize,Vec<usize>>::new();
-    for i in 0..tasks.len() {groups.entry(root(&mut parents,i)).or_default().push(i);}
-    let mut covered=Vec::new();let mut carriers=HashMap::new();let mut removed=HashSet::new();let mut warnings=Vec::new();
-    for mut group in groups.into_values().filter(|g|g.len()>1) {
-        group.sort_by_key(|&i| {let w=tasks[i].window.as_ref().unwrap();(w.start,std::cmp::Reverse(w.end),tasks[i].id.clone())});
-        let carrier=group[0];let members:HashSet<_>=group.iter().map(|&i|tasks[i].id.clone()).collect();
-        let mut occurrences:Vec<_>=members.iter().filter(|id|mandatory.contains(*id)).cloned().collect();occurrences.sort();
+    let mut groups = BTreeMap::<usize, Vec<usize>>::new();
+    for i in 0..tasks.len() {
+        groups.entry(root(&mut parents, i)).or_default().push(i);
+    }
+    let mut covered = Vec::new();
+    let mut carriers = HashMap::new();
+    let mut removed = HashSet::new();
+    let mut warnings = Vec::new();
+    for mut group in groups.into_values().filter(|g| g.len() > 1) {
+        group.sort_by_key(|&i| {
+            let w = tasks[i].window.as_ref().unwrap();
+            (w.start, std::cmp::Reverse(w.end), tasks[i].id.clone())
+        });
+        let carrier = group[0];
+        let members: HashSet<_> = group.iter().map(|&i| tasks[i].id.clone()).collect();
+        let mut occurrences: Vec<_> = members
+            .iter()
+            .filter(|id| mandatory.contains(*id))
+            .cloned()
+            .collect();
+        occurrences.sort();
         if occurrences.is_empty() {
             let count = group.len() - 1;
-            let wording = if count == 1 { "Static Task happens" } else { "Static Tasks happen" };
+            let wording = if count == 1 {
+                "Static Task happens"
+            } else {
+                "Static Tasks happen"
+            };
             warnings.push(DiagnosticBody { code: "static_tasks_share_committed_time".into(), message: format!("{count} {wording} during `{}`; the whole span is busy and every one of them stays on the Calendar", tasks[carrier].id) });
         }
-        let commitment=group.iter().map(|&i|&tasks[i]).filter(|t|!mandatory.contains(&t.id)).min_by_key(|t|(t.window.as_ref().unwrap().start,t.id.clone()));
-        if let Some(commitment)=commitment {
-            for id in &occurrences {warnings.push(DiagnosticBody {code:"routine_occurrence_overlaps_commitment".into(),message:format!("Routine occurrence `{id}` shares its time with commitment `{}`; both stay on the Calendar and the whole span is busy",commitment.id)});}
+        let commitment = group
+            .iter()
+            .map(|&i| &tasks[i])
+            .filter(|t| !mandatory.contains(&t.id))
+            .min_by_key(|t| (t.window.as_ref().unwrap().start, t.id.clone()));
+        if let Some(commitment) = commitment {
+            for id in &occurrences {
+                warnings.push(DiagnosticBody {code:"routine_occurrence_overlaps_commitment".into(),message:format!("Routine occurrence `{id}` shares its time with commitment `{}`; both stay on the Calendar and the whole span is busy",commitment.id)});
+            }
         }
-        if occurrences.len()>1 {warnings.push(DiagnosticBody {code:"routine_occurrences_overlap".into(),message:format!("Routine occurrences {} overlap; routines are not meant to overlap and their definitions need review",occurrences.iter().map(|id|format!("`{id}`")).collect::<Vec<_>>().join(", "))});}
-        let start=tasks[carrier].window.as_ref().unwrap().start;
-        let end=group.iter().map(|&i|tasks[i].window.as_ref().unwrap().end).max().unwrap();
-        let dependencies:BTreeSet<_>=group.iter().flat_map(|&i|tasks[i].depends_on.iter()).filter(|id|!members.contains(*id)).cloned().collect();
-        carriers.insert(tasks[carrier].id.clone(),tasks[carrier].window.clone().unwrap());
-        for &i in &group[1..] {covered.push(tasks[i].clone());removed.insert(tasks[i].id.clone());}
-        tasks[carrier].duration=end-start;tasks[carrier].window=Some(TimeWindowBody{start,end});tasks[carrier].static_anchor=Some(StaticAnchorBody{start});tasks[carrier].depends_on=dependencies.into_iter().collect();
+        if occurrences.len() > 1 {
+            warnings.push(DiagnosticBody {code:"routine_occurrences_overlap".into(),message:format!("Routine occurrences {} overlap; routines are not meant to overlap and their definitions need review",occurrences.iter().map(|id|format!("`{id}`")).collect::<Vec<_>>().join(", "))});
+        }
+        let start = tasks[carrier].window.as_ref().unwrap().start;
+        let end = group
+            .iter()
+            .map(|&i| tasks[i].window.as_ref().unwrap().end)
+            .max()
+            .unwrap();
+        let dependencies: BTreeSet<_> = group
+            .iter()
+            .flat_map(|&i| tasks[i].depends_on.iter())
+            .filter(|id| !members.contains(*id))
+            .cloned()
+            .collect();
+        carriers.insert(
+            tasks[carrier].id.clone(),
+            tasks[carrier].window.clone().unwrap(),
+        );
+        for &i in &group[1..] {
+            covered.push(tasks[i].clone());
+            removed.insert(tasks[i].id.clone());
+        }
+        tasks[carrier].duration = end - start;
+        tasks[carrier].window = Some(TimeWindowBody { start, end });
+        tasks[carrier].static_anchor = Some(StaticAnchorBody { start });
+        tasks[carrier].depends_on = dependencies.into_iter().collect();
     }
-    tasks.retain(|t|!removed.contains(&t.id));
-    warnings.sort_by(|a,b|(&a.code,&a.message).cmp(&(&b.code,&b.message)));diagnostics.extend(warnings);
-    (covered,carriers)
+    tasks.retain(|t| !removed.contains(&t.id));
+    warnings.sort_by(|a, b| (&a.code, &a.message).cmp(&(&b.code, &b.message)));
+    diagnostics.extend(warnings);
+    (covered, carriers)
 }
 
-fn unplaced_bodies(kernel_unplaced: &[ubu_planning_core::UnplacedTask], diagnostics: &[DiagnosticBody], titles: &HashMap<String, TaskDisplay>) -> Vec<UnplacedTaskBody> {
-    let mut result = kernel_unplaced.iter().map(|entry| UnplacedTaskBody {
-        task_id: entry.task_ref.clone(),
-        summary: titles.get(&entry.task_ref).map_or_else(|| entry.task_ref.clone(), |t| t.title.clone()),
-        reason: serde_json::to_value(entry.reason).expect("serializable reason").as_str().expect("reason string").to_owned(),
-        deferred_by_task_refs: entry.deferred_by_task_refs.clone(),
-        affected_dependent_task_refs: entry.affected_dependent_task_refs.clone(),
-        explanation: entry.user_facing_summary.clone(),
-        safe_alternatives: entry.safe_alternatives.clone().into_iter().map(Into::into).collect(),
-    }).collect::<Vec<_>>();
+fn unplaced_bodies(
+    kernel_unplaced: &[ubu_planning_core::UnplacedTask],
+    diagnostics: &[DiagnosticBody],
+    titles: &HashMap<String, TaskDisplay>,
+) -> Vec<UnplacedTaskBody> {
+    let mut result = kernel_unplaced
+        .iter()
+        .map(|entry| UnplacedTaskBody {
+            task_id: entry.task_ref.clone(),
+            summary: titles
+                .get(&entry.task_ref)
+                .map_or_else(|| entry.task_ref.clone(), |t| t.title.clone()),
+            reason: serde_json::to_value(entry.reason)
+                .expect("serializable reason")
+                .as_str()
+                .expect("reason string")
+                .to_owned(),
+            deferred_by_task_refs: entry.deferred_by_task_refs.clone(),
+            affected_dependent_task_refs: entry.affected_dependent_task_refs.clone(),
+            explanation: entry.user_facing_summary.clone(),
+            safe_alternatives: entry
+                .safe_alternatives
+                .clone()
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        })
+        .collect::<Vec<_>>();
     let mut seen: HashSet<_> = result.iter().map(|u| u.task_id.clone()).collect();
     for diagnostic in diagnostics {
         let reason = match diagnostic.code.as_str() {
-            "task_unplaceable" | "dependency_outside_horizon" => ubu_planning_core::UnplacedReason::OutsideAllowedWindow,
+            "task_unplaceable" | "dependency_outside_horizon" => {
+                ubu_planning_core::UnplacedReason::OutsideAllowedWindow
+            }
             "prerequisite_unplaceable" => ubu_planning_core::UnplacedReason::DeferredDependency,
             _ => continue,
         };
-        let Some(id) = diagnostic.message.split('`').nth(1) else { continue; };
-        if !seen.insert(id.to_owned()) { continue; }
+        let Some(id) = diagnostic.message.split('`').nth(1) else {
+            continue;
+        };
+        if !seen.insert(id.to_owned()) {
+            continue;
+        }
         result.push(UnplacedTaskBody {
             task_id: id.to_owned(),
-            summary: titles.get(id).map_or_else(|| id.to_owned(), |t| t.title.clone()),
-            reason: serde_json::to_value(reason).expect("serializable reason").as_str().expect("reason string").to_owned(),
+            summary: titles
+                .get(id)
+                .map_or_else(|| id.to_owned(), |t| t.title.clone()),
+            reason: serde_json::to_value(reason)
+                .expect("serializable reason")
+                .as_str()
+                .expect("reason string")
+                .to_owned(),
             deferred_by_task_refs: Vec::new(),
             affected_dependent_task_refs: Vec::new(),
             explanation: diagnostic.message.clone(),
-            safe_alternatives: ubu_planning_core::safe_alternatives(reason).into_iter().map(Into::into).collect(),
+            safe_alternatives: ubu_planning_core::safe_alternatives(reason)
+                .into_iter()
+                .map(Into::into)
+                .collect(),
         });
     }
     result
+}
+
+/// A request-local placement unit. Original Task specs retain expansion metadata.
+#[derive(Debug, Clone)]
+pub struct CompiledSegment {
+    pub container_id: String,
+    pub segment_index: usize,
+    pub members: Vec<TaskSpecBody>,
+    pub placement_seconds: Vec<u64>,
+}
+
+fn compile_segments(
+    tasks: &mut Vec<TaskSpecBody>,
+    containers: &[ubu_core::core::Container],
+    rows: &[TaskRow],
+    diagnostics: &mut Vec<DiagnosticBody>,
+) -> HashMap<String, CompiledSegment> {
+    let mut compiled = HashMap::new();
+    let mut replacements = HashMap::new();
+    for container in containers
+        .iter()
+        .filter(|c| c.status == ubu_core::core::ContainerStatus::Active)
+    {
+        for (segment_index, range) in container
+            .segments()
+            .into_iter()
+            .enumerate()
+            .filter(|(_, r)| r.len() > 1)
+        {
+            let ids: Vec<_> = container.items[range]
+                .iter()
+                .map(|i| i.object_ref.id.to_string())
+                .collect();
+            let present: Vec<_> = ids
+                .iter()
+                .map(|id| tasks.iter().any(|t| &t.id == id))
+                .collect();
+            let missing: Vec<_> = ids
+                .iter()
+                .zip(&present)
+                .filter(|(_, p)| !**p)
+                .map(|(id, _)| id.clone())
+                .collect();
+            let first = present.iter().position(|p| *p).unwrap_or(ids.len());
+            if present[first..].iter().any(|p| !p) {
+                diagnostics.push(DiagnosticBody { code:"container_segment_partial".into(),
+                    message:format!("Container `{}` segment {segment_index} is not an unstarted suffix; missing children [{}]",container.id,missing.join(", ")) });
+                continue;
+            }
+            let ids = &ids[first..];
+            if ids.len() < 2 {
+                continue;
+            }
+            let mut members: Vec<_> = ids
+                .iter()
+                .map(|id| tasks.iter().find(|t| &t.id == id).unwrap().clone())
+                .collect();
+            let attempt = (|| -> Option<(TaskSpecBody, Vec<u64>)> {
+                let mut min = 0u64;
+                let mut mode = 0u64;
+                let mut p95 = 0u64;
+                let mut legacy = 0u64;
+                let mut stochastic = false;
+                let mut start = 0;
+                let mut end = u64::MAX;
+                let mut groups = BTreeMap::<String, f64>::new();
+                let mut deps = BTreeSet::new();
+                let mut placements = Vec::new();
+                for member in &mut members {
+                    // A child edited to Static cannot safely become a Dynamic carrier.
+                    if member.static_anchor.is_some() {
+                        return None;
+                    }
+                    let row = rows.iter().find(|row| row.id == member.id)?;
+                    if row
+                        .payload
+                        .get("preconditions")
+                        .is_some_and(|v| !v.is_null())
+                    {
+                        return None;
+                    }
+                    let model = task_duration_model(member);
+                    let (a, b, c) = match model {
+                        DurationModel::Fixed { seconds } => (seconds, seconds, seconds),
+                        DurationModel::ShiftedLognormalP95 {
+                            min_seconds,
+                            mode_seconds,
+                            p95_seconds,
+                        } => {
+                            stochastic = true;
+                            (min_seconds, mode_seconds, p95_seconds)
+                        }
+                    };
+                    min = min.checked_add(a)?;
+                    mode = mode.checked_add(b)?;
+                    p95 = p95.checked_add(c)?;
+                    legacy = legacy.checked_add(member.duration)?;
+                    placements.push(model.placement_seconds());
+                    if let Some(window) = &member.window {
+                        start = start.max(window.start);
+                        end = end.min(window.end);
+                    }
+                    if let Some(due) = row.payload.get("due_at").and_then(Value::as_str) {
+                        end = end.min(timestamp_seconds(due).ok()?);
+                    }
+                    for group in &member.correlation_groups {
+                        groups
+                            .entry(group.group.clone())
+                            .and_modify(|s| *s = s.max(group.strength))
+                            .or_insert(group.strength);
+                    }
+                    deps.extend(
+                        member
+                            .depends_on
+                            .iter()
+                            .filter(|id| !ids.contains(id))
+                            .cloned(),
+                    );
+                }
+                let model = if stochastic {
+                    DurationModel::ShiftedLognormalP95 {
+                        min_seconds: min,
+                        mode_seconds: mode,
+                        p95_seconds: p95,
+                    }
+                } else {
+                    DurationModel::Fixed { seconds: mode }
+                };
+                TaskSpec::new(members[0].id.clone(), model.clone()).ok()?;
+                let mut carrier = members[0].clone();
+                carrier.duration = legacy;
+                carrier.duration_estimate = Some(match model {
+                    DurationModel::Fixed { seconds } => DurationEstimateBody::Fixed { seconds },
+                    DurationModel::ShiftedLognormalP95 {
+                        min_seconds,
+                        mode_seconds,
+                        p95_seconds,
+                    } => DurationEstimateBody::ShiftedLognormalP95 {
+                        min_seconds,
+                        mode_seconds,
+                        p95_seconds,
+                    },
+                });
+                carrier.window = Some(TimeWindowBody { start, end });
+                carrier.mandatory = members.iter().any(|m| m.mandatory);
+                carrier.value = members.iter().map(|m| m.value).fold(0.0, f64::max);
+                carrier.correlation_groups = groups
+                    .into_iter()
+                    .map(|(group, strength)| CorrelationGroupBody { group, strength })
+                    .collect();
+                carrier.depends_on = deps.into_iter().collect();
+                Some((carrier, placements))
+            })();
+            let Some((carrier, placement_seconds)) = attempt else {
+                diagnostics.push(DiagnosticBody {code:"container_segment_uncompilable".into(),
+                    message:format!("Container `{}` segment {segment_index} cannot form a valid duration/constraint unit; review children or add a split point",container.id)});
+                continue;
+            };
+            for member in &members[1..] {
+                replacements.insert(member.id.clone(), carrier.id.clone());
+            }
+            tasks.retain(|t| !ids[1..].contains(&t.id));
+            *tasks.iter_mut().find(|t| t.id == carrier.id).unwrap() = carrier.clone();
+            compiled.insert(
+                carrier.id,
+                CompiledSegment {
+                    container_id: container.id.to_string(),
+                    segment_index,
+                    members,
+                    placement_seconds,
+                },
+            );
+        }
+    }
+    for task in tasks {
+        task.depends_on = task
+            .depends_on
+            .iter()
+            .map(|id| replacements.get(id).unwrap_or(id).clone())
+            .filter(|id| id != &task.id)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+    }
+    compiled
 }
