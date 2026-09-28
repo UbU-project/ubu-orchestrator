@@ -68,7 +68,12 @@ planning horizon to be considered as a new foreign commitment.
 No agent test has contacted Google or exercised this against an account. Use the
 operator's dummy account for acceptance, after completing P1B-41's six steps.
 
-There is a **pre-existing P1B-41 approval blocker**: `ubu-ui`'s `approveCalendar`
+**Resolved in P1B-43:** the blocker described in this paragraph no longer
+exists. The Calendar export is now gated as the automation worker whoever
+approves; see [Calendar apply authority](CALENDAR_APPLY_AUTHORITY.md). The
+paragraph is kept as the record of what P1B-42 found.
+
+There was a **pre-existing P1B-41 approval blocker**: `ubu-ui`'s `approveCalendar`
 sends `authority_source: "user"`, but the backend export gate requires
 `automation_worker`. It reports `calendar_export_rejected` for user authority.
 P1B-42 explicitly leaves the Calendar screen and approval wrapper unchanged;

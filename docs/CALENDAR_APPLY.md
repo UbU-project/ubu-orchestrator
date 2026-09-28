@@ -62,13 +62,15 @@ ordered calls and simulate operation failures.
 ## Deny-by-default boundary
 
 Every operation, including deletes, is lowered to core `ProjectionOperation` and
-passed to the existing `Legitimizer`. The caller's authority is preserved; it is
-not silently replaced by worker authority. Only `automation_worker` can receive
-an export permit, and only when the resolved policy is accepted and explicitly
-has `local_only: false` and `no_external_export: false`.
+passed to the existing `Legitimizer`. From P1B-43 the gate is called as
+`automation_worker`, as the GitHub path calls it; the request's
+`authority_source` describes the approver and is not used at the gate. See
+[Calendar apply authority](CALENDAR_APPLY_AUTHORITY.md). A permit is given only
+when the resolved policy is accepted and explicitly has `local_only: false` and
+`no_external_export: false`.
 
-User-equivalent authority, other authorities, unresolved policy, disallowing
-policy, or policy needing review receive no permit. Neither a title nor a surface
+Unresolved policy, disallowing policy, or policy needing review receive no
+permit. Neither a title nor a surface
 name grants permission. This follows UBU-D0254 and UBU-D0255's controller-owned
 admission boundary; per UBU-D0257, Google Calendar is a projection surface, not a
 Device or mutation authority. UBU-D0275's desktop-to-Calendar switch configuration
@@ -76,8 +78,8 @@ does not change that boundary.
 
 The controller appends `compartment_boundary_decided` through an ordinary mutation
 envelope for every adjudication, before attempting delivery. The Log records the
-actor, requested authority, policy decision, reason, and `google_calendar`
-provenance. Dispatch requires a matching core permit. A rejection produces
+actor, the exporting authority (`automation_worker`), policy decision, reason,
+and `google_calendar` provenance. Dispatch requires a matching core permit. A rejection produces
 `calendar_export_rejected` and no client call for that operation. A permitted
 client failure produces `calendar_operation_failed` in the result.
 
