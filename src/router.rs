@@ -74,7 +74,11 @@ pub fn build_router(state: AppState) -> Router {
             axum::routing::patch(api::preference::set_enabled).delete(api::preference::delete),
         )
         .route("/task", post(api::task::capture))
-        .route("/task/:task_id", axum::routing::patch(api::task::edit))
+        .route("/tasks", get(api::task::list))
+        .route(
+            "/task/:task_id",
+            get(api::task::read).patch(api::task::edit),
+        )
         .route("/task/:task_id/start", post(api::user_action::start))
         .route(
             "/task/:task_id/action",

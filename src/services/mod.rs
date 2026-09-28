@@ -32,3 +32,5 @@ pub mod routine_service;
 pub mod routine_override;
 
 pub mod preference_authoring;
+
+pub mod task_read;
