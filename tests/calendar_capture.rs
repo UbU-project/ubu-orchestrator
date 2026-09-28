@@ -347,7 +347,7 @@ async fn transparent_foreign_event_does_not_occupy_capacity() {
     free.color_id = Some("99".into());
     let (state, _) = setup(vec![free, companion()]).await;
     let response = capture(&state).await;
-    assert_eq!(response["diagnostics"], json!([]));
+    assert_eq!(response["diagnostics"][0]["code"], "capture_colour_unmapped");
     let task = tasks(&state)
         .await
         .into_iter()

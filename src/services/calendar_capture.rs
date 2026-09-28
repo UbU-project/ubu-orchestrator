@@ -95,7 +95,14 @@ pub fn plan_capture(
                 diagnostics.push(DiagnosticBody { code: "capture_colour_ambiguous".into(), message: format!("Calendar event `{}` has a colour shared by multiple categories; no category assigned", event.external_id) });
                 None
             }
-            None => None,
+            None => {
+                let (code, message) = match &event.color_id {
+                    Some(color) => ("capture_colour_unmapped", format!("Calendar event `{}` has unmapped colour `{color}`; no category assigned; map that colour in Settings to assign a category", event.external_id)),
+                    None => ("capture_colour_absent", format!("Calendar event `{}` has no colour; no category assigned", event.external_id)),
+                };
+                diagnostics.push(DiagnosticBody { code: code.into(), message });
+                None
+            },
         };
         tasks.push(CapturedTask {
             task_id: existing_by_source.get(&event.external_id).cloned(),
