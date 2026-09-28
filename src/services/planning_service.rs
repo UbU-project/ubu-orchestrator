@@ -108,7 +108,11 @@ pub async fn generate(
     };
     diagnostics.extend(precondition_diagnostics(&blocked_tasks, &invalid_tasks));
     let titles = task_titles(state.inner().store.pool(), &state.inner().category_palette).await?;
-    let unplaced_tasks = unplaced_bodies(&kernel_unplaced, &diagnostics, &titles);
+    let unplaced_tasks = expand_unplaced(
+        unplaced_bodies(&kernel_unplaced, &diagnostics, &titles),
+        &compiled_segments,
+        &titles,
+    );
     let selected_index = candidates.iter().position(|candidate| candidate.rank == 1);
     let canonical_plan_id = UbuId::new(ObjectType::Plan).to_string();
     let (plan, selected_candidate, alternatives, legitimization, risk_report, plan_quality) =
@@ -971,9 +975,14 @@ async fn persist_kernel_plan(
         kernel_plan
             .steps
             .iter()
-            .map(|task| restored_task_body(task, &titles, request, direct.carriers))
+            .map(|task| {
+                restored_task_body(task, &titles, request, direct.carriers).and_then(|step| {
+                    expand_segment(step, direct.compiled.get(&task.task_id), &titles, request)
+                })
+            })
             .collect::<Result<Vec<_>>>()?
             .into_iter()
+            .flatten()
             .chain(direct_static_steps(direct.non_capacity, &titles, false)?)
             .chain(direct_static_steps(direct.covered, &titles, true)?),
     );
@@ -1185,9 +1194,14 @@ fn kernel_candidate_body(
             .schedule
             .steps
             .iter()
-            .map(|task| restored_task_body(task, titles, request, direct.carriers))
+            .map(|task| {
+                restored_task_body(task, titles, request, direct.carriers).and_then(|step| {
+                    expand_segment(step, direct.compiled.get(&task.task_id), titles, request)
+                })
+            })
             .collect::<Result<Vec<_>>>()?
             .into_iter()
+            .flatten()
             .chain(direct_static_steps(direct.non_capacity, titles, false)?)
             .chain(direct_static_steps(direct.covered, titles, true)?),
     );
@@ -2421,7 +2435,6 @@ struct DirectPlacements<'a> {
     non_capacity: &'a [TaskSpecBody],
     covered: &'a [TaskSpecBody],
     carriers: &'a HashMap<String, TimeWindowBody>,
-    #[allow(dead_code)] // Used by expansion in section D.
     compiled: &'a HashMap<String, CompiledSegment>,
 }
 fn restored_task_body(
@@ -2894,4 +2907,68 @@ fn compile_segments(
             .collect();
     }
     compiled
+}
+
+fn expand_segment(
+    step: ScheduledTaskBody,
+    segment: Option<&CompiledSegment>,
+    titles: &HashMap<String, TaskDisplay>,
+    _request: &PlanningRequestBody,
+) -> Result<Vec<ScheduledTaskBody>> {
+    let Some(segment) = segment else {
+        return Ok(vec![step]);
+    };
+    let mut cursor = step.start;
+    let mut result = Vec::new();
+    for (index, (member, seconds)) in segment
+        .members
+        .iter()
+        .zip(&segment.placement_seconds)
+        .enumerate()
+    {
+        let end = cursor
+            .checked_add(*seconds)
+            .ok_or_else(|| AppError::Internal("segment expansion overflow".into()))?;
+        let display = titles.get(&member.id);
+        let mut child = step.clone();
+        child.task_id = member.id.clone();
+        child.summary = display.map_or_else(|| member.id.clone(), |d| d.title.clone());
+        child.category_tag = display.and_then(|d| d.category_tag.clone());
+        child.occupies_capacity = display.is_none_or(|d| d.occupies_capacity);
+        child.start = cursor;
+        child.end = end;
+        child.start_at = crate::planning_time::timestamp_at(cursor)?;
+        child.end_at = crate::planning_time::timestamp_at(end)?;
+        child.depends_on = if index == 0 {
+            step.depends_on.clone()
+        } else {
+            vec![segment.members[index - 1].id.clone()]
+        };
+        result.push(child);
+        cursor = end;
+    }
+    // Both Fixed.seconds and stochastic.mode sum exactly. Drift is a bug.
+    assert_eq!(
+        cursor, step.end,
+        "compiled segment expansion must end exactly at its carrier end"
+    );
+    Ok(result)
+}
+
+fn expand_unplaced(
+    entries: Vec<UnplacedTaskBody>,
+    compiled: &HashMap<String, CompiledSegment>,
+    titles: &HashMap<String, TaskDisplay>,
+) -> Vec<UnplacedTaskBody> {
+    entries.into_iter().flat_map(|entry| {
+        let Some(segment)=compiled.get(&entry.task_id) else {return vec![entry];};
+        let span=segment.placement_seconds.iter().sum::<u64>();
+        segment.members.iter().map(|member| {
+            let mut child=entry.clone();
+            child.task_id=member.id.clone();
+            child.summary=titles.get(&member.id).map_or_else(|| member.id.clone(),|d|d.title.clone());
+            child.explanation=format!("Container `{}` segment {} needs {span} contiguous seconds: {}. Add a split point to allow separate placement.",segment.container_id,segment.segment_index,entry.explanation);
+            child
+        }).collect::<Vec<_>>()
+    }).collect()
 }
