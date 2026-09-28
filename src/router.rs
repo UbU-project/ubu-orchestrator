@@ -17,17 +17,40 @@ command bridge.
 */
 pub fn build_router(state: AppState) -> Router {
     Router::new()
+        .route("/containers", get(api::container::list))
+        .route("/container/:container_id/undo", post(api::container::undo))
         .route("/routines", get(api::routines::summaries))
-        .route("/routine/:objective_id/override/:local_date", axum::routing::put(api::routine_override::set).delete(api::routine_override::clear))
+        .route(
+            "/routine/:objective_id/override/:local_date",
+            axum::routing::put(api::routine_override::set).delete(api::routine_override::clear),
+        )
         .route("/health", get(api::health::health))
-        .route("/desktop/session/google-calendar", post(api::desktop::google_calendar))
+        .route(
+            "/desktop/session/google-calendar",
+            post(api::desktop::google_calendar),
+        )
         .route("/import/quick-ubu", post(api::quick_ubu::import_quick_ubu))
         .route("/advisory/queue", get(api::advisory::queue))
-        .route("/advisory/candidate/:candidate_id", get(api::advisory::candidate))
-        .route("/advisory/candidate/:candidate_id/admit", post(api::advisory::admit))
-        .route("/advisory/candidate/:candidate_id/reject", post(api::advisory::reject))
-        .route("/advisory/candidate/:candidate_id/defer", post(api::advisory::defer))
-        .route("/advisory/candidate/:candidate_id/resurface", post(api::advisory::resurface))
+        .route(
+            "/advisory/candidate/:candidate_id",
+            get(api::advisory::candidate),
+        )
+        .route(
+            "/advisory/candidate/:candidate_id/admit",
+            post(api::advisory::admit),
+        )
+        .route(
+            "/advisory/candidate/:candidate_id/reject",
+            post(api::advisory::reject),
+        )
+        .route(
+            "/advisory/candidate/:candidate_id/defer",
+            post(api::advisory::defer),
+        )
+        .route(
+            "/advisory/candidate/:candidate_id/resurface",
+            post(api::advisory::resurface),
+        )
         .route("/bootstrap/start", post(api::bootstrap::start))
         .route("/bootstrap/answer", post(api::bootstrap::answer))
         .route("/bootstrap/seed", post(api::bootstrap::seed))
@@ -46,7 +69,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/next-action", get(api::next_action::next_action))
         .route("/preference", post(api::preference::create))
         .route("/preferences", get(api::preference::list))
-        .route("/preference/:preference_id", axum::routing::patch(api::preference::set_enabled).delete(api::preference::delete))
+        .route(
+            "/preference/:preference_id",
+            axum::routing::patch(api::preference::set_enabled).delete(api::preference::delete),
+        )
         .route("/task", post(api::task::capture))
         .route("/task/:task_id", axum::routing::patch(api::task::edit))
         .route("/task/:task_id/start", post(api::user_action::start))
@@ -62,11 +88,26 @@ pub fn build_router(state: AppState) -> Router {
             post(api::user_action::decompose),
         )
         .route("/projection/preview", post(api::projection::preview))
-        .route("/projection/calendar/preview", get(api::calendar_projection::preview))
-        .route("/projection/calendar/capture", post(api::calendar_capture::capture))
-        .route("/projection/calendar/reconcile", post(api::calendar_reconciliation::reconcile))
-        .route("/projection/calendar/reconcile/:reconciliation_id/repair", post(api::calendar_reconciliation::repair))
-        .route("/projection/calendar/approve", post(api::calendar_projection::approve))
+        .route(
+            "/projection/calendar/preview",
+            get(api::calendar_projection::preview),
+        )
+        .route(
+            "/projection/calendar/capture",
+            post(api::calendar_capture::capture),
+        )
+        .route(
+            "/projection/calendar/reconcile",
+            post(api::calendar_reconciliation::reconcile),
+        )
+        .route(
+            "/projection/calendar/reconcile/:reconciliation_id/repair",
+            post(api::calendar_reconciliation::repair),
+        )
+        .route(
+            "/projection/calendar/approve",
+            post(api::calendar_projection::approve),
+        )
         .route("/projection/approve", post(api::projection::approve))
         .route("/projection/reconcile", post(api::projection::reconcile))
         .route(

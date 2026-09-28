@@ -188,15 +188,15 @@ pub async fn reject(
     post,
     path = "/task/{task_id}/decompose",
     params(("task_id" = String, Path)),
-    request_body = UserActionRequest,
-    responses((status = 200, body = LogEntryResponse))
+    request_body = crate::api::container::DecomposeRequest,
+    responses((status = 200, body = crate::api::container::DecomposeResponse))
 )]
 pub async fn decompose(
     State(state): State<AppState>,
     Path(task_id): Path<String>,
-    Json(request): Json<UserActionRequest>,
-) -> Result<Json<LogEntryResponse>> {
+    Json(request): Json<crate::api::container::DecomposeRequest>,
+) -> Result<Json<crate::api::container::DecomposeResponse>> {
     Ok(Json(
-        log_service::append_action(state, task_id, TaskActionKind::Decompose, request).await?,
+        crate::services::decomposition::decompose(&state, &task_id, request).await?,
     ))
 }

@@ -651,12 +651,25 @@ async fn f9_wide_horizons_legacy_guards_and_read_only_rollups() {
         .unwrap()
         .contains(&occurrence(&state, 109).await.id));
     let one = occurrence(&state, 101).await.id;
-    for verb in ["start", "done", "snooze", "reject", "decompose"] {
+    for verb in ["start", "done", "snooze", "reject"] {
         let (status, error) =
             request(&state, "POST", &format!("/task/{one}/{verb}"), json!({})).await;
         assert_eq!(status, 400);
         assert_eq!(error["diagnostics"][0]["code"], "use_recorded_action");
     }
+    let (status, error) = request(
+        &state,
+        "POST",
+        &format!("/task/{one}/decompose"),
+        json!({"schema_version":"ubu.orchestrator.container.v1","expected_version":1,
+            "children":[{"title":"First"},{"title":"Second"}]}),
+    )
+    .await;
+    assert_eq!(status, 400);
+    assert_eq!(
+        error["diagnostics"][0]["code"],
+        "decompose_routine_occurrence_unsupported"
+    );
     let before: i64 = sqlx::query_scalar("SELECT count(*) FROM mutation_envelopes")
         .fetch_one(state.inner().store.pool())
         .await
