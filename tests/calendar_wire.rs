@@ -117,7 +117,7 @@ fn realistic_google_response_round_trips_and_required_fields_are_strict() {
         assert!(parse_event(&malformed).is_err(), "{field}");
     }
     for (field, invalid) in [
-        ("id", json!("bad/id")),
+        ("id", json!(42)),
         ("summary", json!(null)),
         ("start", json!({"date":"2026-09-25"})),
         ("end", json!({"dateTime":"not a time"})),
@@ -164,7 +164,7 @@ fn event_list_skips_only_the_malformed_entry_and_paginates_safely() {
     );
     assert_eq!(
         messages,
-        vec!["list event `*` entry 1: invalid start.dateTime"]
+        vec!["list event `0123456789abcdef0123456789abcdef` entry 1: invalid start.dateTime"]
     );
     assert_eq!(parse_event_list(&json!({"items":[]})), (vec![], vec![]));
     assert_eq!(parse_event_list(&json!({"items":false})).1.len(), 1);

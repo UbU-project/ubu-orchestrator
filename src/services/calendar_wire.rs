@@ -3,7 +3,7 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeSet;
 
-use super::calendar_projection::{external_id, DesiredEvent};
+use super::calendar_projection::DesiredEvent;
 
 pub const CALENDAR_SCOPE: &str = "https://www.googleapis.com/auth/calendar";
 pub const CALENDAR_API_BASE: &str = "https://www.googleapis.com/calendar/v3/calendars";
@@ -83,9 +83,6 @@ pub fn parse_event(value: &Value) -> Result<DesiredEvent, String> {
     }
     let id = required_string(value, "id")?;
     let task_id = format!("task_{id}");
-    if external_id(&task_id).as_deref() != Some(id) {
-        return Err("event id cannot map to a Task".into());
-    }
     let summary = required_string(value, "summary")?;
     if value["start"].get("date").is_some() && value["start"].get("dateTime").is_none() {
         return Err("all-day event has no dateTime".into());
@@ -159,8 +156,11 @@ pub fn parse_event_list(value: &Value) -> (Vec<DesiredEvent>, Vec<String>) {
     for (index, item) in items.iter().enumerate() {
         match parse_event(item) {
             Ok(event) => events.push(event),
-            // Do not echo untrusted response content into diagnostics.
-            Err(message) => messages.push(format!("list event `*` entry {index}: {message}")),
+            // Identify the entry by index and readable handle, never by its title or content.
+            Err(message) => {
+                let id = item.get("id").and_then(Value::as_str).unwrap_or("*");
+                messages.push(format!("list event `{id}` entry {index}: {message}"));
+            }
         }
     }
     (events, messages)
