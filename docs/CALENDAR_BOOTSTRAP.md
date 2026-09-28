@@ -102,10 +102,10 @@ calendar commitment was meant to be Dynamic work.
 
 ## What a calendar cannot carry
 
-Recurrence does not survive this capture path. A weekly routine represented by
-N observed occurrences becomes **N one-off Static Tasks**, not a Routine. Reauthor
-routines natively using P1B-38's Objective/routine endpoints; there is still no
-Routines screen. This does not invent a new recurrence importer.
+Recurring instances are **not imported**. They are observed and deliberately
+refused because their source IDs cannot be owned by this capture path, as detailed
+below. Reauthor routines natively using the Routines screen or the existing
+Objective/routine endpoints. This does not invent a recurrence importer.
 
 Preferences, dependencies, bounded `after` relations, and `establishes`/`requires`
 also do not survive: none exists on the captured calendar event. Reauthor these
@@ -114,3 +114,59 @@ the semantics of the abandoned Quick UbU snapshot.
 
 The palette review cannot recover those relationships. It determines categories
 only, with the diagnostic and ownership limits above.
+
+## Recurring instances: observe, name, refuse
+
+Google's [event resource](https://developers.google.com/workspace/calendar/api/v3/reference/events)
+requires client-supplied IDs to use lowercase base32hex (`a`–`v`, `0`–`9`),
+5–1024 characters. Expanded recurring instances have a different shape:
+`{recurringEventId}_{originalStartTime}`, for example the invented
+`abc123def456ghij_20260928T163000Z`. Google's
+[recurring-events example](https://gsuite-developers.googleblog.com/2011/12/calendar-v3-best-practices-recurring.html)
+illustrates the underscore and UTC timestamp suffix. UbU treats observed IDs as
+opaque handles; it does not depend on this example being an exhaustive grammar.
+
+Before P1B-44, observation incorrectly applied the client-supplied ID rule to
+returned event IDs. It dropped recurring instances before reading their windows,
+colours or summaries. Observation now sees every event its existing timed-event
+model can represent; ownership decides what UbU may claim. Missing required
+fields, invalid timestamps, cancelled items and unsupported all-day events still
+follow their existing refusals. Listing diagnostics identify the entry index and
+readable event ID, never its title or other item content.
+
+A recurring instance is observed as `foreign`, but capture refuses to turn its ID
+into a Task source handle. The reason in `calendar_projection.rs` remains:
+
+> Captured ids must validate on their own; deriving a fallback would duplicate the meeting.
+
+A replacement ID would lose the identity needed to project back onto the source
+meeting. Capture therefore admits no Task and writes no ownership record for a
+refused instance. Reconciliation after capture still sees it as foreign. Neither
+foreign group is repairable. Importing recurrence properly is later work and needs
+its own design.
+
+| Refusal | Meaning | Operator action |
+| --- | --- | --- |
+| `capture_event_not_ownable` | The named event ID cannot be a UbU Task handle. | Keep managing this source in Calendar; account for its time manually. Recurring import is not available. Do not substitute an ID to force capture. |
+| `capture_event_invalid` | An empty title or unusable concrete window prevents Task admission. | Correct the title or timed window at its source, then retry capture. |
+| `capture_all_day_unsupported` | An all-day item has no supported concrete `dateTime` window. | Keep it outside capture, or explicitly change it to a timed commitment if that reflects its actual meaning. |
+
+Malformed wire items instead produce `calendar_event_skipped`. Use its index and
+ID to locate and correct the source where appropriate; cancelled items are
+intentionally not imported.
+
+**An uncaptured commitment occupies no capacity. The planner may place work over
+it.** The Calendar reconcile view separates `foreign` from `foreign, cannot be
+captured`, reports the latter's count inside the current planning horizon, and
+warns that **UbU cannot see them when planning**. This is a report of the planning
+gap, not a capacity reservation. The count covers represented, unownable foreign
+instances in that observation; it cannot count all-day or malformed items dropped
+by the wire parser. Capture and reconcile show the exact same backend refusal.
+
+For operator acceptance, add a recurring series in the dummy account and run
+**reconcile before capture**. Check the refusal group, its reason and horizon
+count. Capture must refuse those instances while continuing to capture ordinary
+timed events. Reconcile again: the refused instances must remain foreign without
+duplicates. Also create an ordinary event by hand and reconcile before capturing
+it: it belongs in plain foreign, without a repair control. Capture claims ordinary
+foreign events immediately, so reversing this order hides that classification.
