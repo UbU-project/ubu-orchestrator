@@ -442,3 +442,45 @@ async fn vanished_source_is_reported_by_reconcile_without_deleting_task() {
         1
     );
 }
+
+#[tokio::test]
+async fn unmapped_foreign_colour_is_advisory_and_still_captured() {
+    let mut foreign = companion();
+    foreign.external_id = "ccccc".into();
+    foreign.task_id = "task_ccccc".into();
+    foreign.summary = "Synthetic unmapped-colour appointment".into();
+    foreign.color_id = Some("99".into());
+    let (state, recorder) = setup(vec![foreign]).await;
+    let response = capture(&state).await;
+    assert_eq!(response["captured"], 1);
+    assert_eq!(response["skipped"], 0);
+    assert_eq!(response["diagnostics"], json!([{"code":"capture_colour_unmapped","message":"Calendar event `ccccc` has unmapped colour `99`; no category assigned; map that colour in Settings to assign a category"}]));
+    let rows = tasks(&state).await;
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].get("category_tag").is_none());
+    assert_eq!(rows[0]["static_window"], json!({"start":"2026-09-25T12:00:00Z","end":"2026-09-25T12:30:00Z"}));
+    assert_eq!(rows[0]["occupies_capacity"], true);
+    assert_eq!(recorder.recorded_calls(), vec![RecordedCalendarCall::ListEvents]);
+    println!("EVIDENCE[P1B42_test10]={}", json!({"response":response,"captured_task":rows[0]}));
+}
+
+#[tokio::test]
+async fn absent_foreign_colour_is_advisory_and_still_captured() {
+    let mut foreign = companion();
+    foreign.external_id = "ddddd".into();
+    foreign.task_id = "task_ddddd".into();
+    foreign.summary = "Synthetic uncoloured appointment".into();
+    foreign.color_id = None;
+    let (state, recorder) = setup(vec![foreign]).await;
+    let response = capture(&state).await;
+    assert_eq!(response["captured"], 1);
+    assert_eq!(response["skipped"], 0);
+    assert_eq!(response["diagnostics"], json!([{"code":"capture_colour_absent","message":"Calendar event `ddddd` has no colour; no category assigned"}]));
+    let rows = tasks(&state).await;
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].get("category_tag").is_none());
+    assert_eq!(rows[0]["static_window"], json!({"start":"2026-09-25T12:00:00Z","end":"2026-09-25T12:30:00Z"}));
+    assert_eq!(rows[0]["occupies_capacity"], true);
+    assert_eq!(recorder.recorded_calls(), vec![RecordedCalendarCall::ListEvents]);
+    println!("EVIDENCE[P1B42_test11]={}", json!({"response":response,"captured_task":rows[0]}));
+}
