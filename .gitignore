@@ -1,2 +1,9 @@
 /target
 .cargo/config.toml
+
+# Default local runtime state (never source or fixtures).
+/ubu-orchestrator.db
+/ubu-orchestrator.db-shm
+/ubu-orchestrator.db-wal
+/ubu-orchestrator.db-journal
+/ubu-device-registration.json
