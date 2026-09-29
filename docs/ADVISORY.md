@@ -19,7 +19,9 @@ in Setup. Nothing polls, schedules runs or invokes a model on app startup.
 Both `advisory.model` and `advisory.endpoint` are non-empty string Settings under
 UBU-D0287. `GET /settings` includes an `advisory` array with `value` and `origin`
 (`setting` or `unconfigured`) for both names. Save uses `PUT /setting/{name}`;
-Revert uses `DELETE /setting/{name}`. There are no built-in advisory defaults.
+Revert uses `DELETE /setting/{name}`. Neither has a built-in default. From
+P1B-46 a third Setting, `advisory.timeout_ms`, sets the budget and does have a
+default; see [the three advisory Settings](#the-three-advisory-settings).
 Other unknown names still produce `setting_unknown_name`.
 
 The endpoint must be exactly `http://127.0.0.1:<port>`, with port 1–65535.
@@ -48,7 +50,9 @@ An absent Setting returns HTTP 200 with `advisory_unconfigured` naming it and
 performs no selection or model call. Connection, timeout, HTTP status, size and
 malformed-result failures return failed-result diagnostics with no candidates,
 not HTTP 500. Invalid request version, producer or limit is a request rejection.
-No raw HTTP error body is returned or logged by the transport.
+No raw HTTP error body is returned or logged by the transport. From P1B-46 one
+field of a refusal, the server's own `error` string, is echoed bounded; see
+[what a failure says](#what-a-failure-says).
 
 ## Exactly what is sent
 
@@ -60,8 +64,8 @@ submission payload is an array, for example this synthetic fixture:
 ```
 
 This array becomes the JSON string in Ollama's `prompt`. The HTTP body also
-contains the configured `model` name, `stream: false`, fixed system instructions
-and a fixed JSON output schema in `format`. It never serializes the submission
+contains the configured `model` name, `stream: false`, `think: false` (from
+P1B-46), fixed system instructions and a fixed JSON output schema in `format`. It never serializes the submission
 envelope into the prompt. No Task provenance, compartments, objective refs,
 evidence, notes, time windows, Settings other than model name, device identity,
 authority grants, digests or causal parents are sent. The endpoint is literal
@@ -87,9 +91,10 @@ Task reference, local evidence ref `<task-id>:title`, and the configured model
 name as proposing actor. None of those additional candidate metadata are sent
 back to the model.
 
-The submission permits only Tag proposals and diagnostics. Timeout is 120 seconds
-and result size is bounded at 256 KiB, both while receiving bytes and after
-expanding candidate metadata. Declared `ComputeBudget` is 120,000 CPU milliseconds
+The submission permits only Tag proposals and diagnostics. Timeout is
+`advisory.timeout_ms`, 120 seconds unless set, and result size is bounded at
+256 KiB, both while receiving bytes and after expanding candidate metadata.
+Declared `ComputeBudget` is the same number of CPU milliseconds as the timeout,
 and 512 MiB. These fields do not impose a CPU/RAM quota on the separately running
 Ollama process. No runtime compiler or model concurrency/memory caps were added.
 
@@ -126,6 +131,148 @@ export. Test states have no transport factory or fallback. Tests inject a stub
 implementing the existing trait, exercise the pure wire policy, and structurally
 check that the live implementation cannot be constructed through test wiring.
 
+## The three advisory Settings
+
+| Name | Value | Validation | When absent |
+|---|---|---|---|
+| `advisory.model` | string | Non-empty. Refused with `setting_invalid_advisory`. | No default. A run reports `advisory_unconfigured`. |
+| `advisory.endpoint` | string | Exactly `http://127.0.0.1:<port>`. Refused with `setting_invalid_advisory_endpoint`. | No default. A run reports `advisory_unconfigured`. |
+| `advisory.timeout_ms` | integer | From 5,000 to 3,600,000 inclusive. Refused with `setting_invalid_advisory_timeout`, which names the bounds. | **120,000.** |
+
+`advisory.timeout_ms` is the budget for one whole run, in milliseconds. It
+exists because two minutes is not enough on the machine UbU is built for: a
+model with a large context window can need swap to process even a modest
+prompt, so its first token can be minutes away.
+
+- **The floor is five seconds and the ceiling is one hour.** A zero would make
+  every run fail at once. No ceiling would let one run hold the advisory path
+  indefinitely.
+- **It must be a JSON integer.** `60000.5`, `"60000"`, `true` and `null` are
+  refused. Nothing is admitted on a refusal.
+- **`max_cpu_ms` is the same value.** The two describe the same run, so there
+  is one knob. `max_memory_bytes` stays 512 MiB.
+- **`GET /settings` reports it** as the third entry of `advisory`, with
+  `origin` `setting` or `default`. Its `value` is the number of milliseconds
+  as a string, such as `"120000"`, because the entry's `value` is a string for
+  all three names. The admitted Setting in `settings` holds the number.
+- **Reverting** with `DELETE /setting/advisory.timeout_ms` returns to the
+  default.
+
+The rejection reads:
+
+```text
+advisory.timeout_ms must be an integer number of milliseconds from 5000 to 3600000
+```
+
+## Why `think: false` is sent
+
+The request body is now:
+
+```json
+{"model": "…", "stream": false, "think": false, "system": "…", "prompt": "…", "format": {…}}
+```
+
+`think: false` is sent on every request. The lesson is Quick UbU's. Its
+working transport, `quick-ubu/ollama-planner/src/lib.rs`, carries the flag
+under this comment:
+
+> `// API equivalent of `ollama run --think=false`. Thinking output is`
+> `// already omitted from the assembled answer (`--hidethinking`).`
+
+Without the flag, a reasoning model generates a thinking block before the
+schema-constrained answer. Mainline sends `stream: false`, so the client waits
+for the whole generation, thinking included. The answer can then be empty,
+with the thinking in the payload. Quick UbU's `completed_answer` reports
+`thinking_present` for exactly that failure. Mainline inherited the endpoint
+and not the lesson.
+
+A non-reasoning model ignores the flag. The advisory path never wants a
+thinking block, because it would discard it.
+
+Nothing else in the body changed: the system prompt, the `format` schema and
+`stream: false` are as P1B-45 left them.
+
+## What a failure says
+
+Three failures have three different remedies. They are kept distinct.
+
+| Code | Means | Change |
+|---|---|---|
+| `advisory_http_failed` | The server answered with a status outside 2xx. | **The model name.** Most often the model has not been pulled. Check `advisory.model`. |
+| `advisory_timeout` | The run did not finish within the budget. | **The budget.** Raise `advisory.timeout_ms`. |
+| `advisory_empty_response` | The server answered 2xx and the answer was empty or whitespace. | **The flag or the model.** With `thinking_present: true` the model thought instead of answering: choose one that honours `think: false`, or a non-reasoning model. With `false`, run again or choose another model. |
+
+`advisory_connection_failed` is a fourth: nothing answered at the endpoint.
+Start the server or correct `advisory.endpoint`.
+
+In every case no candidate is enqueued and the run answers HTTP 200 with the
+diagnostic.
+
+### The server's `error` field is echoed. Generated text never is.
+
+When a refusal carries a JSON body with a string `error` field, that field is
+included in `advisory_http_failed`:
+
+```text
+The local model returned HTTP 404: model 'x' not found; check advisory.model and that the model has been pulled; no candidates were enqueued
+```
+
+It is cut to 200 characters and control characters are removed. When the body
+is not JSON, has no `error`, or `error` is not a non-blank string, the message
+is the generic wording P1B-45 used.
+
+These two kinds of text are different, and the difference is the point:
+
+- **The `error` field** is a short message from a local service the operator
+  configured and pointed the orchestrator at himself. It is read only from a
+  response whose status is outside 2xx. No other field of that body is read.
+- **Generated text** is untrusted content. It is parsed as a proposal or it is
+  refused. It is never copied into a diagnostic, a Log entry or a response.
+
+### An empty answer is a failure
+
+An answer that is present and blank is not a run that found nothing to
+propose. It is reported as `advisory_empty_response` with status
+`malformed_result`.
+
+The diagnostic says whether thinking was present: `thinking_present` is in
+the message, and is a boolean field of the diagnostic in `report`. **Only the
+boolean is reported.** The thinking text is not read into any result,
+diagnostic, Log entry or stored row.
+
+A run whose answer is a valid, empty proposal list is still a success.
+
+## A Dynamic Task's category produces no calendar colour
+
+Admitting a tag proposal sets the Task's `category_tag`. Whether the Calendar
+then shows a colour depends on the Task's placement.
+
+`src/services/planning_service.rs` exports `gcal_color_id` only for a Static
+placement:
+
+```rust
+gcal_color_id: if task.static_anchor {
+    titles
+        .get(&task.task_id)
+        .and_then(|display| display.gcal_color_id.clone())
+} else {
+    None
+},
+```
+
+This is P1B-33's partition, described in
+[Calendar interaction](CALENDAR_INTERACTION.md). On a Static event the colour
+is its category. **On a Dynamic event a colour means done**, so a category
+must not produce one. The category resolves through the palette and placement
+withholds it.
+
+So after admitting a category for a Dynamic Task, `category_tag` is set on
+the Task and the Calendar preview shows no colour. That is correct. Review
+says so beside the proposal, before the decision.
+
+To see a category colour, admit a proposal for a Static Task: a routine
+occurrence, or a Task with a fixed window.
+
 ## Operator acceptance (live local Ollama; not performed by automated tests)
 
 1. In Setup, save the model name and literal loopback endpoint. Try a non-loopback
@@ -148,7 +295,10 @@ Batch would provide unattended scheduling/batching. Each needs its own selection
 authority and disclosure decision. SetModel is configuration, not another screen.
 
 Runs remain manual, payloads remain IDs/titles only, endpoints remain loopback,
-and there is no model installation or management. Rejection suppresses exact
+and there is no model installation or management: whether a configured model
+exists is still discovered when a run fails, though the failure now names it.
+`stream: false` is unchanged, so the operator waits for the whole generation
+with no progress indication. The timeout is one value for all producers. Rejection suppresses exact
 candidates, not patterns. Uncaptured recurring commitments still occupy no
 planning capacity; see the temporary **Busy** blocking-event workaround in
 [Calendar bootstrap](CALENDAR_BOOTSTRAP.md). Calendar export still records no

@@ -8,7 +8,8 @@ pairwise value judgment and never enter Preference layering.
 Native colour authoring uses names `calendar.color.<category>`. Namespaces keep a
 category such as `work` distinct from future configuration with another meaning.
 Category names are case-sensitive. Any nonblank category suffix is allowed; the
-current authoring routes reject other namespaces with `setting_unknown_name`.
+current authoring routes reject other namespaces with `setting_unknown_name`,
+except the three `advisory.` names described in [Advisory](ADVISORY.md).
 Existing admitted Settings from other mechanisms remain readable in the list.
 
 ## HTTP contract
