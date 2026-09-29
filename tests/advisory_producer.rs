@@ -326,8 +326,10 @@ async fn submission_and_wire_request_carry_only_task_ids_and_titles_as_task_data
     assert_eq!(sub.provider_config.model_version, "unspecified");
     assert!(sub.provider_config.prompt_template_digest.is_none());
     let body = wire::request_body(sub).unwrap();
-    assert_eq!(body.as_object().unwrap().len(), 5);
+    // Five fields in P1B-45; P1B-46 added `think`.
+    assert_eq!(body.as_object().unwrap().len(), 6);
     assert_eq!(body["stream"], false);
+    assert_eq!(body["think"], false);
     assert_eq!(
         serde_json::from_str::<Value>(body["prompt"].as_str().unwrap()).unwrap(),
         sub.payload
