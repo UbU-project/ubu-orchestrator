@@ -282,6 +282,24 @@ says so beside the proposal, before the decision.
 To see a category colour, admit a proposal for a Static Task: a routine
 occurrence, or a Task with a fixed window.
 
+## Clarify: the interview
+
+From P1B-48 there is a second producer, `clarify`. It interviews one Task, to
+turn a short capture into something plannable. See
+[the interview](CLARIFY.md) for the whole of it. In short:
+
+- A run proposes **one candidate for one Task**, a set of questions.
+- **Answering it is what admits it.** `POST /advisory/candidate/{id}/answer`
+  writes the questions answered, and the answers, to the Task's `description`.
+  Plain Admit refuses a clarification proposal with
+  `advisory_answer_required`.
+- **The prompt carries the Task's `description`**, which holds the answers
+  already given. This is wider than SuggestTags, which sends ids and titles
+  only. It goes to the operator's own configured loopback model and nowhere
+  else.
+- The three advisory Settings, the timeout, `think: false` and every failure
+  described above apply to `clarify` unchanged.
+
 ## Operator acceptance (live local Ollama; not performed by automated tests)
 
 1. In Setup, save the model name and literal loopback endpoint. Try a non-loopback
@@ -298,9 +316,8 @@ occurrence, or a Task with a fixed window.
 
 ## Later producers and remaining limits
 
-`Advise`, `Clarify` and `Batch` are not implemented. Advise would propose richer
-advice; Clarify would turn uncertain intent into explicit clarification proposals;
-Batch would provide unattended scheduling/batching. Each needs its own selection,
+`Advise` and `Batch` are not implemented. `Clarify` is, from P1B-48. Advise
+would propose richer advice; Batch would provide unattended scheduling/batching. Each needs its own selection,
 authority and disclosure decision. SetModel is configuration, not another screen.
 
 Runs remain manual, payloads remain IDs/titles only, endpoints remain loopback,
