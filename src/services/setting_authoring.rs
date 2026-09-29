@@ -23,19 +23,20 @@ pub async fn settings(pool: &sqlx::SqlitePool) -> Result<Vec<ObjectRecord>> {
 }
 
 fn validate_name(name: &str) -> Result<()> {
+    if matches!(name, "advisory.model" | "advisory.endpoint") { return Ok(()); }
     if !name
         .strip_prefix("calendar.color.")
         .is_some_and(|category| !category.trim().is_empty())
     {
         return Err(AppError::bad_request_diagnostic(
             "setting_unknown_name",
-            "Only calendar.color.<category> Settings can be authored",
+            "Only calendar.color.<category>, advisory.model and advisory.endpoint Settings can be authored",
         ));
     }
     Ok(())
 }
 
-async fn current(state: &AppState, name: &str) -> Result<Option<ObjectRecord>> {
+pub async fn current(state: &AppState, name: &str) -> Result<Option<ObjectRecord>> {
     let rows: Vec<ObjectRecord> = sqlx::query_as("SELECT * FROM objects WHERE object_type='Setting' AND json_extract(payload_json,'$.name')=? ORDER BY id")
         .bind(name).fetch_all(state.inner().store.pool()).await.map_err(internal)?;
     if rows.len() > 1 {
@@ -49,9 +50,31 @@ async fn current(state: &AppState, name: &str) -> Result<Option<ObjectRecord>> {
     Ok(rows.into_iter().next())
 }
 
+/// Accept only a literal loopback HTTP origin with an explicit nonzero port.
+pub fn valid_advisory_endpoint(value: &str) -> bool {
+    value.strip_prefix("http://127.0.0.1:").is_some_and(|port| {
+        !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit())
+            && port.parse::<u16>().is_ok_and(|port| port != 0)
+    })
+}
+
+pub async fn advisory_value(state: &AppState, name: &str) -> Result<Option<String>> {
+    current(state, name).await?.map(|row| {
+        let payload: Value = serde_json::from_str(&row.payload_json).map_err(internal)?;
+        Ok(payload["value"].as_str().filter(|s| !s.trim().is_empty()).map(str::to_owned))
+    }).transpose().map(Option::flatten)
+}
+
 pub async fn put(state: &AppState, name: &str, value: Value) -> Result<(String, i64)> {
     validate_name(name)?;
-    if !value.as_str().is_some_and(valid_color_id) {
+    if name.starts_with("advisory.") {
+        if !value.as_str().is_some_and(|value| !value.trim().is_empty()) {
+            return Err(AppError::bad_request_diagnostic("setting_invalid_advisory", "Advisory Settings must be non-empty strings"));
+        }
+        if name == "advisory.endpoint" && !valid_advisory_endpoint(value.as_str().unwrap()) {
+            return Err(AppError::bad_request_diagnostic("setting_invalid_advisory_endpoint", "advisory.endpoint must be http://127.0.0.1:<port>, with no path, credentials, query or fragment"));
+        }
+    } else if !value.as_str().is_some_and(valid_color_id) {
         return Err(AppError::bad_request_diagnostic(
             "setting_invalid_color",
             format!(
@@ -134,10 +157,18 @@ pub async fn list(state: &AppState) -> Result<crate::api::setting::SettingsRespo
             })
         })
         .collect::<Result<Vec<_>>>()?;
+    let mut advisory = Vec::new();
+    for name in ["advisory.model", "advisory.endpoint"] {
+        let value = advisory_value(state, name).await?;
+        advisory.push(crate::api::setting::AdvisorySettingEntry {
+            name: name.into(), origin: if value.is_some() { "setting" } else { "unconfigured" }.into(), value,
+        });
+    }
     Ok(crate::api::setting::SettingsResponse {
         schema_version: crate::api::setting::SETTING_SCHEMA_VERSION.into(),
         settings,
         palette: palette.entries(),
         inverse: palette.inverse_entries(),
+        advisory,
     })
 }

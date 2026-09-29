@@ -68,6 +68,7 @@ use utoipa::OpenApi;
         crate::api::setting::PaletteEntry,
         crate::api::setting::InversePaletteEntry,
         crate::api::setting::SettingsResponse,
+        crate::api::setting::AdvisorySettingEntry,
         crate::api::container::DecomposeRequest,
         crate::api::container::DecomposeResponse,
         crate::api::container::UndoRequest,

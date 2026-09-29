@@ -47,11 +47,18 @@ pub struct InversePaletteEntry {
     pub status: String,
 }
 #[derive(Debug, Serialize, ToSchema)]
+pub struct AdvisorySettingEntry {
+    pub name: String,
+    pub value: Option<String>,
+    pub origin: String,
+}
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SettingsResponse {
     pub schema_version: String,
     pub settings: Vec<SettingSummary>,
     pub palette: Vec<PaletteEntry>,
     pub inverse: Vec<InversePaletteEntry>,
+    pub advisory: Vec<AdvisorySettingEntry>,
 }
 
 #[utoipa::path(get,path="/settings",responses((status=200,body=SettingsResponse)))]
