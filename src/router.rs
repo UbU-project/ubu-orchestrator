@@ -43,6 +43,10 @@ pub fn build_router(state: AppState) -> Router {
             post(api::advisory::admit),
         )
         .route(
+            "/advisory/candidate/:candidate_id/answer",
+            post(api::advisory::answer),
+        )
+        .route(
             "/advisory/candidate/:candidate_id/reject",
             post(api::advisory::reject),
         )

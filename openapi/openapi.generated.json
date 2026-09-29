@@ -96,6 +96,58 @@
         }
       }
     },
+    "/advisory/candidate/{candidate_id}/answer": {
+      "post": {
+        "tags": [
+          "crate::api::advisory"
+        ],
+        "operationId": "answer",
+        "parameters": [
+          {
+            "name": "candidate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnswerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdvisoryAdmitResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          },
+          "422": {
+            "description": ""
+          }
+        }
+      }
+    },
     "/advisory/candidate/{candidate_id}/defer": {
       "post": {
         "tags": [
@@ -2044,16 +2096,25 @@
               "integer",
               "null"
             ],
+            "description": "`suggest_tags` only: how many Tasks to select.",
             "minimum": 0
           },
           "producer": {
-            "type": "string"
+            "type": "string",
+            "description": "`suggest_tags` or `clarify`."
           },
           "schema_version": {
             "type": [
               "string",
               "null"
             ]
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`clarify` only: the Task to interview. Omitted, the first Task with no description."
           }
         },
         "additionalProperties": false
@@ -2247,6 +2308,31 @@
             "format": "double"
           }
         }
+      },
+      "AnswerRequest": {
+        "type": "object",
+        "description": "The operator's answers, by question id. Answering is what admits a clarification proposal.",
+        "required": [
+          "observed_version",
+          "answers"
+        ],
+        "properties": {
+          "answers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "observed_version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
       },
       "AttentionPreference": {
         "type": "string",

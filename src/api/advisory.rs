@@ -113,6 +113,14 @@ pub struct ResurfaceRequest {
     pub trigger: ubu_core::ResurfaceTrigger,
 }
 
+/// The operator's answers, by question id. Answering is what admits a clarification proposal.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AnswerRequest {
+    pub observed_version: u64,
+    pub answers: std::collections::BTreeMap<String, String>,
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct AdvisoryAdmitResponse {
     pub state_category: String,
@@ -177,6 +185,31 @@ pub async fn admit(
         advisory_service::admit_candidate(&state, &parse_id(&id)?, request.observed_version)
             .await
             .map_err(review_error)?;
+    let candidate = candidate_response(candidate.payload_json)?;
+    Ok(Json(AdvisoryAdmitResponse {
+        state_category: candidate.state_category,
+        candidate: candidate.candidate,
+        task: serde_json::from_str(&task.payload_json)
+            .map_err(|e| AppError::Internal(e.to_string()))?,
+    }))
+}
+
+#[utoipa::path(post, path = "/advisory/candidate/{candidate_id}/answer",
+    params(("candidate_id" = String, Path)), request_body = AnswerRequest,
+    responses((status = 200, body = AdvisoryAdmitResponse), (status = 400), (status = 404), (status = 409), (status = 422)))]
+pub async fn answer(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<AnswerRequest>,
+) -> Result<Json<AdvisoryAdmitResponse>> {
+    let (candidate, task) = advisory_service::answer_candidate(
+        &state,
+        &parse_id(&id)?,
+        request.observed_version,
+        &request.answers,
+    )
+    .await
+    .map_err(review_error)?;
     let candidate = candidate_response(candidate.payload_json)?;
     Ok(Json(AdvisoryAdmitResponse {
         state_category: candidate.state_category,

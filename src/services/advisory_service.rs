@@ -15,7 +15,7 @@ use ubu_store::candidates::store_advisory_candidate;
 use ubu_store::models::object_record::{NewObjectRecord, ObjectRecord};
 
 use crate::errors::{AppError, Result};
-use crate::services::proposal_applier::{apply_proposal, proposal_target};
+use crate::services::proposal_applier::{apply_clarification, apply_proposal, proposal_target};
 use crate::state::AppState;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -146,6 +146,29 @@ async fn prepare_admission(
     id: &AdvisoryCandidateId,
     observed_version: u64,
 ) -> Result<PreparedAdmission> {
+    prepare(state, id, observed_version, apply_proposal).await
+}
+
+/// Answering is admitting: the same read, the same envelope and the same atomic
+/// writer, with the operator's answers applied in place of the proposal's own change.
+async fn prepare_answer(
+    state: &AppState,
+    id: &AdvisoryCandidateId,
+    observed_version: u64,
+    answers: &std::collections::BTreeMap<String, String>,
+) -> Result<PreparedAdmission> {
+    prepare(state, id, observed_version, |candidate, target| {
+        apply_clarification(candidate, target, answers)
+    })
+    .await
+}
+
+async fn prepare(
+    state: &AppState,
+    id: &AdvisoryCandidateId,
+    observed_version: u64,
+    apply: impl FnOnce(&ubu_core::AdvisoryCandidate, &ObjectRecord) -> Result<NewObjectRecord>,
+) -> Result<PreparedAdmission> {
     let candidate = reviewed_candidate(state, id, observed_version).await?;
     let target_ref = proposal_target(&candidate)?;
     let target =
@@ -154,7 +177,7 @@ async fn prepare_admission(
             .ok_or_else(|| AppError::TargetNotFound {
                 id: target_ref.id.to_string(),
             })?;
-    let mut record = apply_proposal(&candidate, &target)?;
+    let mut record = apply(&candidate, &target)?;
     let version = u64::try_from(target.version)
         .map_err(|_| AppError::Internal("target has an invalid store version".into()))?;
     let envelope = state.envelope_for(
@@ -192,6 +215,18 @@ pub async fn admit_candidate(
     observed_version: u64,
 ) -> Result<(CandidateRecord, ObjectRecord)> {
     prepare_admission(state, id, observed_version)
+        .await?
+        .commit(state, id, observed_version)
+        .await
+}
+
+pub async fn answer_candidate(
+    state: &AppState,
+    id: &AdvisoryCandidateId,
+    observed_version: u64,
+    answers: &std::collections::BTreeMap<String, String>,
+) -> Result<(CandidateRecord, ObjectRecord)> {
+    prepare_answer(state, id, observed_version, answers)
         .await?
         .commit(state, id, observed_version)
         .await
@@ -337,6 +372,87 @@ mod review_tests {
                 .unwrap(),
             Some(current)
         );
+        let candidate = get_advisory_candidate(state.inner().store.pool(), id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (candidate.lifecycle_state.as_str(), candidate.version),
+            ("proposed", 1)
+        );
+        assert!(ubu_store::api::review::list_candidate_decision_events(
+            state.inner().store.pool(),
+            id
+        )
+        .await
+        .unwrap()
+        .is_empty());
+        let ledger_after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mutation_envelopes")
+            .fetch_one(state.inner().store.pool())
+            .await
+            .unwrap();
+        assert_eq!(ledger_after, ledger_before);
+    }
+    #[tokio::test]
+    async fn concurrent_target_change_after_read_fails_without_partially_admitting_an_answer() {
+        let state = state().await;
+        let original = seed_task(&state, vec![]).await;
+        let mut candidate = proposal();
+        candidate.candidate_kind = ubu_core::CandidateKind::ClarificationQuestion;
+        candidate.confidence = None;
+        candidate.normalized_proposal = json!({"operation":"answer_questions","round":1,"questions":[
+            {"id":"q1","text":"Is the synthetic review target urgent?","kind":"YesNo"}
+        ]});
+        ingest(&state, candidate.clone()).await;
+        let id = &candidate.advisory_candidate_id;
+        let answers = [("q1".to_owned(), "y".to_owned())].into_iter().collect();
+        let prepared = prepare_answer(&state, id, 1, &answers).await.unwrap();
+        // The answer observes the Task at exactly the version it was read at.
+        assert_eq!(
+            prepared
+                .envelope
+                .observed_versions
+                .get(&candidate.target_refs[0].id),
+            Some(&VersionRef::Version(1))
+        );
+        assert_eq!(
+            prepared.record.payload["description"],
+            "Q: Is the synthetic review target urgent?\nA: y\n"
+        );
+
+        // Between the read and the write, the Task is edited elsewhere.
+        let envelope = state
+            .envelope_for(
+                [(candidate.target_refs[0].id.clone(), VersionRef::Version(1))]
+                    .into_iter()
+                    .collect(),
+                AuthoritySource::User,
+                UbuTimestamp::now_utc(),
+            )
+            .unwrap();
+        let mut changed = prepared.record.clone();
+        changed.payload = serde_json::from_str(&original.payload_json).unwrap();
+        changed.payload["title"] = json!("Changed concurrently");
+        let current =
+            ubu_store::api::admission::admit_object(state.inner().store.pool(), &envelope, changed)
+                .await
+                .unwrap();
+        let ledger_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mutation_envelopes")
+            .fetch_one(state.inner().store.pool())
+            .await
+            .unwrap();
+
+        let error = prepared.commit(&state, id, 1).await.unwrap_err();
+        assert!(
+            matches!(error, AppError::Store(ubu_store::StoreError::PreconditionFailed { ref object_id, .. }) if object_id == &original.id)
+        );
+        // The Task is as the concurrent edit left it, with no description written.
+        let stored =
+            ubu_store::queries::get_current_state(state.inner().store.pool(), &original.id)
+                .await
+                .unwrap();
+        assert_eq!(stored, Some(current));
+        assert!(!stored.unwrap().payload_json.contains("description"));
         let candidate = get_advisory_candidate(state.inner().store.pool(), id)
             .await
             .unwrap()
