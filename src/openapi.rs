@@ -20,6 +20,7 @@ use utoipa::OpenApi;
         crate::api::routines::summaries,
         crate::api::routine_override::set,
         crate::api::routine_override::clear,
+        crate::api::advisory_run::run,
         crate::api::advisory::queue,
         crate::api::advisory::candidate,
         crate::api::advisory::admit,
@@ -62,6 +63,9 @@ use utoipa::OpenApi;
         crate::api::reports::human_complete
     ),
     components(schemas(
+        crate::api::advisory_run::AdvisoryRunRequest,
+        crate::api::advisory_run::AdvisoryRunResponse,
+        crate::services::advisory_wire::SelectedTask,
         crate::api::setting::SettingWriteRequest,
         crate::api::setting::SettingWriteResponse,
         crate::api::setting::SettingSummary,

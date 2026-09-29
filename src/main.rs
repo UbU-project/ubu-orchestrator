@@ -16,6 +16,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_loopback(addr);
 
     let state = AppState::new(config).await?;
+    #[cfg(not(test))]
+    let state = state.with_advisory_transport_factory(std::sync::Arc::new(|endpoint| {
+        std::sync::Arc::new(ollama_transport::OllamaTransport::new(endpoint))
+    }));
     let app = build_router(state);
     let listener = tokio::net::TcpListener::bind(addr).await?;
 

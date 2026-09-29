@@ -13,10 +13,15 @@ use crate::config::{PlannerStrategyChoice, SecretToken, ServerConfig};
 use crate::device_registration::{load_or_register, new_registration, require_registered};
 use crate::errors::StartupError;
 
+// Constructor wiring, not a second transport protocol. Only the executable
+// supplies a live implementation of the existing core AdvisoryTransport trait.
+pub type AdvisoryTransportFactory = dyn Fn(&str) -> Arc<dyn ubu_core::worker::AdvisoryTransport + Send + Sync> + Send + Sync;
+
 #[derive(Clone)]
 pub struct AppState {
     inner: Arc<OrchestratorState>,
     clock: Arc<dyn crate::planning_time::PlanningClock>,
+    advisory_transport_factory: Option<Arc<AdvisoryTransportFactory>>,
     calendar_api: Option<Arc<dyn crate::services::calendar_client::CalendarApi>>,
 }
 
@@ -88,6 +93,7 @@ impl AppState {
         Ok(Self {
             clock: Arc::new(crate::planning_time::SystemClock),
             calendar_api: None,
+            advisory_transport_factory: None,
             inner: Arc::new(OrchestratorState {
                 config,
                 planning_horizon_seconds,
@@ -106,6 +112,15 @@ impl AppState {
                 bootstrap_answers: Mutex::new(Vec::new()),
             }),
         })
+    }
+
+    pub fn with_advisory_transport_factory(mut self, factory: Arc<AdvisoryTransportFactory>) -> Self {
+        self.advisory_transport_factory = Some(factory);
+        self
+    }
+
+    pub fn advisory_transport_factory(&self) -> Option<Arc<AdvisoryTransportFactory>> {
+        self.advisory_transport_factory.clone()
     }
 
     pub fn with_clock(mut self, clock: impl crate::planning_time::PlanningClock + 'static) -> Self {

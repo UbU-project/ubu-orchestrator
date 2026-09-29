@@ -263,6 +263,39 @@
         }
       }
     },
+    "/advisory/run": {
+      "post": {
+        "tags": [
+          "crate::api::advisory_run"
+        ],
+        "operationId": "run",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdvisoryRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdvisoryRunResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": ""
+          }
+        }
+      }
+    },
     "/bootstrap/answer": {
       "post": {
         "tags": [
@@ -1969,7 +2002,9 @@
         "type": "object",
         "required": [
           "state_category",
-          "candidates"
+          "candidates",
+          "deferred_candidates",
+          "target_titles"
         ],
         "properties": {
           "candidates": {
@@ -1978,8 +2013,111 @@
               "$ref": "#/components/schemas/AdvisoryCandidateResponse"
             }
           },
+          "deferred_candidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdvisoryCandidateResponse"
+            }
+          },
           "state_category": {
             "type": "string"
+          },
+          "target_titles": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "AdvisoryRunRequest": {
+        "type": "object",
+        "required": [
+          "producer"
+        ],
+        "properties": {
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "producer": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "AdvisoryRunResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "status",
+          "selected",
+          "candidates_enqueued",
+          "candidate_ids",
+          "diagnostics"
+        ],
+        "properties": {
+          "candidate_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "candidates_enqueued": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DiagnosticBody"
+            }
+          },
+          "report": {},
+          "schema_version": {
+            "type": "string"
+          },
+          "selected": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SelectedTask"
+            }
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "AdvisorySettingEntry": {
+        "type": "object",
+        "required": [
+          "name",
+          "origin"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -5903,6 +6041,22 @@
           }
         }
       },
+      "SelectedTask": {
+        "type": "object",
+        "required": [
+          "id",
+          "title"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "SemiLegitimizationResultBody": {
         "type": "string",
         "enum": [
@@ -6027,9 +6181,16 @@
           "schema_version",
           "settings",
           "palette",
-          "inverse"
+          "inverse",
+          "advisory"
         ],
         "properties": {
+          "advisory": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdvisorySettingEntry"
+            }
+          },
           "inverse": {
             "type": "array",
             "items": {

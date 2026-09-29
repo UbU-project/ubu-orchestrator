@@ -26,3 +26,5 @@ pub mod objective;
 pub mod preference;
 
 pub mod setting;
+
+pub mod advisory_run;

@@ -32,6 +32,7 @@ pub fn build_router(state: AppState) -> Router {
             post(api::desktop::google_calendar),
         )
         .route("/import/quick-ubu", post(api::quick_ubu::import_quick_ubu))
+        .route("/advisory/run", post(api::advisory_run::run))
         .route("/advisory/queue", get(api::advisory::queue))
         .route(
             "/advisory/candidate/:candidate_id",

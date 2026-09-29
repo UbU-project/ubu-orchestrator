@@ -22,6 +22,8 @@ pub struct AdvisoryCandidateResponse {
 pub struct AdvisoryQueueResponse {
     pub state_category: String,
     pub candidates: Vec<AdvisoryCandidateResponse>,
+    pub deferred_candidates: Vec<AdvisoryCandidateResponse>,
+    pub target_titles: std::collections::BTreeMap<String,String>,
 }
 
 fn candidate_response(payload_json: String) -> Result<AdvisoryCandidateResponse> {
@@ -41,13 +43,32 @@ fn candidate_response(payload_json: String) -> Result<AdvisoryCandidateResponse>
 )]
 pub async fn queue(State(state): State<AppState>) -> Result<Json<AdvisoryQueueResponse>> {
     let records = ubu_store::api::review::review_queue(state.inner().store.pool()).await?;
-    let candidates = records
+    let candidates: Vec<_> = records
         .into_iter()
         .map(|record| candidate_response(record.payload_json))
         .collect::<Result<Vec<_>>>()?;
+    // Keep the store's active queue unchanged; expose durable deferrals alongside it.
+    let deferred: Vec<String> = sqlx::query_scalar("SELECT payload_json FROM advisory_candidates WHERE lifecycle_state='deferred' ORDER BY review_order,created_at,advisory_candidate_id")
+        .fetch_all(state.inner().store.pool()).await.map_err(|e|AppError::Internal(e.to_string()))?;
+    let deferred_candidates: Vec<_> = deferred.into_iter().map(candidate_response).collect::<Result<_>>()?;
+    let mut target_titles = std::collections::BTreeMap::new();
+    for entry in candidates.iter().chain(&deferred_candidates) {
+        if let Some(targets) = entry.candidate["target_refs"].as_array() {
+            for target in targets {
+                if let Some(id) = target["id"].as_str() {
+                    if let Some(row) = ubu_store::queries::get_current_state(state.inner().store.pool(),id).await? {
+                        let payload: Value = serde_json::from_str(&row.payload_json).map_err(|e|AppError::Internal(e.to_string()))?;
+                        if let Some(title) = payload["title"].as_str() { target_titles.insert(id.into(),title.into()); }
+                    }
+                }
+            }
+        }
+    }
     Ok(Json(AdvisoryQueueResponse {
         state_category: "candidate_state".to_owned(),
         candidates,
+        deferred_candidates,
+        target_titles,
     }))
 }
 
