@@ -855,3 +855,37 @@ async fn the_live_transport_takes_its_budget_and_its_interpretation_from_tested_
     assert_eq!(count(&state).await, 0);
     println!("P1B46_TEST8=the live transport holds no budget literal, no request field and no interpretation of its own; {} library sources and {} test sources name no transport; a configured in-memory state with a timeout Setting still has no factory", library.len(), tests.len());
 }
+
+// P1B-47: a routine occurrence is rebuilt from its template, so it is never offered a category.
+
+#[tokio::test]
+async fn a_routine_occurrence_is_skipped_and_named_while_an_ordinary_task_is_selected() {
+    let stub = Arc::new(StubTransport::default());
+    let state = ready(stub.clone()).await;
+    // B sorts after A and is an occurrence with no category, exactly what used to qualify.
+    seed(&state, B, "active", None).await;
+    sqlx::query("UPDATE objects SET payload_json=json_set(payload_json,'$.occurrence',json(?)) WHERE id=?")
+        .bind(json!({"routine_objective_id":"obj_018f3c8e9b2a7c4d8f1e2a3b4c5d8e01","local_date":"2026-09-29","key":"obj_018f3c8e9b2a7c4d8f1e2a3b4c5d8e01/s1/2026-09-29T07:00:00/static/t1"}).to_string())
+        .bind(B)
+        .execute(state.inner().store.pool())
+        .await
+        .unwrap();
+    let response = run(&state, None).await;
+    assert_eq!(response["status"], "ok");
+    assert_eq!(
+        response["selected"],
+        json!([{"id":A,"title":"Synthetic lunar teapot 0"}])
+    );
+    assert_eq!(
+        response["diagnostics"],
+        json!([{"code":"suggest_tags_occurrence_skipped","message":format!("Task `{B}` (Synthetic lunar teapot 1) is an occurrence of a routine and was skipped; a routine's category belongs on its template, which the Routines screen edits")}])
+    );
+    // The model was asked about the ordinary Task only, and only it got a candidate.
+    let captured = stub.submissions.lock().unwrap();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0].payload, json!([{"id":A,"title":"Synthetic lunar teapot 0"}]));
+    assert_eq!(response["candidates_enqueued"], 1);
+    assert_eq!(count(&state).await, 1);
+    println!("P1B47_TEST5={}", response["diagnostics"]);
+}
+
