@@ -1,3 +1,6 @@
+#[cfg(not(test))]
+mod ollama_transport;
+
 use std::net::SocketAddr;
 
 use ubu_orchestrator::config::ServerConfig;
