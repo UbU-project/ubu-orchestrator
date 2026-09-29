@@ -152,6 +152,67 @@ pub async fn reopen_calendar_completion(
     Ok(true)
 }
 
+/// Undo of a completion made in the app. It shares the Calendar undo's lock,
+/// transition and decision vocabulary, and carries no `source` marker: this one
+/// did not come from Google. It has no placement restriction, because the
+/// operator is undoing their own click, whatever the Task is.
+///
+/// The completion to undo is named, and must be the Task's latest. Undo of
+/// "whatever the last thing was" is how the wrong thing gets undone.
+///
+/// Effects applied when the Task completed are not reversed, as they never have
+/// been on the Calendar path. Here that is said, rather than left silent.
+pub async fn reopen_completion(
+    state: &AppState,
+    task_id: &str,
+    completion_log_id: &str,
+) -> Result<crate::api::user_action::ReopenResponse> {
+    let _guard = state.inner().task_action_lock.lock().await;
+    let pool = state.inner().store.pool();
+    let mut task = load_task(pool, task_id).await?;
+    if task.status != "completed" {
+        return Err(AppError::conflict_diagnostic(
+            "reopen_not_completed",
+            format!("Task `{task_id}` is {}, not completed; there is no completion to undo", task.status),
+        ));
+    }
+    let Some(completion) = super::calendar_interaction::latest_completion(pool, &task.id).await? else {
+        return Err(AppError::conflict_diagnostic(
+            "reopen_no_completion",
+            format!("Task `{task_id}` is completed but no completion is recorded for it; nothing was undone"),
+        ));
+    };
+    if completion.log_id != completion_log_id {
+        return Err(AppError::conflict_diagnostic(
+            "reopen_stale_completion",
+            format!("`{completion_log_id}` is not the latest completion of Task `{task_id}`; nothing was undone"),
+        ));
+    }
+    let now = state.planning_now();
+    persist_task_transition(state, &mut task, "active", AuthoritySource::User, now).await?;
+    let payload = json!({
+        "schema_version":TASK_ACTION_SCHEMA_VERSION, "action":"reopen", "decision":"task_reopened",
+        "task_status":"active", "transition_applied":true,
+        "completion_log_id":completion_log_id
+    });
+    let log_id = append_task_decision(state, &task, payload, vec![completion_log_id.to_owned()], AuthoritySource::User, now).await?;
+    let mut diagnostics = Vec::new();
+    if task.payload["effects"]["mutations"].as_array().is_some_and(|mutations| !mutations.is_empty()) {
+        diagnostics.push(ActionDiagnostic {
+            code: "reopen_effects_not_reversed".into(),
+            message: "The Task is active again. The effects it applied when it completed were not reversed, and will be applied again if it is completed again".into(),
+        });
+    }
+    Ok(crate::api::user_action::ReopenResponse {
+        schema_version: TASK_ACTION_SCHEMA_VERSION.into(),
+        log_id,
+        task_id: task.id.clone(),
+        completion_log_id: completion_log_id.to_owned(),
+        task_status: task_status_from_wire(&task.status)?,
+        diagnostics,
+    })
+}
+
 /// A Calendar window edit uses the ordinary decision Log vocabulary and source marker.
 pub(super) async fn append_calendar_move(
     state: &AppState,
@@ -487,7 +548,7 @@ async fn apply_completed_effects(
     Ok(Vec::new())
 }
 
-fn validate_schema_version(schema_version: Option<&str>) -> Result<()> {
+pub fn validate_schema_version(schema_version: Option<&str>) -> Result<()> {
     match schema_version {
         Some(TASK_ACTION_SCHEMA_VERSION) => Ok(()),
         Some(other) => Err(AppError::bad_request_diagnostic(

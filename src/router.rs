@@ -97,6 +97,7 @@ pub fn build_router(state: AppState) -> Router {
             "/task/:task_id/action",
             post(api::user_action::record_action),
         )
+        .route("/task/:task_id/reopen", post(api::user_action::reopen))
         .route("/task/:task_id/done", post(api::user_action::done))
         .route("/task/:task_id/snooze", post(api::user_action::snooze))
         .route("/task/:task_id/reject", post(api::user_action::reject))

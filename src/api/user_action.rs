@@ -81,6 +81,27 @@ pub struct RecordedTaskActionResponse {
     pub diagnostics: Vec<ActionDiagnostic>,
 }
 
+/// Undo of a completion, naming the completion it undoes.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReopenRequest {
+    pub schema_version: Option<String>,
+    /// The `log_id` the completion returned. It must be the Task's latest completion.
+    pub completion_log_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct ReopenResponse {
+    pub schema_version: String,
+    /// The reopen decision that was recorded.
+    pub log_id: String,
+    pub task_id: String,
+    pub completion_log_id: String,
+    pub task_status: TaskLifecycleStatus,
+    pub diagnostics: Vec<ActionDiagnostic>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct ActionDiagnostic {
@@ -130,6 +151,24 @@ pub async fn record_action(
 ) -> Result<Json<RecordedTaskActionResponse>> {
     Ok(Json(
         log_service::record_task_action(state, task_id, request).await?,
+    ))
+}
+
+#[utoipa::path(
+    post,
+    path = "/task/{task_id}/reopen",
+    params(("task_id" = String, Path)),
+    request_body = ReopenRequest,
+    responses((status = 200, body = ReopenResponse), (status = 400, description = "Unknown or missing schema version"), (status = 409, description = "Not completed, no completion recorded, or not the latest completion"))
+)]
+pub async fn reopen(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+    Json(request): Json<ReopenRequest>,
+) -> Result<Json<ReopenResponse>> {
+    log_service::validate_schema_version(request.schema_version.as_deref())?;
+    Ok(Json(
+        log_service::reopen_completion(&state, &task_id, &request.completion_log_id).await?,
     ))
 }
 
