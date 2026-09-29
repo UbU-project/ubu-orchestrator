@@ -55,7 +55,9 @@ operations and rejection diagnostics, not by a successful delivery claim.
 enablement. Missing paths return HTTP 503 `calendar_live_export_unconfigured`;
 a disabled session returns HTTP 403 `calendar_live_export_not_enabled`, before
 any client call or delivery record. Live never substitutes the recorder.
-Mock mode uses `RecordingCalendarApi`, seeded from the persisted applied set.
+Mock mode uses `RecordingCalendarApi`, seeded from the persisted applied set, or
+from the fixture named by `UBU_CALENDAR_MOCK_EVENTS` when that is set; see
+[a seed for the mock Calendar](CALENDAR_MOCK_SEED.md).
 Tests can inject a recorder through `AppState::with_calendar_api` to inspect its
 ordered calls and simulate operation failures.
 

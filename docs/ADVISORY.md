@@ -41,7 +41,16 @@ A run request is:
 Omitting `limit` means 5; the accepted range is 1–25. Selection includes active
 Tasks with no `category_tag`, ordered by Task ID. Static and Dynamic Tasks are
 eligible, even if other tags exist. Completed and already-categorized Tasks are
-excluded. The response names every selected ID/title, every created candidate
+excluded.
+
+**Routine occurrences are excluded, from P1B-47.** An occurrence is rebuilt from
+its routine's template at the next materialize, so a category admitted onto one
+would be gone afterwards. Each uncategorised occurrence passed over is reported
+with `suggest_tags_occurrence_skipped`, naming the Task and saying that a
+routine's category belongs on its template, which the Routines screen edits. Up
+to 25 are named one by one; any beyond that are counted in one further
+diagnostic. These come first in the run's diagnostics, before anything the model
+run reported. A skip is not a failure: the run's status is unaffected. The response names every selected ID/title, every created candidate
 ID, the enqueued count, the validated returned proposals in `report`, and any
 diagnostics. A Task may be omitted by the model; a successful empty proposal
 array creates nothing. Repeated identical queued proposals are not duplicated.
