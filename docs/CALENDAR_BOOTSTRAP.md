@@ -163,6 +163,14 @@ gap, not a capacity reservation. The count covers represented, unownable foreign
 instances in that observation; it cannot count all-day or malformed items dropped
 by the wire parser. Capture and reconcile show the exact same backend refusal.
 
+**Temporary operator workaround (remove during the Phase 1b to Phase 2
+transition):** place an ordinary blocking static event over the same span by
+hand, then capture that ownable placeholder so it reserves capacity. The event
+must be **Busy, not Free**: `plan_capture` sets
+`occupies_capacity: !event.transparent`. A Free/transparent placeholder captures
+as non-occupying and the planner can place work straight over it. The recurring
+source remains uncaptured; this workaround does not implement recurrence import.
+
 For operator acceptance, add a recurring series in the dummy account and run
 **reconcile before capture**. Check the refusal group, its reason and horizon
 count. Capture must refuse those instances while continuing to capture ordinary
