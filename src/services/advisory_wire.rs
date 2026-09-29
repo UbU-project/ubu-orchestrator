@@ -74,6 +74,23 @@ fn server_error(bytes: &[u8]) -> Option<String> {
     (!error.is_empty()).then(|| error.to_owned())
 }
 
+/// The request succeeded and the answer is empty. Only whether thinking was
+/// present is reported; its text is never read into a result or a diagnostic.
+fn empty_response(sub: &LocalAdvisorySubmission, thinking_present: bool) -> LocalAdvisoryResult {
+    let remedy = if thinking_present {
+        "the model produced thinking and no answer; choose a model that honours think: false, or a non-reasoning model, in advisory.model"
+    } else {
+        "the model produced neither thinking nor an answer; run again, or choose another model in advisory.model"
+    };
+    diagnosed(
+        sub,
+        LocalAdvisoryResultStatus::MalformedResult,
+        json!({"code":"advisory_empty_response","thinking_present":thinking_present,"message":format!(
+            "The local model returned an empty response (thinking_present: {thinking_present}): {remedy}; no candidates were enqueued"
+        )}),
+    )
+}
+
 fn http_failed(sub: &LocalAdvisorySubmission, status: u16, bytes: &[u8]) -> LocalAdvisoryResult {
     let Some(error) = server_error(bytes) else {
         return failed(sub, Failure::Http);
@@ -149,6 +166,15 @@ pub fn interpret(sub: &LocalAdvisorySubmission, status: u16, bytes: &[u8]) -> Lo
     }
     if !(200..300).contains(&status) {
         return http_failed(sub, status, bytes);
+    }
+    // An answer that is there and blank is not a run that found nothing to propose.
+    if let Ok(wire) = serde_json::from_slice::<Value>(bytes) {
+        if wire["response"].as_str().is_some_and(|answer| answer.trim().is_empty()) {
+            let thinking_present = wire["thinking"]
+                .as_str()
+                .is_some_and(|thinking| !thinking.trim().is_empty());
+            return empty_response(sub, thinking_present);
+        }
     }
     let parse = || -> Option<Vec<AdvisoryCandidate>> {
         let wire: Value = serde_json::from_slice(bytes).ok()?;
