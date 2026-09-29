@@ -3,7 +3,7 @@ use crate::services::advisory_wire::SelectedTask;
 use crate::{
     api::planning::DiagnosticBody,
     errors::{AppError, Result},
-    services::{advisory_service, setting_authoring, suggest_tags},
+    services::{advisory_service, clarify, setting_authoring, suggest_tags},
     state::AppState,
 };
 use axum::{extract::State, Json};
@@ -16,8 +16,12 @@ pub const ADVISORY_RUN_SCHEMA_VERSION: &str = "ubu.orchestrator.advisory_run.v1"
 #[serde(deny_unknown_fields)]
 pub struct AdvisoryRunRequest {
     pub schema_version: Option<String>,
+    /// `suggest_tags` or `clarify`.
     pub producer: String,
+    /// `suggest_tags` only: how many Tasks to select.
     pub limit: Option<usize>,
+    /// `clarify` only: the Task to interview. Omitted, the first Task with no description.
+    pub task_id: Option<String>,
 }
 #[derive(Debug, Serialize, ToSchema)]
 pub struct AdvisoryRunResponse {
@@ -51,10 +55,27 @@ pub async fn run(
             ))
         }
     }
-    if request.producer != "suggest_tags" {
+    let interview = match request.producer.as_str() {
+        "suggest_tags" => false,
+        "clarify" => true,
+        _ => {
+            return Err(AppError::bad_request_diagnostic(
+                "advisory_unknown_producer",
+                "The producers are suggest_tags and clarify",
+            ))
+        }
+    };
+    // A field that belongs to the other producer is refused, not ignored.
+    if interview && request.limit.is_some() {
         return Err(AppError::bad_request_diagnostic(
-            "advisory_unknown_producer",
-            "Only suggest_tags is implemented",
+            "advisory_limit_unsupported",
+            "clarify interviews one Task and takes no limit; name the Task with task_id, or omit both",
+        ));
+    }
+    if !interview && request.task_id.is_some() {
+        return Err(AppError::bad_request_diagnostic(
+            "advisory_task_id_unsupported",
+            "suggest_tags selects its own Tasks and takes no task_id; use limit",
         ));
     }
     let limit = request.limit.unwrap_or(suggest_tags::DEFAULT_LIMIT);
@@ -64,6 +85,7 @@ pub async fn run(
             "limit must be between 1 and 25",
         ));
     }
+    let producer = if interview { "Clarify" } else { "SuggestTags" };
     let mut response = AdvisoryRunResponse {
         schema_version: ADVISORY_RUN_SCHEMA_VERSION.into(),
         status: "unconfigured".into(),
@@ -83,7 +105,7 @@ pub async fn run(
             response.diagnostics.push(DiagnosticBody {
                 code: "advisory_unconfigured".into(),
                 message: format!(
-                    "{name} is not configured; set it in Setup before running SuggestTags"
+                    "{name} is not configured; set it in Setup before running {producer}"
                 ),
             });
         }
@@ -112,14 +134,44 @@ pub async fn run(
         });
         return Ok(Json(response));
     };
-    response.selected = suggest_tags::select(&state, limit).await?;
-    let skipped = suggest_tags::skipped_occurrences(&state).await?;
-    if response.selected.is_empty() {
-        response.status = "ok".into();
-        response.diagnostics = skipped;
-        return Ok(Json(response));
-    }
-    let submission = suggest_tags::submission(&state, &response.selected, &model.unwrap()).await?;
+    let mut skipped = Vec::new();
+    let submission = if interview {
+        // Both refusals below come before any transport is constructed or model asked.
+        let named = request.task_id.as_deref();
+        let Some(context) = clarify::select(&state, named).await? else {
+            response.status = "ok".into();
+            response.diagnostics.push(DiagnosticBody {
+                code: "clarify_no_task".into(),
+                message: match named {
+                    Some(id) => format!("Task `{id}` is not an active, non-routine Task"),
+                    None => "Every active Task already has a description; name a Task to interview it again".into(),
+                },
+            });
+            return Ok(Json(response));
+        };
+        if clarify::interview_open(&state, &context.id).await? {
+            response.status = "ok".into();
+            response.diagnostics.push(DiagnosticBody {
+                code: "clarify_already_queued".into(),
+                message: format!("Task `{}` ({}) already has questions waiting in Review; answer, defer or reject them before asking for more", context.id, context.title),
+            });
+            return Ok(Json(response));
+        }
+        response.selected = vec![SelectedTask {
+            id: context.id.clone(),
+            title: context.title.clone(),
+        }];
+        clarify::submission(&state, &context, &model.unwrap()).await?
+    } else {
+        response.selected = suggest_tags::select(&state, limit).await?;
+        skipped = suggest_tags::skipped_occurrences(&state).await?;
+        if response.selected.is_empty() {
+            response.status = "ok".into();
+            response.diagnostics = skipped;
+            return Ok(Json(response));
+        }
+        suggest_tags::submission(&state, &response.selected, &model.unwrap()).await?
+    };
     let transport = factory(&endpoint);
     let runtime = tokio::runtime::Handle::current();
     // The core seam is synchronous. Run the controller off the async server workers.
@@ -152,6 +204,13 @@ pub async fn run(
             })
         }))
         .collect();
+    // The interview has nothing left to ask. That is an answer, not a failure.
+    if interview && response.status == "ok" && report.proposals.is_empty() {
+        response.diagnostics.push(DiagnosticBody {
+            code: "clarify_no_questions".into(),
+            message: format!("The model has no further question about Task `{}`; nothing was enqueued and the Task is unchanged", response.selected[0].id),
+        });
+    }
     response.report =
         Some(serde_json::to_value(report).map_err(|e| AppError::Internal(e.to_string()))?);
     Ok(Json(response))
