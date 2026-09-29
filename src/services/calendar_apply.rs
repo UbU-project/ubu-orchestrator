@@ -235,7 +235,7 @@ pub async fn approve(
     _approver_authority: ubu_core::AuthoritySource,
     mode: super::calendar_client::CalendarExportMode,
 ) -> Result<StoredCalendarResult> {
-    use super::calendar_client::{CalendarApi, CalendarExportMode, RecordingCalendarApi};
+    use super::calendar_client::{CalendarApi, CalendarExportMode};
     use super::calendar_google::GoogleCalendarApi;
     use std::{collections::BTreeMap, sync::Arc};
     use ubu_core::projection::OperationResultStatus;
@@ -258,8 +258,7 @@ pub async fn approve(
     };
     let client: Arc<dyn CalendarApi> = match &google {
         Some(client) => client.clone(),
-        None => state.calendar_api()
-            .unwrap_or_else(|| Arc::new(RecordingCalendarApi::with_events(existing.clone()))),
+        None => state.mock_calendar_api(&existing),
     };
     let mut landed: BTreeMap<_, _> = existing
         .into_iter()

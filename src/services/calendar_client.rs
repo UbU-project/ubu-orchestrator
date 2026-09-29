@@ -35,6 +35,18 @@ pub enum CalendarExportMode {
 impl CalendarExportMode {
     pub fn ensure_available(self, state: &crate::state::AppState) -> crate::errors::Result<()> {
         if self == Self::Live {
+            // A fixture and the operator's real calendar must never be confusable,
+            // so neither is silently ignored: the request is refused before any client exists.
+            if let Some(path) = state.inner().config.calendar_mock_events_path() {
+                return Err(crate::errors::AppError::conflict_diagnostic(
+                    "calendar_mock_seed_with_live_export",
+                    format!(
+                        "This process was started with {} set to `{}`, a mock Calendar fixture, and the request asked for export_mode `live`; unset the variable and restart to use the live Calendar, or ask for `mock`",
+                        crate::config::CALENDAR_MOCK_EVENTS_VARIABLE,
+                        path.display()
+                    ),
+                ));
+            }
             require_live_configuration(state)?;
             if state.inner().google_calendar_enabled.load(std::sync::atomic::Ordering::Acquire) {
                 return Ok(());
@@ -60,6 +72,57 @@ pub fn require_live_configuration(state: &crate::state::AppState) -> crate::erro
         code: "calendar_live_export_unconfigured".into(),
         message: "Live Calendar export requires UBU_GOOGLE_CREDENTIALS_PATH and UBU_GOOGLE_TOKEN_CACHE_PATH".into(),
     })
+}
+
+/// Read the mock Calendar fixture named by `UBU_CALENDAR_MOCK_EVENTS`: a JSON
+/// array of events in the shape `list_events` returns. `task_id` may be omitted
+/// and is then `task_<external_id>`, as the wire parser gives an observed event.
+/// Anything unreadable or malformed refuses startup, as a malformed palette does.
+pub fn load_mock_events(
+    path: Option<&std::path::Path>,
+) -> Result<Option<Vec<DesiredEvent>>, crate::errors::StartupError> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    let error = |entry: &str, reason: String| {
+        crate::errors::StartupError(format!(
+            "invalid mock Calendar events `{}` ({}), entry `{entry}`: {reason}",
+            path.display(),
+            crate::config::CALENDAR_MOCK_EVENTS_VARIABLE
+        ))
+    };
+    let bytes = std::fs::read(path).map_err(|e| error("<file>", e.to_string()))?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|e| error("<JSON>", e.to_string()))?;
+    let entries = value
+        .as_array()
+        .ok_or_else(|| error("<JSON>", "expected an array of events".into()))?;
+    let mut events = Vec::with_capacity(entries.len());
+    let mut seen = BTreeSet::new();
+    for (index, entry) in entries.iter().enumerate() {
+        let name = index.to_string();
+        let mut entry = entry.clone();
+        if let Some(object) = entry.as_object_mut() {
+            if !object.contains_key("task_id") {
+                if let Some(id) = object.get("external_id").and_then(|id| id.as_str()) {
+                    let task_id = format!("task_{id}");
+                    object.insert("task_id".into(), task_id.into());
+                }
+            }
+        }
+        let event: DesiredEvent =
+            serde_json::from_value(entry).map_err(|e| error(&name, e.to_string()))?;
+        if event.external_id.trim().is_empty() {
+            return Err(error(&name, "external_id is empty".into()));
+        }
+        CalendarTimeRange::parse(&event.start_at, &event.end_at)
+            .map_err(|e| error(&name, e.to_string()))?;
+        if !seen.insert(event.external_id.clone()) {
+            return Err(error(&name, format!("duplicate external_id `{}`", event.external_id)));
+        }
+        events.push(event);
+    }
+    Ok(Some(events))
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

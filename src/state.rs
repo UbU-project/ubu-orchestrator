@@ -29,6 +29,8 @@ pub struct OrchestratorState {
     pub config: ServerConfig,
     pub planning_horizon_seconds: u64,
     pub planner_strategy: PlannerStrategyChoice,
+    /// Loaded once at startup from `UBU_CALENDAR_MOCK_EVENTS`; `None` when unset.
+    pub calendar_mock_events: Option<Vec<crate::services::calendar_projection::DesiredEvent>>,
     pub store: UbuStore,
     pub device_registration: DeviceRegistration,
     pub causality_issuer: LocalIssuer,
@@ -49,11 +51,12 @@ impl AppState {
         let span = config.planning_horizon_seconds()?;
         let strategy = config.planner_strategy()?;
         let palette = CategoryPalette::load(config.category_palette_path())?;
+        let mock_events = crate::services::calendar_client::load_mock_events(config.calendar_mock_events_path())?;
         let registration = load_or_register(&config.device_registration_path())?;
         let store = UbuStore::connect(config.db_path())
             .await
             .map_err(StartupError::store_open)?;
-        Self::from_store(config, store, registration, palette, span, strategy).await
+        Self::from_store(config, store, registration, palette, mock_events, span, strategy).await
     }
 
     /// Isolated convenience constructor: a fresh ephemeral registration, no registration file I/O.
@@ -69,11 +72,12 @@ impl AppState {
         let span = config.planning_horizon_seconds()?;
         let strategy = config.planner_strategy()?;
         let palette = CategoryPalette::load(config.category_palette_path())?;
+        let mock_events = crate::services::calendar_client::load_mock_events(config.calendar_mock_events_path())?;
         require_registered(&registration)?;
         let store = UbuStore::in_memory()
             .await
             .map_err(StartupError::store_open)?;
-        Self::from_store(config, store, registration, palette, span, strategy).await
+        Self::from_store(config, store, registration, palette, mock_events, span, strategy).await
     }
 
     async fn from_store(
@@ -81,6 +85,7 @@ impl AppState {
         store: UbuStore,
         registration: DeviceRegistration,
         category_palette: CategoryPalette,
+        calendar_mock_events: Option<Vec<crate::services::calendar_projection::DesiredEvent>>,
         planning_horizon_seconds: u64,
         planner_strategy: PlannerStrategyChoice,
     ) -> Result<Self, StartupError> {
@@ -98,6 +103,7 @@ impl AppState {
                 config,
                 planning_horizon_seconds,
                 planner_strategy,
+                calendar_mock_events,
                 store,
                 device_registration: registration,
                 causality_issuer,
@@ -139,6 +145,21 @@ impl AppState {
 
     pub fn calendar_api(&self) -> Option<Arc<dyn crate::services::calendar_client::CalendarApi>> {
         self.calendar_api.clone()
+    }
+
+    /// The Calendar a Mock request talks to. With `UBU_CALENDAR_MOCK_EVENTS` set
+    /// it observes that fixture; otherwise it observes UbU's own applied record,
+    /// as it always has. Only the observed set differs: the applied record, the
+    /// desired set and every decision rule are the caller's and are untouched.
+    pub fn mock_calendar_api(
+        &self,
+        applied: &[crate::services::calendar_projection::DesiredEvent],
+    ) -> Arc<dyn crate::services::calendar_client::CalendarApi> {
+        use crate::services::calendar_client::RecordingCalendarApi;
+        self.calendar_api().unwrap_or_else(|| {
+            let observed = self.inner.calendar_mock_events.as_deref().unwrap_or(applied);
+            Arc::new(RecordingCalendarApi::with_events(observed.iter().cloned()))
+        })
     }
 
     /// Assemble provenance at the mutation boundary; domain time remains independent.

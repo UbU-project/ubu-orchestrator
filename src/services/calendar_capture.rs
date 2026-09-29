@@ -1,7 +1,7 @@
 //! Capture only foreign Calendar commitments through ordinary Task admission.
 use super::{
     calendar_apply::{self, StoredCalendarResult, CALENDAR_PROJECTION_RESULT_SCHEMA_VERSION},
-    calendar_client::{CalendarApi, CalendarExportMode, RecordingCalendarApi},
+    calendar_client::{CalendarApi, CalendarExportMode},
     calendar_google::GoogleCalendarApi,
     calendar_projection::{external_id_for, DesiredEvent},
     calendar_range::CalendarTimeRange,
@@ -169,9 +169,7 @@ pub async fn capture(
     let client: Arc<dyn CalendarApi> = if mode == CalendarExportMode::Live {
         Arc::new(GoogleCalendarApi::new(&state.inner().config).map_err(internal)?)
     } else {
-        state
-            .calendar_api()
-            .unwrap_or_else(|| Arc::new(RecordingCalendarApi::with_events(applied.clone())))
+        state.mock_calendar_api(&applied)
     };
     let mut observed = client
         .list_events(&observation_range)

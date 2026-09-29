@@ -21,7 +21,7 @@ use ubu_core::{projection::ProjectionResultStatus, ObjectType, UbuId};
 
 use super::{
     calendar_apply::{self, StoredCalendarResult, CALENDAR_PROJECTION_RESULT_SCHEMA_VERSION},
-    calendar_client::{CalendarApi, CalendarExportMode, RecordingCalendarApi},
+    calendar_client::{CalendarApi, CalendarExportMode},
     calendar_google::GoogleCalendarApi,
     calendar_projection::DesiredEvent,
     calendar_reconcile::{self, CalendarConflict},
@@ -84,9 +84,7 @@ pub async fn reconcile(
     };
     let client: Arc<dyn CalendarApi> = match &google {
         Some(client) => client.clone(),
-        None => state
-            .calendar_api()
-            .unwrap_or_else(|| Arc::new(RecordingCalendarApi::with_events(applied.clone()))),
+        None => state.mock_calendar_api(&applied),
     };
     let range = super::calendar_range::CalendarTimeRange::planning(state).await?;
     let (applied, out_of_range_events): (Vec<_>, Vec<_>) = applied.into_iter().partition(|event| range.overlaps(event));

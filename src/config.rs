@@ -27,6 +27,8 @@ impl fmt::Debug for SecretToken {
     }
 }
 
+pub const CALENDAR_MOCK_EVENTS_VARIABLE: &str = "UBU_CALENDAR_MOCK_EVENTS";
+
 #[derive(Clone, Debug)]
 pub struct ServerConfig {
     bind_addr: SocketAddr,
@@ -38,6 +40,9 @@ pub struct ServerConfig {
     /// Operator-owned registration file, outside mutable database state.
     device_registration_path: Option<PathBuf>,
     category_palette_path: Option<PathBuf>,
+    /// A fixture for what the mock Calendar observes. Configure with
+    /// `UBU_CALENDAR_MOCK_EVENTS`; unset, Mock mode observes the applied record.
+    calendar_mock_events_path: Option<PathBuf>,
     google_credentials_path: Option<PathBuf>,
     google_token_cache_path: Option<PathBuf>,
     google_calendar_id: String,
@@ -101,6 +106,7 @@ impl ServerConfig {
             db_path: env::var("UBU_DB_PATH").unwrap_or_else(|_| "ubu-orchestrator.db".to_owned()),
             device_registration_path: env::var_os("UBU_DEVICE_REGISTRATION").map(PathBuf::from),
             category_palette_path: env::var_os("UBU_CATEGORY_PALETTE_PATH").map(PathBuf::from),
+            calendar_mock_events_path: env::var_os(CALENDAR_MOCK_EVENTS_VARIABLE).map(PathBuf::from),
             google_credentials_path: env::var_os("UBU_GOOGLE_CREDENTIALS_PATH").map(PathBuf::from),
             google_token_cache_path: env::var_os("UBU_GOOGLE_TOKEN_CACHE_PATH").map(PathBuf::from),
             google_calendar_id: env::var("UBU_GOOGLE_CALENDAR_ID").unwrap_or_else(|_| "primary".into()),
@@ -182,6 +188,15 @@ impl ServerConfig {
 
     pub fn category_palette_path(&self) -> Option<&Path> {
         self.category_palette_path.as_deref()
+    }
+
+    pub fn with_calendar_mock_events_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.calendar_mock_events_path = Some(path.into());
+        self
+    }
+
+    pub fn calendar_mock_events_path(&self) -> Option<&Path> {
+        self.calendar_mock_events_path.as_deref()
     }
 
     pub fn google_credentials_path(&self) -> Option<&Path> {
