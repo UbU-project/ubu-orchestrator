@@ -881,9 +881,11 @@ async fn a_routine_occurrence_is_skipped_and_named_while_an_ordinary_task_is_sel
         json!([{"code":"suggest_tags_occurrence_skipped","message":format!("Task `{B}` (Synthetic lunar teapot 1) is an occurrence of a routine and was skipped; a routine's category belongs on its template, which the Routines screen edits")}])
     );
     // The model was asked about the ordinary Task only, and only it got a candidate.
-    let captured = stub.submissions.lock().unwrap();
-    assert_eq!(captured.len(), 1);
-    assert_eq!(captured[0].payload, json!([{"id":A,"title":"Synthetic lunar teapot 0"}]));
+    {
+        let captured = stub.submissions.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].payload, json!([{"id":A,"title":"Synthetic lunar teapot 0"}]));
+    }
     assert_eq!(response["candidates_enqueued"], 1);
     assert_eq!(count(&state).await, 1);
     println!("P1B47_TEST5={}", response["diagnostics"]);
