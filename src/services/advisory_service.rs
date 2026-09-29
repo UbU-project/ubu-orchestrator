@@ -24,6 +24,9 @@ pub struct AdvisoryRunReport {
     pub status: LocalAdvisoryResultStatus,
     pub candidates_stored: usize,
     pub candidates_rejected: usize,
+    pub candidates_suppressed: usize,
+    pub candidate_ids: Vec<String>,
+    pub proposals: Vec<serde_json::Value>,
     pub diagnostics: Vec<serde_json::Value>,
     pub validation_error: Option<String>,
 }
@@ -31,24 +34,30 @@ pub struct AdvisoryRunReport {
 /// The controller is the only path from a worker result to the candidate store.
 /// The transport receives only the by-value submission; it has no AppState or
 /// store handle. Candidate storage uses the candidate's deterministic key.
-pub async fn run_advisory<T: AdvisoryTransport>(
+pub async fn run_advisory<T: AdvisoryTransport + ?Sized>(
     state: &AppState,
     submission: LocalAdvisorySubmission,
     transport: &T,
 ) -> Result<AdvisoryRunReport> {
     submission.validate()?;
-    let result = transport.submit(&submission)?;
+    let _guard = state.inner().advisory_run_lock.lock().await;
+    let result = transport.submit(&submission).unwrap_or_else(|_| super::advisory_wire::failed(&submission, super::advisory_wire::Failure::Connection));
     let mut report = AdvisoryRunReport {
         submission_id: submission.submission_id.clone(),
         status: result.status,
         candidates_stored: 0,
         candidates_rejected: 0,
+        candidates_suppressed: 0,
+        candidate_ids: Vec::new(),
+        proposals: result.proposed_candidates.iter().map(|candidate| json!({"target_refs":candidate.target_refs,"normalized_proposal":candidate.normalized_proposal,"confidence":candidate.confidence})).collect(),
         diagnostics: result.diagnostics.clone(),
         validation_error: None,
     };
 
     if let Err(error) = result.validate_against(&submission) {
         report.candidates_rejected = result.proposed_candidates.len();
+        report.status = LocalAdvisoryResultStatus::MalformedResult;
+        report.diagnostics.push(json!({"code":"advisory_invalid_result","message":error.to_string()}));
         report.validation_error = Some(error.to_string());
         return Ok(report);
     }
@@ -62,6 +71,22 @@ pub async fn run_advisory<T: AdvisoryTransport>(
             report.candidates_rejected += 1;
             continue;
         }
+        let identity = json!({"candidate_kind":candidate.candidate_kind,"normalized_proposal":candidate.normalized_proposal,"target_refs":candidate.target_refs});
+        let derived = String::from_utf8(ubu_core::canonical_payload_bytes(&identity)).expect("canonical JSON is UTF-8");
+        let key = candidate.suppression_key.as_deref().unwrap_or(&derived);
+        if ubu_store::api::review::find_suppression_record(state.inner().store.pool(),key).await?.is_some() {
+            report.candidates_suppressed += 1;
+            report.diagnostics.push(json!({"code":"advisory_proposal_suppressed","message":"A previously rejected proposal was suppressed; it was not re-enqueued"}));
+            continue;
+        }
+        if candidate.normalized_proposal["operation"] == "set_category" {
+            let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM advisory_candidates WHERE suppression_key=?)")
+                .bind(key).fetch_one(state.inner().store.pool()).await.map_err(|e|AppError::Internal(e.to_string()))?;
+            if exists {
+                report.diagnostics.push(json!({"code":"advisory_proposal_already_queued","message":"This category proposal already has a durable candidate; no duplicate was enqueued"}));
+                continue;
+            }
+        }
         let envelope = state.envelope_with_key(
             Default::default(),
             ubu_core::AuthoritySource::AutomationWorker,
@@ -71,7 +96,10 @@ pub async fn run_advisory<T: AdvisoryTransport>(
         match store_advisory_candidate(state.inner().store.pool(), &envelope, candidate.clone())
             .await
         {
-            Ok(_) => report.candidates_stored += 1,
+            Ok(record) => {
+                report.candidates_stored += 1;
+                report.candidate_ids.push(record.advisory_candidate_id);
+            },
             Err(ubu_store::StoreError::Core(ubu_core::UbuError::IdempotencyKeyConflict {
                 ..
             })) => {
@@ -176,6 +204,7 @@ pub async fn reject_candidate(
     reason: String,
     retention_policy: RetentionPolicy,
 ) -> Result<CandidateRecord> {
+    let _guard = state.inner().advisory_run_lock.lock().await;
     let envelope = state.envelope_for(
         Default::default(),
         AuthoritySource::User,

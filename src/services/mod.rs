@@ -40,3 +40,4 @@ pub mod objective_authoring;
 pub mod setting_authoring;
 
 pub mod advisory_wire;
+pub mod suggest_tags;

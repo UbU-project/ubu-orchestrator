@@ -34,6 +34,7 @@ pub struct OrchestratorState {
     pub routine_materialization_lock: Mutex<()>,
     pub calendar_projection_lock: Mutex<()>,
     pub task_action_lock: Mutex<()>,
+    pub advisory_run_lock: Mutex<()>,
     pub bootstrap_answers: Mutex<Vec<String>>,
 }
 
@@ -101,6 +102,7 @@ impl AppState {
                 routine_materialization_lock: Mutex::new(()),
                 calendar_projection_lock: Mutex::new(()),
                 task_action_lock: Mutex::new(()),
+                advisory_run_lock: Mutex::new(()),
                 bootstrap_answers: Mutex::new(Vec::new()),
             }),
         })
