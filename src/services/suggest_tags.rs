@@ -18,7 +18,9 @@ pub async fn select(state: &AppState, limit: usize) -> Result<Vec<SelectedTask>>
             "limit must be between 1 and 25",
         ));
     }
-    let rows: Vec<String> = sqlx::query_scalar("SELECT payload_json FROM objects WHERE object_type='Task' AND status='active' AND json_extract(payload_json,'$.category_tag') IS NULL ORDER BY id LIMIT ?")
+    // An occurrence is rebuilt from its routine's template at the next materialize,
+    // so a category admitted onto one would not survive. It is never offered.
+    let rows: Vec<String> = sqlx::query_scalar("SELECT payload_json FROM objects WHERE object_type='Task' AND status='active' AND json_extract(payload_json,'$.category_tag') IS NULL AND json_extract(payload_json,'$.occurrence') IS NULL ORDER BY id LIMIT ?")
         .bind(limit as i64).fetch_all(state.inner().store.pool()).await.map_err(|e|AppError::Internal(e.to_string()))?;
     rows.into_iter()
         .map(|raw| {
@@ -30,6 +32,37 @@ pub async fn select(state: &AppState, limit: usize) -> Result<Vec<SelectedTask>>
             })
         })
         .collect()
+}
+
+/// How many skipped occurrences are named one by one before the rest are counted.
+pub const MAX_SKIPPED_NAMED: usize = MAX_LIMIT;
+
+/// The uncategorised routine occurrences selection passed over, each named.
+pub async fn skipped_occurrences(
+    state: &AppState,
+) -> Result<Vec<crate::api::planning::DiagnosticBody>> {
+    let rows: Vec<String> = sqlx::query_scalar("SELECT payload_json FROM objects WHERE object_type='Task' AND status='active' AND json_extract(payload_json,'$.category_tag') IS NULL AND json_extract(payload_json,'$.occurrence') IS NOT NULL ORDER BY id")
+        .fetch_all(state.inner().store.pool()).await.map_err(|e|AppError::Internal(e.to_string()))?;
+    let diagnostic = |message: String| crate::api::planning::DiagnosticBody {
+        code: "suggest_tags_occurrence_skipped".into(),
+        message,
+    };
+    let mut skipped = Vec::new();
+    for raw in rows.iter().take(MAX_SKIPPED_NAMED) {
+        let task: ubu_core::core::Task =
+            serde_json::from_str(raw).map_err(|e| AppError::Internal(e.to_string()))?;
+        skipped.push(diagnostic(format!(
+            "Task `{}` ({}) is an occurrence of a routine and was skipped; a routine's category belongs on its template, which the Routines screen edits",
+            task.id, task.title
+        )));
+    }
+    if rows.len() > MAX_SKIPPED_NAMED {
+        skipped.push(diagnostic(format!(
+            "{} more routine occurrences were skipped for the same reason; a routine's category belongs on its template, which the Routines screen edits",
+            rows.len() - MAX_SKIPPED_NAMED
+        )));
+    }
+    Ok(skipped)
 }
 
 /// `advisory.timeout_ms` is the budget for the whole run, so the CPU budget tracks it.

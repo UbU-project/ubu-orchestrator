@@ -113,8 +113,10 @@ pub async fn run(
         return Ok(Json(response));
     };
     response.selected = suggest_tags::select(&state, limit).await?;
+    let skipped = suggest_tags::skipped_occurrences(&state).await?;
     if response.selected.is_empty() {
         response.status = "ok".into();
+        response.diagnostics = skipped;
         return Ok(Json(response));
     }
     let submission = suggest_tags::submission(&state, &response.selected, &model.unwrap()).await?;
@@ -137,10 +139,10 @@ pub async fn run(
         .into();
     response.candidates_enqueued = report.candidates_stored;
     response.candidate_ids = report.candidate_ids.clone();
-    response.diagnostics = report
-        .diagnostics
-        .iter()
-        .filter_map(|value| {
+    // What the model was never asked about comes first, then what it answered.
+    response.diagnostics = skipped
+        .into_iter()
+        .chain(report.diagnostics.iter().filter_map(|value| {
             Some(DiagnosticBody {
                 code: value["code"].as_str()?.into(),
                 message: value["message"]
@@ -148,7 +150,7 @@ pub async fn run(
                     .unwrap_or("Advisory diagnostic")
                     .into(),
             })
-        })
+        }))
         .collect();
     response.report =
         Some(serde_json::to_value(report).map_err(|e| AppError::Internal(e.to_string()))?);
