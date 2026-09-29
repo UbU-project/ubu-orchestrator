@@ -413,7 +413,9 @@ async fn oversized_and_malformed_results_fail_closed() {
         .await
         .unwrap();
     let sub =
-        ubu_orchestrator::services::suggest_tags::submission(&state, &tasks, "synthetic-model:1");
+        ubu_orchestrator::services::suggest_tags::submission(&state, &tasks, "synthetic-model:1")
+            .await
+            .unwrap();
     for proposal in [
         json!({"id":B,"category_tag":"work","confidence":0.8}),
         json!({"id":A,"category_tag":"","confidence":0.8}),

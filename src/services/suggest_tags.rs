@@ -32,12 +32,14 @@ pub async fn select(state: &AppState, limit: usize) -> Result<Vec<SelectedTask>>
         .collect()
 }
 
-pub fn submission(
+/// `advisory.timeout_ms` is the budget for the whole run, so the CPU budget tracks it.
+pub async fn submission(
     state: &AppState,
     tasks: &[SelectedTask],
     model: &str,
-) -> LocalAdvisorySubmission {
-    LocalAdvisorySubmission {
+) -> Result<LocalAdvisorySubmission> {
+    let (timeout_ms, _) = super::setting_authoring::advisory_timeout_ms(state).await?;
+    Ok(LocalAdvisorySubmission {
         submission_id: AdvisoryCandidateId::generate().as_str().into(),
         authority: WorkerAuthority {
             worker_id: UbuId::new(ObjectType::AutomationWorker),
@@ -52,9 +54,9 @@ pub fn submission(
         },
         payload: serde_json::to_value(tasks).expect("SelectedTask serializes"),
         expected_result_schema: TAG_RESULT_SCHEMA.into(),
-        timeout_ms: 120_000,
+        timeout_ms,
         compute_budget: ComputeBudget {
-            max_cpu_ms: 120_000,
+            max_cpu_ms: timeout_ms,
             max_memory_bytes: 512 * 1024 * 1024,
         },
         result_size_limit_bytes: 256 * 1024,
@@ -72,5 +74,5 @@ pub fn submission(
         origin_device_id: state.inner().device_registration.device_id.clone(),
         execution_context: None,
         submitted_at: state.planning_now(),
-    }
+    })
 }

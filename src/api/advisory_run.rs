@@ -117,7 +117,7 @@ pub async fn run(
         response.status = "ok".into();
         return Ok(Json(response));
     }
-    let submission = suggest_tags::submission(&state, &response.selected, &model.unwrap());
+    let submission = suggest_tags::submission(&state, &response.selected, &model.unwrap()).await?;
     let transport = factory(&endpoint);
     let runtime = tokio::runtime::Handle::current();
     // The core seam is synchronous. Run the controller off the async server workers.

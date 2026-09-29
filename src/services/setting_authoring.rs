@@ -22,15 +22,28 @@ pub async fn settings(pool: &sqlx::SqlitePool) -> Result<Vec<ObjectRecord>> {
         .map_err(internal)
 }
 
+pub const ADVISORY_TIMEOUT: &str = "advisory.timeout_ms";
+pub const DEFAULT_ADVISORY_TIMEOUT_MS: u64 = 120_000;
+/// A zero would fail every run at once; no ceiling would let one run hold the advisory path.
+pub const MIN_ADVISORY_TIMEOUT_MS: u64 = 5_000;
+pub const MAX_ADVISORY_TIMEOUT_MS: u64 = 3_600_000;
+
+/// An integer number of milliseconds within the bounds; a float or a string is refused.
+fn valid_advisory_timeout(value: &Value) -> Option<u64> {
+    value
+        .as_u64()
+        .filter(|ms| (MIN_ADVISORY_TIMEOUT_MS..=MAX_ADVISORY_TIMEOUT_MS).contains(ms))
+}
+
 fn validate_name(name: &str) -> Result<()> {
-    if matches!(name, "advisory.model" | "advisory.endpoint") { return Ok(()); }
+    if matches!(name, "advisory.model" | "advisory.endpoint" | ADVISORY_TIMEOUT) { return Ok(()); }
     if !name
         .strip_prefix("calendar.color.")
         .is_some_and(|category| !category.trim().is_empty())
     {
         return Err(AppError::bad_request_diagnostic(
             "setting_unknown_name",
-            "Only calendar.color.<category>, advisory.model and advisory.endpoint Settings can be authored",
+            "Only calendar.color.<category>, advisory.model, advisory.endpoint and advisory.timeout_ms Settings can be authored",
         ));
     }
     Ok(())
@@ -65,9 +78,27 @@ pub async fn advisory_value(state: &AppState, name: &str) -> Result<Option<Strin
     }).transpose().map(Option::flatten)
 }
 
+/// The budget for one advisory run, and whether a Setting supplied it.
+pub async fn advisory_timeout_ms(state: &AppState) -> Result<(u64, bool)> {
+    let Some(row) = current(state, ADVISORY_TIMEOUT).await? else {
+        return Ok((DEFAULT_ADVISORY_TIMEOUT_MS, false));
+    };
+    let payload: Value = serde_json::from_str(&row.payload_json).map_err(internal)?;
+    // Only a validated value is ever admitted; anything else is treated as absent.
+    Ok(valid_advisory_timeout(&payload["value"])
+        .map_or((DEFAULT_ADVISORY_TIMEOUT_MS, false), |ms| (ms, true)))
+}
+
 pub async fn put(state: &AppState, name: &str, value: Value) -> Result<(String, i64)> {
     validate_name(name)?;
-    if name.starts_with("advisory.") {
+    if name == ADVISORY_TIMEOUT {
+        if valid_advisory_timeout(&value).is_none() {
+            return Err(AppError::bad_request_diagnostic(
+                "setting_invalid_advisory_timeout",
+                format!("advisory.timeout_ms must be an integer number of milliseconds from {MIN_ADVISORY_TIMEOUT_MS} to {MAX_ADVISORY_TIMEOUT_MS}"),
+            ));
+        }
+    } else if name.starts_with("advisory.") {
         if !value.as_str().is_some_and(|value| !value.trim().is_empty()) {
             return Err(AppError::bad_request_diagnostic("setting_invalid_advisory", "Advisory Settings must be non-empty strings"));
         }
@@ -164,6 +195,12 @@ pub async fn list(state: &AppState) -> Result<crate::api::setting::SettingsRespo
             name: name.into(), origin: if value.is_some() { "setting" } else { "unconfigured" }.into(), value,
         });
     }
+    let (timeout_ms, configured) = advisory_timeout_ms(state).await?;
+    advisory.push(crate::api::setting::AdvisorySettingEntry {
+        name: ADVISORY_TIMEOUT.into(),
+        value: Some(timeout_ms.to_string()),
+        origin: if configured { "setting" } else { "default" }.into(),
+    });
     Ok(crate::api::setting::SettingsResponse {
         schema_version: crate::api::setting::SETTING_SCHEMA_VERSION.into(),
         settings,
