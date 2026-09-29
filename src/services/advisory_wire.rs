@@ -42,12 +42,49 @@ pub fn failed(sub: &LocalAdvisorySubmission, failure: Failure) -> LocalAdvisoryR
         Failure::Malformed => (LocalAdvisoryResultStatus::MalformedResult, "advisory_malformed_result", "The model response was not a valid tag proposal for the selected Tasks; no candidates were enqueued"),
         Failure::Unavailable => (LocalAdvisoryResultStatus::WorkerError, "advisory_transport_unavailable", "No advisory transport is installed in this process; no candidates were enqueued"),
     };
+    diagnosed(sub, status, json!({"code":code,"message":message}))
+}
+fn diagnosed(
+    sub: &LocalAdvisorySubmission,
+    status: LocalAdvisoryResultStatus,
+    diagnostic: Value,
+) -> LocalAdvisoryResult {
     let mut result = empty_result(sub);
     result.status = status;
+    result.diagnostics.push(diagnostic);
     result
-        .diagnostics
-        .push(json!({"code":code,"message":message}));
-    result
+}
+
+/// How much of the server's `error` field is echoed.
+pub const SERVER_ERROR_LIMIT: usize = 200;
+
+/// Ollama's own `error` field, bounded and without control characters. It is a
+/// short message from a local service the operator configured. Generated text
+/// is untrusted content and is never echoed; this reads no other field.
+fn server_error(bytes: &[u8]) -> Option<String> {
+    let wire: Value = serde_json::from_slice(bytes).ok()?;
+    let error: String = wire
+        .get("error")?
+        .as_str()?
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(SERVER_ERROR_LIMIT)
+        .collect();
+    let error = error.trim();
+    (!error.is_empty()).then(|| error.to_owned())
+}
+
+fn http_failed(sub: &LocalAdvisorySubmission, status: u16, bytes: &[u8]) -> LocalAdvisoryResult {
+    let Some(error) = server_error(bytes) else {
+        return failed(sub, Failure::Http);
+    };
+    diagnosed(
+        sub,
+        LocalAdvisoryResultStatus::WorkerError,
+        json!({"code":"advisory_http_failed","message":format!(
+            "The local model returned HTTP {status}: {error}; check advisory.model and that the model has been pulled; no candidates were enqueued"
+        )}),
+    )
 }
 fn empty_result(sub: &LocalAdvisorySubmission) -> LocalAdvisoryResult {
     LocalAdvisoryResult {
@@ -111,7 +148,7 @@ pub fn interpret(sub: &LocalAdvisorySubmission, status: u16, bytes: &[u8]) -> Lo
         return failed(sub, Failure::TooLarge);
     }
     if !(200..300).contains(&status) {
-        return failed(sub, Failure::Http);
+        return http_failed(sub, status, bytes);
     }
     let parse = || -> Option<Vec<AdvisoryCandidate>> {
         let wire: Value = serde_json::from_slice(bytes).ok()?;
