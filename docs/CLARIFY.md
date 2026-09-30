@@ -56,7 +56,7 @@ Each is status `ok`, HTTP 200, with nothing enqueued.
 
 | Diagnostic | Means |
 |---|---|
-| `clarify_no_task` | There is no Task to interview. The message says whether a named Task is not an active, non-routine Task, or whether every active Task already has a description. No model was asked. |
+| `clarify_no_task` | There is no Task to interview. No model was asked. The message says which of four things is true, because the remedy differs: no active, non-routine Task exists at all (capture one); every active Task already has a description (choose one in the selector); the named Task is not active or does not exist; or the named Task is a routine occurrence, whose description belongs on its template. |
 | `clarify_already_queued` | The Task already has a question set that is proposed, resurfaced or deferred. Answer, defer or reject it first. No model was asked. |
 | `clarify_no_questions` | The model was asked and has nothing left to ask. This is how the operator learns the Task is clarified. |
 

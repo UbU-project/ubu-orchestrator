@@ -47,25 +47,44 @@ async fn automatic_selection_is_the_first_task_with_no_description_and_never_an_
 #[tokio::test]
 async fn with_nothing_to_select_the_run_says_which_kind_of_nothing_and_asks_no_model() {
     let stub = Stub::answering([]);
+    // The case that happened: an empty store. Not "every Task has a description".
     let state = ready(stub.clone()).await;
+    let empty = clarify(&state, None).await;
+    assert_eq!(empty["status"], "ok");
+    assert_eq!(
+        empty["diagnostics"],
+        json!([{"code":"clarify_no_task","message":"There is no active Task to interview. Capture a Task first."}])
+    );
+    println!("P1B49_NO_TASK empty_store={}", empty["diagnostics"]);
+    // A store whose only Tasks are an occurrence and a completed Task is empty for this purpose too.
     seed(&state, A, "active", occurrence()).await;
-    seed(&state, B, "active", json!({"description":"Q: Synthetic question?\nA: y\n"})).await;
     seed(&state, C, "completed", json!({})).await;
+    assert_eq!(
+        clarify(&state, None).await["diagnostics"][0]["message"],
+        "There is no active Task to interview. Capture a Task first."
+    );
+    println!("P1B49_NO_TASK occurrence_and_completed_only={}", clarify(&state, None).await["diagnostics"]);
+    // With an active Task that has a description, the remedy is the selector.
+    seed(&state, B, "active", json!({"description":"Q: Synthetic question?\nA: y\n"})).await;
     let none = clarify(&state, None).await;
     assert_eq!(none["status"], "ok");
     assert_eq!(
         none["diagnostics"],
-        json!([{"code":"clarify_no_task","message":"Every active Task already has a description; name a Task to interview it again"}])
+        json!([{"code":"clarify_no_task","message":"Every active Task already has a description. Choose a Task to interview it again."}])
     );
-    // Named, an occurrence and a completed Task are each refused by name. An absent Task too.
-    for id in [A, C, "task_018f3c8e9b2a7c4d8f1e2a3b4c5d6e7f"] {
+    println!("P1B49_NO_TASK all_described={}", none["diagnostics"]);
+    // Named: a completed Task and an absent Task are not active; an occurrence is said to be one.
+    for (id, message) in [
+        (C, format!("Task `{C}` is not an active Task.")),
+        ("task_018f3c8e9b2a7c4d8f1e2a3b4c5d6e7f", "Task `task_018f3c8e9b2a7c4d8f1e2a3b4c5d6e7f` is not an active Task.".into()),
+        (A, format!("Task `{A}` is an occurrence of a routine; a routine's description belongs on its template, which the Routines screen edits.")),
+    ] {
         let named = clarify(&state, Some(id)).await;
-        assert_eq!(
-            named["diagnostics"],
-            json!([{"code":"clarify_no_task","message":format!("Task `{id}` is not an active, non-routine Task")}])
-        );
+        assert_eq!(named["status"], "ok");
+        assert_eq!(named["diagnostics"], json!([{"code":"clarify_no_task","message":message}]));
         assert_eq!(named["selected"], json!([]));
         assert_eq!(named["candidates_enqueued"], 0);
+        println!("P1B49_NO_TASK named={id} {}", named["diagnostics"]);
     }
     // A malformed id, and an id of another kind, are request errors.
     for id in ["synthetic", "obj_018f3c8e9b2a7c4d8f1e2a3b4c5d8e01", ""] {
@@ -267,7 +286,7 @@ async fn a_question_set_proposed_under_a_tag_only_authority_is_rejected_and_neve
     let stub = Stub::answering([questions()]);
     let state = ready(stub.clone()).await;
     seed(&state, A, "active", json!({})).await;
-    let context = clarify::select(&state, None).await.unwrap().unwrap();
+    let context = clarify::select(&state, None).await.unwrap().ok().unwrap();
     let mut submission = clarify::submission(&state, &context, "synthetic-model:1").await.unwrap();
     assert!(submission.authority.may_propose(CandidateKind::ClarificationQuestion));
     assert!(!submission.authority.may_propose(CandidateKind::Tag));

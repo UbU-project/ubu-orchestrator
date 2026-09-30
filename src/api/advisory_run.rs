@@ -138,16 +138,17 @@ pub async fn run(
     let submission = if interview {
         // Both refusals below come before any transport is constructed or model asked.
         let named = request.task_id.as_deref();
-        let Some(context) = clarify::select(&state, named).await? else {
-            response.status = "ok".into();
-            response.diagnostics.push(DiagnosticBody {
-                code: "clarify_no_task".into(),
-                message: match named {
-                    Some(id) => format!("Task `{id}` is not an active, non-routine Task"),
-                    None => "Every active Task already has a description; name a Task to interview it again".into(),
-                },
-            });
-            return Ok(Json(response));
+        let context = match clarify::select(&state, named).await? {
+            Ok(context) => context,
+            // The selection knows which kind of nothing it found; it is not reconstructed here.
+            Err(nothing) => {
+                response.status = "ok".into();
+                response.diagnostics.push(DiagnosticBody {
+                    code: "clarify_no_task".into(),
+                    message: nothing.message(),
+                });
+                return Ok(Json(response));
+            }
         };
         if clarify::interview_open(&state, &context.id).await? {
             response.status = "ok".into();

@@ -17,7 +17,37 @@ fn internal(error: impl std::fmt::Display) -> AppError {
     AppError::Internal(error.to_string())
 }
 
-/// The Task to interview, or `None` when there is none.
+/// Why there is no Task to interview. One code, `clarify_no_task`, four
+/// remedies: the condition is the same, what the operator should do differs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NoTask {
+    /// No active, non-routine Task exists at all.
+    NoActiveTask,
+    /// Active Tasks exist and every one has a description.
+    AllDescribed,
+    /// A named Task that is not active, or does not exist.
+    NotActive(String),
+    /// A named Task that is a routine occurrence.
+    Occurrence(String),
+}
+
+impl NoTask {
+    pub fn message(&self) -> String {
+        match self {
+            Self::NoActiveTask => "There is no active Task to interview. Capture a Task first.".into(),
+            Self::AllDescribed => {
+                "Every active Task already has a description. Choose a Task to interview it again.".into()
+            }
+            Self::NotActive(id) => format!("Task `{id}` is not an active Task."),
+            // The sentence SuggestTags uses when it skips an occurrence, for the same reason.
+            Self::Occurrence(id) => format!(
+                "Task `{id}` is an occurrence of a routine; a routine's description belongs on its template, which the Routines screen edits."
+            ),
+        }
+    }
+}
+
+/// The Task to interview, or which kind of nothing there is.
 ///
 /// A routine occurrence is never selected, named or not: it is rebuilt from its
 /// routine's template at the next materialize, so answers admitted onto it
@@ -26,7 +56,10 @@ fn internal(error: impl std::fmt::Display) -> AppError {
 /// With no Task named, only a Task with no description is chosen. That is round
 /// one. Going deeper on a Task is the operator's deliberate act, so later
 /// rounds are reached by naming it.
-pub async fn select(state: &AppState, task_id: Option<&str>) -> Result<Option<ClarifyContext>> {
+pub async fn select(
+    state: &AppState,
+    task_id: Option<&str>,
+) -> Result<std::result::Result<ClarifyContext, NoTask>> {
     const ELIGIBLE: &str = "SELECT payload_json FROM objects WHERE object_type='Task' AND status='active' AND json_extract(payload_json,'$.occurrence') IS NULL";
     let pool = state.inner().store.pool();
     let raw: Option<String> = match task_id {
@@ -39,26 +72,46 @@ pub async fn select(state: &AppState, task_id: Option<&str>) -> Result<Option<Cl
                         format!("`{id}` is not a Task id"),
                     )
                 })?;
-            sqlx::query_scalar(&format!("{ELIGIBLE} AND id=?"))
+            // The named row as it is, so that the reason it cannot be interviewed is the true one.
+            let row: Option<(String, String)> = sqlx::query_as("SELECT status, payload_json FROM objects WHERE object_type='Task' AND id=?")
                 .bind(id)
                 .fetch_optional(pool)
                 .await
+                .map_err(internal)?;
+            match row {
+                Some((status, payload)) if status == "active" => {
+                    let value: serde_json::Value = serde_json::from_str(&payload).map_err(internal)?;
+                    if value.get("occurrence").is_some_and(|occurrence| !occurrence.is_null()) {
+                        return Ok(Err(NoTask::Occurrence(id.into())));
+                    }
+                    Some(payload)
+                }
+                _ => return Ok(Err(NoTask::NotActive(id.into()))),
+            }
         }
         None => {
             // Blank means nothing but spaces, tabs and line ends; SQLite's one-argument trim removes spaces only.
-            sqlx::query_scalar(&format!("{ELIGIBLE} AND (json_extract(payload_json,'$.description') IS NULL OR trim(json_extract(payload_json,'$.description'),' '||char(9)||char(10)||char(13))='') ORDER BY id LIMIT 1"))
+            let first: Option<String> = sqlx::query_scalar(&format!("{ELIGIBLE} AND (json_extract(payload_json,'$.description') IS NULL OR trim(json_extract(payload_json,'$.description'),' '||char(9)||char(10)||char(13))='') ORDER BY id LIMIT 1"))
                 .fetch_optional(pool)
                 .await
+                .map_err(internal)?;
+            if first.is_none() {
+                let any: Option<String> = sqlx::query_scalar(&format!("{ELIGIBLE} LIMIT 1"))
+                    .fetch_optional(pool)
+                    .await
+                    .map_err(internal)?;
+                return Ok(Err(if any.is_none() { NoTask::NoActiveTask } else { NoTask::AllDescribed }));
+            }
+            first
         }
-    }
-    .map_err(internal)?;
+    };
     let Some(raw) = raw else {
-        return Ok(None);
+        return Ok(Err(NoTask::NoActiveTask));
     };
     let task: ubu_core::core::Task = serde_json::from_str(&raw).map_err(internal)?;
     let id = task.id.to_string();
     let round = rounds_admitted(state, &id).await? + 1;
-    Ok(Some(ClarifyContext {
+    Ok(Ok(ClarifyContext {
         id,
         title: task.title,
         category_tag: task.category_tag,
