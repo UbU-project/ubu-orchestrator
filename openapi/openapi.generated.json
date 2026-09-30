@@ -1395,6 +1395,66 @@
         }
       }
     },
+    "/reports/time-by-category": {
+      "get": {
+        "tags": [
+          "crate::api::reports"
+        ],
+        "operationId": "time_by_category",
+        "parameters": [
+          {
+            "name": "schema_version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Inclusive RFC 3339 start. Absent: seven days before `to`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Inclusive RFC 3339 end. Absent: now.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimeByCategoryResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or unknown schema version, an unreadable bound, or from after to"
+          }
+        }
+      }
+    },
     "/routine/{objective_id}/override/{local_date}": {
       "put": {
         "tags": [
@@ -3140,6 +3200,44 @@
             }
           }
         ]
+      },
+      "CategoryTime": {
+        "type": "object",
+        "required": [
+          "category",
+          "seconds",
+          "static_seconds",
+          "completed_seconds",
+          "task_count"
+        ],
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "completed_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Dynamic Tasks completed inside the range, by observed window or estimate.",
+            "minimum": 0
+          },
+          "seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`static_seconds + completed_seconds`.",
+            "minimum": 0
+          },
+          "static_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Overlap of Static windows with the range, whether or not the Task was completed.",
+            "minimum": 0
+          },
+          "task_count": {
+            "type": "integer",
+            "description": "Tasks that contributed to this row.",
+            "minimum": 0
+          }
+        }
       },
       "CheckpointCoverage": {
         "type": "string",
@@ -6735,6 +6833,51 @@
           }
         }
       },
+      "TimeByCategoryResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "generated_at",
+          "from",
+          "to",
+          "categories",
+          "unmeasured",
+          "total_seconds"
+        ],
+        "properties": {
+          "categories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CategoryTime"
+            },
+            "description": "Sorted by `seconds` descending, then `category` ascending."
+          },
+          "from": {
+            "type": "string"
+          },
+          "generated_at": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "total_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "unmeasured": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UnmeasuredTask"
+            },
+            "description": "Work that happened in the range and could not be measured."
+          }
+        }
+      },
       "TimeWindowBody": {
         "type": "object",
         "description": "Unix seconds for store-built requests; caller-defined units for supplied requests.",
@@ -6800,6 +6943,25 @@
             "type": "string"
           },
           "schema_version": {
+            "type": "string"
+          }
+        }
+      },
+      "UnmeasuredTask": {
+        "type": "object",
+        "required": [
+          "task_id",
+          "title",
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "title": {
             "type": "string"
           }
         }

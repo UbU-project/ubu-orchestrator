@@ -62,7 +62,8 @@ use utoipa::OpenApi;
         crate::api::projection::reconcile,
         crate::api::projection::accept_external,
         crate::api::reports::risk,
-        crate::api::reports::human_complete
+        crate::api::reports::human_complete,
+        crate::api::reports::time_by_category
     ),
     components(schemas(
         crate::api::advisory_run::AdvisoryRunRequest,
@@ -232,7 +233,10 @@ use utoipa::OpenApi;
         crate::api::reports::StretchPressure,
         crate::api::reports::PostPlanStateDelta,
         crate::api::reports::HumanCompleteReportResponse,
-        crate::api::reports::TaskStatusCount
+        crate::api::reports::TaskStatusCount,
+        crate::api::reports::CategoryTime,
+        crate::api::reports::UnmeasuredTask,
+        crate::api::reports::TimeByCategoryResponse
     )),
     tags(
         (name = "ubu-orchestrator", description = "Local UbU Phase 1 orchestration API")

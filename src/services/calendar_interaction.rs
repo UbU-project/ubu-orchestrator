@@ -28,9 +28,13 @@ pub struct ReopenSignal {
 #[derive(Debug, Clone)]
 pub struct CompletionRecord {
     pub log_id: String,
+    /// When the completion was recorded: the Log entry's `created_at`.
+    pub recorded_at: String,
     pub source_kind: Option<String>,
     pub source_id: Option<String>,
     pub has_observed_window: bool,
+    /// The observed window's length, when the completion carries a valid one.
+    pub observed_seconds: Option<u64>,
 }
 impl CompletionRecord {
     pub fn is_from_calendar_event(&self, external_id: &str) -> bool {
@@ -199,18 +203,23 @@ pub async fn latest_completion(
     pool: &sqlx::SqlitePool,
     task_id: &str,
 ) -> Result<Option<CompletionRecord>> {
-    let row: Option<(String,String)> = sqlx::query_as("SELECT id,payload_json FROM logs WHERE (event_type='task_done' OR (event_type='decision_recorded' AND json_extract(payload_json,'$.decision')='task_completed')) AND EXISTS (SELECT 1 FROM json_each(logs.object_refs_json) WHERE value=?) ORDER BY rowid DESC LIMIT 1")
+    let row: Option<(String,String,String)> = sqlx::query_as("SELECT id,payload_json,created_at FROM logs WHERE (event_type='task_done' OR (event_type='decision_recorded' AND json_extract(payload_json,'$.decision')='task_completed')) AND EXISTS (SELECT 1 FROM json_each(logs.object_refs_json) WHERE value=?) ORDER BY rowid DESC LIMIT 1")
         .bind(task_id).fetch_optional(pool).await.map_err(internal)?;
-    row.map(|(log_id, raw)| {
+    row.map(|(log_id, raw, recorded_at)| {
         let payload: Value = serde_json::from_str(&raw).map_err(internal)?;
+        let observed = payload["observed_window"]["start"]
+            .as_str()
+            .zip(payload["observed_window"]["end"].as_str())
+            .and_then(|(start, end)| CalendarTimeRange::parse(start, end).ok());
         Ok(CompletionRecord {
             log_id,
+            recorded_at,
             source_kind: payload["source"]["source_kind"].as_str().map(str::to_owned),
             source_id: payload["source"]["source_id"].as_str().map(str::to_owned),
-            has_observed_window: payload["observed_window"]["start"]
-                .as_str()
-                .zip(payload["observed_window"]["end"].as_str())
-                .is_some_and(|(start, end)| CalendarTimeRange::parse(start, end).is_ok()),
+            has_observed_window: observed.is_some(),
+            observed_seconds: observed.and_then(|window| {
+                u64::try_from(window.end.inner().unix_timestamp() - window.start.inner().unix_timestamp()).ok()
+            }),
         })
     })
     .transpose()

@@ -134,6 +134,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/reports/risk", get(api::reports::risk))
         .route("/reports/human-complete", get(api::reports::human_complete))
+        .route("/reports/time-by-category", get(api::reports::time_by_category))
         .route("/openapi.json", get(openapi::openapi_json))
         .with_state(state)
 }
