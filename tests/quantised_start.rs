@@ -126,3 +126,85 @@ async fn two_plans_within_one_minute_have_identical_dynamic_windows_and_the_prev
     assert_eq!(kinds, ["update", "update", "update"], "a genuine re-plan still moves genuine windows: {moved}");
     println!("P1B53_D_A_MINUTE_LATER={}", json!({"third_plan_at":"08:01:10Z","third_dynamic":dynamic(&third),"operations":kinds}));
 }
+
+// The same, on a store shaped like a real week: stochastic durations, a
+// Preference, routines and captured events. Quantising the start is not enough
+// there. The kernel names each candidate after the request id and seeds a
+// candidate's rollouts from its name, and the orchestrator minted a new request
+// id for every request: twenty Plans of this store at ONE instant came back as
+// seven different sets of placements. The seed and the id the kernel is given
+// are now functions of what is being planned.
+async fn a_week_shaped_store(horizon: u64) -> AppState {
+    let wire = |id: &str, summary: &str, start: &str, end: &str, colour: &str| json!({"id":id,"summary":summary,"start":{"dateTime":start},"end":{"dateTime":end},"colorId":colour,"transparency":"opaque","reminders":{"useDefault":false,"overrides":[]}});
+    let calendar = Arc::new(RecordingCalendarApi::with_wire_events(&json!({"items":[
+        wire("0inv3nt3dc0unci1_20260930T000000Z","Synthetic standing teapot council","2026-09-30T00:00:00Z","2026-09-30T01:00:00Z","9"),
+        wire("0inv3nt3dk3tt1edescaling","Synthetic kettle descaling","2026-09-30T02:00:00Z","2026-09-30T02:30:00Z","3"),
+        wire("0inv3nt3d1ighth0uset0ur","Synthetic lighthouse tour","2026-09-30T04:00:00Z","2026-09-30T05:00:00Z","1")
+    ]})));
+    let state = AppState::in_memory(ServerConfig::from_env().with_planning_horizon_seconds(horizon))
+        .await
+        .unwrap()
+        .with_clock(FixedClock(UbuTimestamp::parse("2026-09-29T07:59:01Z").unwrap()))
+        .with_calendar_api(calendar);
+    ok(&state, "POST", "/projection/calendar/capture", json!({"schema_version":"ubu.orchestrator.calendar_capture.v1","export_mode":"mock"})).await;
+    // A night that begins exactly sixty minutes after the Plan's first minute, and a daily routine.
+    for (title, start, seconds) in [("Synthetic night", "09:00:00", 28_800), ("Synthetic daily kelp inventory", "22:00:00", 1_800)] {
+        let (status, body) = request(&state, "POST", "/objective", json!({
+            "schema_version":"ubu.orchestrator.objective.v1","mode":"evergreen","title":title,
+            "recurrence":{"timezone":"UTC","rule":{"kind":"daily"}},
+            "routine_instance_template":{"title":title,"duration_estimate":{"type":"fixed","seconds":seconds},"nominal_start":start,
+                "placement":"static","occupies_capacity":true,"tags":[],"reminder_minutes":[]}
+        })).await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+    }
+    let lognormal = |min: u64, mode: u64, p95: u64| json!({"type":"shifted_lognormal_p95","min_seconds":min,"mode_seconds":mode,"p95_seconds":p95});
+    let fixed = |seconds: u64| json!({"type":"fixed","seconds":seconds});
+    let mut ids = Vec::new();
+    for (title, estimate, category) in [
+        ("buttons", fixed(2_700), "work"),
+        ("census", lognormal(1_200, 2_400, 5_400), "work"),
+        ("oat milk", fixed(1_200), "grocery"),
+        ("pantry", lognormal(600, 1_200, 3_000), "grocery"),
+        ("fern", fixed(1_800), "personal"),
+    ] {
+        let (status, body) = request(&state, "POST", "/task", json!({"schema_version":"ubu.orchestrator.task_capture.v1","title":format!("Synthetic {title}"),"duration_estimate":estimate,"category_tag":category,"tags":[category]})).await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        ids.push(body["task_id"].as_str().unwrap().to_owned());
+    }
+    let (status, body) = request(&state, "POST", "/preference", json!({"schema_version":"ubu.orchestrator.preference.v1","task_a":ids[2],"task_b":ids[4],"order":"a_preferred_to_b"})).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    state
+}
+
+#[tokio::test]
+async fn twenty_plans_across_one_minute_of_a_week_shaped_store_are_one_plan_at_both_horizons() {
+    for horizon in [86_400_u64, 604_800] {
+        let state = a_week_shaped_store(horizon).await;
+        // Twenty requests, three seconds apart, from 07:59:01 to 07:59:58: one minute, twenty request ids.
+        let mut plans = Vec::new();
+        let mut request_ids = std::collections::BTreeSet::new();
+        for i in 0..20 {
+            let plan = generate(&at(&state, &format!("2026-09-29T07:59:{:02}Z", 1 + i * 3))).await;
+            request_ids.insert(plan["request_id"].as_str().unwrap().to_owned());
+            plans.push(dynamic(&plan));
+        }
+        assert_eq!(request_ids.len(), 20, "every request still has an id of its own");
+        assert_eq!(plans[0].len(), 5, "{:?}", plans[0]);
+        assert_eq!(plans[0][0].1, "2026-09-29T08:00:00Z");
+        for (index, plan) in plans.iter().enumerate() {
+            assert_eq!(plan, &plans[0], "Plan {index} of 20 at a {horizon}-second horizon");
+        }
+        // And so a re-plan in that minute writes nothing: plan, approve, plan again, preview.
+        let first_at = at(&state, "2026-09-29T07:59:05Z");
+        generate(&first_at).await;
+        approve(&first_at, &preview(&first_at).await).await;
+        let second_at = at(&state, "2026-09-29T07:59:55Z");
+        generate(&second_at).await;
+        assert_eq!(preview(&second_at).await["operations"], json!([]), "horizon {horizon}");
+        // A minute later the Plan starts a minute later, and that is a real difference.
+        let later = dynamic(&generate(&at(&state, "2026-09-29T08:00:20Z")).await);
+        assert_eq!(later[0].1, "2026-09-29T08:01:00Z");
+        assert_ne!(later, plans[0]);
+        println!("P1B53_D_WEEK_SHAPED horizon={horizon} placements={:?}", plans[0].iter().map(|(_, start, end)| format!("{}-{}", &start[11..19], &end[11..19])).collect::<Vec<_>>());
+    }
+}

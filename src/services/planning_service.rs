@@ -47,6 +47,9 @@ pub async fn generate(
     request: GeneratePlanningRequest,
 ) -> Result<PlanningResponseBody> {
     validate_optional_schema_version(request.schema_version.as_deref())?;
+    // A request built from the store is seeded by this service; one supplied in
+    // full carries its caller's own seed and request id, and is not touched.
+    let store_built = request.request.is_none();
     let StorePlanningRequest {
         request: planning_request,
         blocked_tasks,
@@ -91,7 +94,16 @@ pub async fn generate(
         compiled: &compiled_segments,
     };
     validate_task_models(&planning_request)?;
-    let kernel_request = PlanningRequest::from(planning_request.clone());
+    let mut kernel_request = PlanningRequest::from(planning_request.clone());
+    if store_built {
+        // The kernel names each candidate after the request id, and seeds a
+        // candidate's rollouts from its name. The id this service mints is new for
+        // every request, so two Plans over an identical store and window drew
+        // different samples and could settle on different placements. The kernel is
+        // therefore handed an id that is a function of what is being planned. The
+        // API's `request_id` and the stored Plan keep their own, unique one.
+        kernel_request.request_id = format!("store-{:016x}", kernel_request.rng_seed);
+    }
     let adapter = CpuPlannerAdapter {
         strategy: state.inner().planner_strategy,
     };
@@ -954,7 +966,11 @@ async fn build_request_from_store_with_context(
         task_graph(&task_bodies, &priority_order, &deadlines, &mandatory)?
     };
     let request_id = UbuId::new(ObjectType::Plan).to_string();
-    let rng_seed = stable_seed(&request_id, &time_window, &task_graph.topological_order);
+    // The seed is a function of what is being planned and of nothing else. It
+    // used to include the request id, which is new for every request, so two
+    // Plans over an identical store and window drew different samples and could
+    // settle on different placements: churn that no change in the world caused.
+    let rng_seed = stable_seed(&time_window, &task_graph.topological_order);
     let affect_profile = build_affect_profile(pool).await?;
     let affect_resolution = resolve_affect_observation(pool, &affect_profile, &time_window).await?;
 
@@ -2141,11 +2157,14 @@ async fn task_titles(
     Ok(titles)
 }
 
-fn stable_seed(request_id: &str, time_window: &TimeWindowBody, order: &[String]) -> u64 {
+/// Stable across requests: the same window and the same Tasks in the same order
+/// give the same seed, whichever request asks.
+fn stable_seed(time_window: &TimeWindowBody, order: &[String]) -> u64 {
     let mut hash = 0xcbf29ce484222325_u64;
-    for byte in request_id
-        .bytes()
-        .chain(time_window.start.to_le_bytes())
+    for byte in time_window
+        .start
+        .to_le_bytes()
+        .into_iter()
         .chain(time_window.end.to_le_bytes())
         .chain(order.iter().flat_map(|id| id.bytes()))
     {

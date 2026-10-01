@@ -94,11 +94,32 @@ that minute. It rounds up and never down: rounding down would place work in
 the past. The horizon's end is derived from the rounded start, so the span is
 still exactly `UBU_PLANNING_HORIZON_SECONDS`.
 
+Rounding the start was not enough on its own, and the first version of this
+change claimed more than it delivered. On a store shaped like a real week,
+with stochastic durations, twenty Plans made at **one instant** came back as
+seven different sets of placements. The planning kernel names each candidate
+after the request id and seeds a candidate's rollouts from its name, and this
+service minted a new request id for every request. So an identical store and
+window drew different samples each time, and when candidates scored closely a
+different one won.
+
+Two things are therefore functions of what is being planned, and of nothing
+else:
+
+- the `rng_seed` of a store-built request is derived from the window and the
+  Tasks in their order. It used to include the request id;
+- the request id **given to the kernel** is derived from that seed. The
+  `request_id` in the API response and on the stored Plan is still unique to
+  each request.
+
+A request supplied in full by a caller keeps its own seed and id, untouched.
+
 What that gives:
 
-- **two Plans generated within the same minute have identical Dynamic
-  windows**, and the Calendar preview between them proposes **no
-  operations**;
+- **two Plans generated within the same minute, over an unchanged store,
+  have identical Dynamic windows**, and the Calendar preview between them
+  proposes **no operations**. Tested with twenty Plans across one minute at
+  both the one-day and the one-week horizon;
 - no Dynamic placement is ever earlier than the request.
 
 What it does not give, and should not be read as giving:
