@@ -33,7 +33,8 @@ For an event it cannot own, capture:
   key, so a repeat capture finds the same Task and updates it in place;
 - reports `capture_occupancy_only`, naming the event id and never its title.
   A recurring commitment's title is among the most private text in the
-  calendar;
+  calendar. From P1B-52 there is **one** such diagnostic per capture, however
+  many events it covers: see [One diagnostic per capture](#one-diagnostic-per-capture);
 - **does not add the event to the applied record.** Capture writes no
   `projection_results` row for it.
 
@@ -54,6 +55,33 @@ and stays `foreign` to every reconcile.
 | reconcile after capture | matched | still `foreign`, still `capture_event_not_ownable` |
 | moved in the calendar | the Task follows | the Task follows, on the next capture |
 | capture diagnostic | colour diagnostics only | `capture_occupancy_only` |
+
+## One diagnostic per capture
+
+A week of one daily commitment is seven events UbU cannot own. Capture
+reports them once, in the shape `suggest_tags::skipped_occurrences` uses:
+the first three ids are named and the rest are counted.
+
+One event keeps the sentence it always had:
+
+> Calendar event `abc123def456ghij_20260928T163000Z` cannot be owned by UbU,
+> so its time is recorded as an occupied window that UbU will never write
+> back to or export
+
+Several are one line:
+
+> 7 Calendar events cannot be owned by UbU, so the time of each is recorded
+> as an occupied window that UbU will never write back to or export:
+> `…_20260929T090000Z`, `…_20260930T090000Z`, `…_20261001T090000Z` and 4 more
+
+It comes after the per-event colour diagnostics, and it is repeated by every
+capture that still observes those events.
+
+**The count is of events, not of commitments.** Capture records occupied
+time; it does not reconstruct recurrence. Each instance is its own Static
+Task, and nothing in UbU knows that seven of them are the same commitment.
+The diagnostic counts whatever one capture could not own, whether that is
+one series or several.
 
 ## Why it can never be written back
 

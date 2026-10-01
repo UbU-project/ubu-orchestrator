@@ -276,3 +276,40 @@ async fn next_action_recommends_placed_task_with_unplaced_risk() {
             && f["subject_ref"] == other
             && f["blocking"] == false));
 }
+
+// P1B-52 §D: "Task `id` it cannot fit its allowed occupancy window at placement
+// duration" reached the planning diagnostics, the risk report and the unplaced
+// list. It was not a sentence.
+#[tokio::test]
+async fn the_unplaceable_message_reads_as_a_sentence_wherever_it_is_shown() {
+    let state = state().await;
+    task(&state, 1, "Fits", NOW, HOUR).await;
+    let excluded = task(&state, 2, "Beyond horizon", HOUR, "2026-09-22T11:00:00Z").await;
+    let response = generate(&state, HOUR).await;
+    let sentence = format!("Task `{excluded}` was left out of the Plan: it cannot fit its allowed occupancy window at its placement duration");
+    let diagnostic = response["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["code"] == "task_unplaceable")
+        .unwrap();
+    assert_eq!(diagnostic["message"], sentence);
+    // The same words are the unplaced Task's explanation and the risk finding's detail.
+    let entry = unplaced(&response).iter().find(|u| u["task_id"] == excluded).unwrap();
+    assert_eq!(entry["explanation"], sentence);
+    assert_eq!(entry["summary"], "Beyond horizon");
+    let finding = response["risk_report"]["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["category"] == "unplaced_work" && f["subject_ref"] == excluded)
+        .unwrap();
+    assert_eq!(finding["detail"], sentence);
+    // A subject, then a verb: never "Task `id` it …".
+    for text in [&diagnostic["message"], &entry["explanation"], &finding["detail"]] {
+        let text = text.as_str().unwrap();
+        assert!(!text.contains("` it "), "{text}");
+        assert!(text.contains("` was left out of the Plan: "), "{text}");
+    }
+    println!("P1B52_D_SENTENCE={sentence}");
+}

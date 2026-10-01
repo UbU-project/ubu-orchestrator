@@ -10,8 +10,10 @@ use std::sync::Arc;
 use ubu_orchestrator::{
     services::{
         calendar_apply,
+        calendar_capture::{occupancy_diagnostic, plan_capture, MAX_OCCUPANCY_NAMED},
         calendar_client::{RecordedCalendarCall, RecordingCalendarApi},
         calendar_projection::external_id,
+        calendar_wire::parse_event,
     },
     state::AppState,
 };
@@ -372,4 +374,101 @@ async fn an_unowned_event_moved_in_the_calendar_moves_the_occupied_window_in_pla
     assert_eq!(payload["static_window"], json!({"start":"2026-09-29T14:00:00Z","end":"2026-09-29T15:00:00Z"}));
     assert_eq!(payload["__version"], 2);
     assert_eq!(count(&moved, "projection_results").await, 0, "a move is still not ownership");
+}
+
+// P1B-52 §D: one diagnostic per capture for every event UbU cannot own. A week
+// of one daily commitment is one line naming the count, not seven lines.
+const ONE: &str = "Calendar event `0inv3nt3dc0unci1_20260929T090000Z` cannot be owned by UbU, so its time is recorded as an occupied window that UbU will never write back to or export";
+fn daily(days: u32) -> Vec<Value> {
+    (0..days)
+        .map(|day| {
+            let date = 29 + day;
+            // 29 and 30 September, then October: an invented week of one daily commitment.
+            let (month, dom) = if date <= 30 { (9, date) } else { (10, date - 30) };
+            wire(
+                &format!("0inv3nt3dc0unci1_2026{month:02}{dom:02}T090000Z"),
+                COUNCIL,
+                &format!("2026-{month:02}-{dom:02}T09:00:00Z"),
+                &format!("2026-{month:02}-{dom:02}T10:00:00Z"),
+            )
+        })
+        .collect()
+}
+fn planned(items: Vec<Value>) -> (usize, Vec<(String, String)>) {
+    let events: Vec<_> = items.iter().map(|item| parse_event(item).unwrap()).collect();
+    let inverse = [("3".to_owned(), Some("personal".to_owned()))].into_iter().collect();
+    let (tasks, diagnostics) = plan_capture(&events, &inverse, &Default::default());
+    (tasks.len(), diagnostics.into_iter().map(|d| (d.code, d.message)).collect())
+}
+
+#[test]
+fn a_week_of_one_daily_commitment_is_one_diagnostic_naming_the_count_and_the_first_few_ids() {
+    let (tasks, diagnostics) = planned(daily(7));
+    // Seven occupied windows, and one line about them.
+    assert_eq!(tasks, 7);
+    assert_eq!(
+        diagnostics,
+        vec![(
+            OCCUPANCY.to_owned(),
+            "7 Calendar events cannot be owned by UbU, so the time of each is recorded as an occupied window that UbU will never write back to or export: `0inv3nt3dc0unci1_20260929T090000Z`, `0inv3nt3dc0unci1_20260930T090000Z`, `0inv3nt3dc0unci1_20261001T090000Z` and 4 more".to_owned()
+        )]
+    );
+    assert_eq!(MAX_OCCUPANCY_NAMED, 3);
+    assert!(!diagnostics[0].1.contains("teapot"), "no title is echoed");
+    println!("P1B52_D_COLLAPSED={}", diagnostics[0].1);
+}
+
+#[test]
+fn a_single_instance_still_names_its_id_and_a_few_are_all_named() {
+    // One: the sentence it always was.
+    assert_eq!(planned(daily(1)).1, vec![(OCCUPANCY.to_owned(), ONE.to_owned())]);
+    // Two and three: every id, and nothing counted.
+    for days in [2, 3] {
+        let (tasks, diagnostics) = planned(daily(days));
+        assert_eq!(tasks, days as usize);
+        assert_eq!(diagnostics.len(), 1);
+        let message = &diagnostics[0].1;
+        assert!(message.starts_with(&format!("{days} Calendar events cannot be owned by UbU")), "{message}");
+        assert_eq!(message.matches("0inv3nt3dc0unci1_").count(), days as usize, "{message}");
+        assert!(!message.contains("more"), "{message}");
+    }
+    // Four: three named, one counted.
+    let four = &planned(daily(4)).1[0].1;
+    assert!(four.ends_with("`0inv3nt3dc0unci1_20261001T090000Z` and 1 more"), "{four}");
+    // None: nothing to say.
+    assert!(occupancy_diagnostic(&[]).is_none());
+    // An ownable event beside them is not counted and not named, and its colour diagnostic comes first.
+    let mut items = daily(2);
+    let mut uncoloured = delivery();
+    uncoloured.as_object_mut().unwrap().remove("colorId");
+    items.insert(1, uncoloured);
+    let (tasks, diagnostics) = planned(items);
+    assert_eq!(tasks, 3);
+    assert_eq!(diagnostics.iter().map(|d| d.0.as_str()).collect::<Vec<_>>(), ["capture_colour_absent", OCCUPANCY]);
+    assert!(diagnostics[1].1.starts_with("2 Calendar events"), "{}", diagnostics[1].1);
+    assert!(!diagnostics[1].1.contains(PLAIN), "{}", diagnostics[1].1);
+}
+
+// Through the route, for one capture of several instances inside the horizon.
+#[tokio::test]
+async fn one_capture_of_several_instances_reports_them_once_and_repeats_it_once() {
+    let instances: Vec<Value> = ["09", "11", "13"]
+        .iter()
+        .map(|hour| wire(&format!("0inv3nt3dc0unci1_20260929T{hour}0000Z"), COUNCIL, &format!("2026-09-29T{hour}:00:00Z"), &format!("2026-09-29T{hour}:30:00Z")))
+        .collect();
+    let (state, _) = setup(instances).await;
+    let captured = capture(&state).await;
+    assert_eq!(captured["captured"], 3, "{captured}");
+    let expected = vec![(
+        OCCUPANCY.to_owned(),
+        "3 Calendar events cannot be owned by UbU, so the time of each is recorded as an occupied window that UbU will never write back to or export: `0inv3nt3dc0unci1_20260929T090000Z`, `0inv3nt3dc0unci1_20260929T110000Z`, `0inv3nt3dc0unci1_20260929T130000Z`".to_owned(),
+    )];
+    assert_eq!(codes(&captured), expected, "{captured}");
+    // Each is still its own Static Task. Nothing knows they are the same commitment.
+    let tasks = active(&state).await;
+    assert_eq!(tasks.len(), 3);
+    assert!(tasks.iter().all(|task| task["placement"] == "static" && task["title"] == COUNCIL));
+    let again = capture(&state).await;
+    assert_eq!(again["unchanged"], 3, "{again}");
+    assert_eq!(codes(&again), expected, "{again}");
 }

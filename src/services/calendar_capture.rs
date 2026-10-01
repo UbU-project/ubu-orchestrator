@@ -52,6 +52,33 @@ pub fn not_ownable_diagnostic(external_id: &str) -> Option<DiagnosticBody> {
     })
 }
 
+/// How many unowned events one capture names before it counts the rest.
+pub const MAX_OCCUPANCY_NAMED: usize = 3;
+
+/// One diagnostic for every event of a capture that UbU cannot own, in the shape
+/// `suggest_tags::skipped_occurrences` uses: the first few are named and the rest
+/// are counted. A week of a daily commitment is one line, not seven. Ids only:
+/// an event's title is never echoed.
+pub fn occupancy_diagnostic(ids: &[String]) -> Option<DiagnosticBody> {
+    let message = match ids {
+        [] => return None,
+        [id] => format!("Calendar event `{id}` cannot be owned by UbU, so its time is recorded as an occupied window that UbU will never write back to or export"),
+        _ => {
+            let named: Vec<_> = ids.iter().take(MAX_OCCUPANCY_NAMED).map(|id| format!("`{id}`")).collect();
+            let rest = match ids.len() - named.len() {
+                0 => String::new(),
+                more => format!(" and {more} more"),
+            };
+            format!(
+                "{} Calendar events cannot be owned by UbU, so the time of each is recorded as an occupied window that UbU will never write back to or export: {}{rest}",
+                ids.len(),
+                named.join(", ")
+            )
+        }
+    };
+    Some(DiagnosticBody { code: "capture_occupancy_only".into(), message })
+}
+
 pub fn plan_capture(
     foreign: &[DesiredEvent],
     palette_inverse: &BTreeMap<String, Option<String>>,
@@ -60,6 +87,7 @@ pub fn plan_capture(
     let mut tasks = Vec::new();
     let mut diagnostics = Vec::new();
     let mut seen = BTreeSet::new();
+    let mut unowned = Vec::new();
     for event in foreign {
         if !seen.insert(&event.external_id) {
             continue;
@@ -121,10 +149,7 @@ pub fn plan_capture(
             },
         };
         if !ownable {
-            diagnostics.push(DiagnosticBody {
-                code: "capture_occupancy_only".into(),
-                message: format!("Calendar event `{}` cannot be owned by UbU, so its time is recorded as an occupied window that UbU will never write back to or export", event.external_id),
-            });
+            unowned.push(event.external_id.clone());
         }
         tasks.push(CapturedTask {
             task_id: existing_by_source.get(&event.external_id).cloned(),
@@ -136,6 +161,8 @@ pub fn plan_capture(
             category_tag,
         });
     }
+    // After the per-event colour diagnostics, and once for the whole capture.
+    diagnostics.extend(occupancy_diagnostic(&unowned));
     (tasks, diagnostics)
 }
 

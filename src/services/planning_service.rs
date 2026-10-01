@@ -778,7 +778,7 @@ async fn build_request_from_store_with_context(
             } else if code == "routine_no_free_time" {
                 "fixed commitments leave no free time in its allowed range"
             } else {
-                "it cannot fit its allowed occupancy window at placement duration"
+                "it cannot fit its allowed occupancy window at its placement duration"
             };
             diagnostics.push(exclusion_diagnostic(
                 &task.id,
@@ -2480,7 +2480,9 @@ fn exclusion_diagnostic(id: &str, mandatory: bool, code: &str, reason: &str) -> 
     } else {
         DiagnosticBody {
             code: code.into(),
-            message: format!("Task `{id}` {reason}"),
+            // Every reason is a clause with its own subject, as in the mandatory message
+            // above. "Task `id` it cannot fit…" was not a sentence.
+            message: format!("Task `{id}` was left out of the Plan: {reason}"),
         }
     }
 }
