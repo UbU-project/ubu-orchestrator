@@ -51,6 +51,37 @@ async fn ok(state: &AppState, method: &str, uri: &str, body: Value) -> Value {
     assert!(status.is_success(), "{uri}: {status} {body}");
     body
 }
+/// A Task that did not happen, written as the orchestrator writes one.
+async fn make_moot(state: &AppState, id: &str) {
+    let row = queries::get_current_state(state.inner().store.pool(), id).await.unwrap().unwrap();
+    let mut payload: Value = serde_json::from_str(&row.payload_json).unwrap();
+    payload["status"] = "moot".into();
+    payload["moot_reason_code"] = "user_declared_moot".into();
+    let now = state.planning_now();
+    let envelope = state
+        .envelope_for(
+            [(UbuId::parse(id).unwrap(), ubu_core::VersionRef::Version(row.version as u64))].into_iter().collect(),
+            ubu_core::AuthoritySource::User,
+            now,
+        )
+        .unwrap();
+    queries::admit_object(
+        state.inner().store.pool(),
+        &envelope,
+        ubu_store::models::object_record::NewObjectRecord {
+            id: id.into(),
+            object_type: ObjectType::Task.as_str().into(),
+            version: row.version + 1,
+            status: "moot".into(),
+            compartment_label: row.compartment_label.clone(),
+            payload,
+            created_at: row.created_at.clone(),
+            updated_at: now.to_string(),
+        },
+    )
+    .await
+    .unwrap();
+}
 async fn generate(state: &AppState) {
     queries::store_calendar(
         state.inner().store.pool(),
@@ -224,13 +255,10 @@ async fn changed_day_patches_one_event_and_deletes_one_event() {
         UbuTimestamp::parse("2026-09-25T08:05:00Z").unwrap(),
     ));
     ok(&later,"PATCH",&format!("/task/{}",breakfast["task_id"].as_str().unwrap()),json!({"schema_version":"ubu.orchestrator.task_capture.v1","expected_version":1,"static_window":{"start":"2026-09-25T09:30:00Z","end":"2026-09-25T09:45:00Z"}})).await;
-    ok(
-        &later,
-        "POST",
-        &format!("/task/{}/action", standup["task_id"].as_str().unwrap()),
-        json!({"schema_version":"ubu.orchestrator.task_action.v1","action":"complete"}),
-    )
-    .await;
+    // Standup did not happen: it is moot, so it leaves the Plan and its event is
+    // deleted. Until P1B-53 this test completed it instead; a completed Task's
+    // event is now frozen as the record of what was done, and takes no operation.
+    make_moot(&later, standup["task_id"].as_str().unwrap()).await;
     generate(&later).await;
     let changed = preview(&later).await;
     let ops = changed["operations"].as_array().unwrap();

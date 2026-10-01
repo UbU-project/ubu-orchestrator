@@ -166,7 +166,7 @@ mod tests {
             );
             assert_eq!(repaired, vec![changed]);
             assert_eq!(
-                diff(std::slice::from_ref(&original), &repaired),
+                diff(std::slice::from_ref(&original), &repaired, &Default::default()),
                 vec![CalendarOperation::Update(original.clone())]
             );
         }
@@ -183,7 +183,7 @@ mod tests {
         assert_eq!(conflicts[0].conflict_type, "foreign");
         let repaired = repair(std::slice::from_ref(&owned), &observed);
         assert_eq!(repaired, vec![owned.clone()]);
-        assert!(diff(&[owned], &repaired).is_empty());
+        assert!(diff(&[owned], &repaired, &Default::default()).is_empty());
         assert_eq!(observed, before);
         assert!(observed.contains(&foreign));
     }
@@ -225,7 +225,7 @@ mod tests {
         let repaired = repair(&applied, &[]);
         assert!(repaired.is_empty());
         assert_eq!(
-            diff(&applied, &repaired),
+            diff(&applied, &repaired, &Default::default()),
             applied
                 .into_iter()
                 .map(CalendarOperation::Create)

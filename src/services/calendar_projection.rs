@@ -1,5 +1,5 @@
 //! Pure Calendar event mapping and deterministic projection diffing.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::api::planning::ScheduledTaskBody;
@@ -76,13 +76,25 @@ pub enum CalendarOperation {
 
 /// Compare event sets keyed by external id; creates, updates, then deletes,
 /// each in external-id order. An unchanged event produces no operation.
-pub fn diff(desired: &[DesiredEvent], existing: &[DesiredEvent]) -> Vec<CalendarOperation> {
+///
+/// An id in `retained` produces no operation at all: no create, no update and
+/// no delete. It is the event of a Task that completed, and it is left exactly
+/// as it is, as the record of what happened. Which ids are retained is the
+/// caller's knowledge; this function is pure and reads no store.
+pub fn diff(
+    desired: &[DesiredEvent],
+    existing: &[DesiredEvent],
+    retained: &BTreeSet<String>,
+) -> Vec<CalendarOperation> {
     let desired: BTreeMap<_, _> = desired.iter().map(|e| (&e.external_id, e)).collect();
     let existing: BTreeMap<_, _> = existing.iter().map(|e| (&e.external_id, e)).collect();
     let mut creates = Vec::new();
     let mut updates = Vec::new();
     let mut deletes = Vec::new();
     for (id, event) in &desired {
+        if retained.contains(*id) {
+            continue;
+        }
         match existing.get(id) {
             None => creates.push(CalendarOperation::Create((*event).clone())),
             Some(old) if old != event => updates.push(CalendarOperation::Update((*event).clone())),
@@ -90,7 +102,7 @@ pub fn diff(desired: &[DesiredEvent], existing: &[DesiredEvent]) -> Vec<Calendar
         }
     }
     for (id, event) in &existing {
-        if !desired.contains_key(id) {
+        if !desired.contains_key(id) && !retained.contains(*id) {
             deletes.push(CalendarOperation::Delete {
                 external_id: (*id).clone(),
                 summary: event.summary.clone(),
@@ -123,6 +135,43 @@ mod tests {
             gcal_color_id: None,
         }
     }
+    fn none() -> BTreeSet<String> {
+        BTreeSet::new()
+    }
+    fn only(ids: &[&str]) -> BTreeSet<String> {
+        ids.iter().map(|id| (*id).to_owned()).collect()
+    }
+
+    // P1B-53 §C. `diff` takes the retained ids as data and reads nothing else:
+    // it is a plain function of three slices, with no store, clock or state.
+    #[test]
+    fn a_retained_id_takes_no_operation_of_any_kind() {
+        use std::slice::from_ref;
+        let kept = event("aaaaa");
+        let mut moved = kept.clone();
+        moved.start_at = "2026-09-24T08:30:00Z".into();
+        let other = event("bbbbb");
+        // It would be updated: it is not.
+        assert_eq!(diff(from_ref(&moved), from_ref(&kept), &none()), vec![CalendarOperation::Update(moved.clone())]);
+        assert!(diff(from_ref(&moved), from_ref(&kept), &only(&["aaaaa"])).is_empty());
+        // It would be deleted: it is not.
+        assert_eq!(diff(&[], from_ref(&kept), &none()).len(), 1);
+        assert!(diff(&[], from_ref(&kept), &only(&["aaaaa"])).is_empty());
+        // It would be created: it is not. A retained id is left alone, whatever is asked of it.
+        assert!(diff(from_ref(&kept), &[], &only(&["aaaaa"])).is_empty());
+        // Retaining one id changes nothing for any other.
+        assert_eq!(
+            diff(&[moved, other.clone()], from_ref(&kept), &only(&["aaaaa"])),
+            vec![CalendarOperation::Create(other.clone())]
+        );
+        assert_eq!(
+            diff(&[], &[kept, other], &only(&["aaaaa"])),
+            vec![CalendarOperation::Delete { external_id: "bbbbb".into(), summary: "Synthetic event".into() }]
+        );
+        // An id that is in neither set is not invented.
+        assert!(diff(&[], &[], &only(&["zzzzz"])).is_empty());
+    }
+
     fn event(id: &str) -> DesiredEvent {
         desired_events(&[step(id)], &BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new())
             .pop()
@@ -212,10 +261,10 @@ mod tests {
     #[test]
     fn unchanged_sets_have_no_operations_and_first_run_is_sorted_creates() {
         let events = vec![event("bbbbb"), event("aaaaa")];
-        assert!(diff(&events, &[events[1].clone(), events[0].clone()]).is_empty());
-        assert!(diff(&[], &[]).is_empty());
+        assert!(diff(&events, &[events[1].clone(), events[0].clone()], &none()).is_empty());
+        assert!(diff(&[], &[], &none()).is_empty());
         assert_eq!(
-            diff(&events, &[]),
+            diff(&events, &[], &none()),
             vec![
                 CalendarOperation::Create(events[1].clone()),
                 CalendarOperation::Create(events[0].clone())
@@ -229,7 +278,7 @@ mod tests {
         let mut changed = original.clone();
         changed.start_at = "2026-09-24T08:30:00Z".into();
         assert_eq!(
-            diff(&[changed.clone()], &[original]),
+            diff(&[changed.clone()], &[original], &none()),
             vec![CalendarOperation::Update(changed)]
         );
     }
@@ -244,7 +293,7 @@ mod tests {
         let d = event("ddddd");
         let e = event("eeeee");
         assert_eq!(
-            diff(&[b.clone(), e.clone(), a.clone(), d.clone()], &existing),
+            diff(&[b.clone(), e.clone(), a.clone(), d.clone()], &existing, &none()),
             vec![
                 CalendarOperation::Create(d),
                 CalendarOperation::Create(e),
@@ -256,7 +305,7 @@ mod tests {
                 }
             ]
         );
-        let deleted = diff(&[], &existing);
+        let deleted = diff(&[], &existing, &none());
         assert_eq!(
             deleted,
             vec!["aaaaa", "bbbbb", "ccccc"]

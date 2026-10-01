@@ -124,3 +124,43 @@ compare that set with Google or imply any external reconciliation.
 3. **No retry and no backoff.** A failed operation is recorded as failed and re-proposed by the next preview. There is no queue and no automatic second attempt.
 4. **One calendar.** P1B-30 selects it with `UBU_GOOGLE_CALENDAR_ID`; routing by category or compartment is not supported.
 5. **The boundary Log records adjudication, not delivery.** A permitted operation that then fails in the client is visible in the result payload, not in the boundary Log entry, which was written when the gate decided.
+
+## A completed Task's event is frozen
+
+From P1B-53. Until then, a Task completed through Next Task dropped out of
+the next Plan, so the next preview proposed deleting its calendar event, and
+the calendar's record of what had been done disappeared at the next approval.
+
+**Once a Task's status is `completed`, its owned event takes no operation**:
+no create, no update, no delete. It stays on the calendar exactly as it was
+when the Task completed, and it stays in UbU's applied record.
+
+How it works:
+
+- `calendar_apply::preview` computes a **retained set**: the external ids of
+  applied events whose Task's status is `completed` now.
+- `calendar_projection::diff` takes that set and emits nothing for an id in
+  it. `diff` is still pure: three inputs, no store, no clock.
+- the preview says so once, with `calendar_event_retained`. One id is named.
+  Of several, the first three are named and the rest counted:
+
+  > 5 Calendar events are left as they are: each is the record of a
+  > completed Task, and is neither updated nor deleted: `…e70`, `…e71`,
+  > `…e72` and 2 more
+
+What follows from keying on the status now, and not on history:
+
+- **Only `completed` freezes.** A Task that `failed` or became `moot` did not
+  happen, and its event is still deleted. Freezing those would leave abandoned
+  work on the calendar.
+- **A reopened Task is managed again.** It is `active`, it is back in the
+  Plan, and its event is updated to its new window.
+- **Frozen is every time.** A completed Task's event is retained by every
+  preview from then on, and reported by every one. Nothing prunes the applied
+  record: it grows by one event for every Task ever completed. Reconcile still
+  compares those events, so a completed event the operator deletes in Google
+  is reported `missing`.
+
+This is separate from, and wider than, `preserve_completed`, which keeps a
+phone-completed event in the desired set so that removing its colour can undo
+the completion.

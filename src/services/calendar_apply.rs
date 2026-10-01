@@ -125,11 +125,16 @@ pub async fn preview(
     }
     super::calendar_interaction::preserve_completed(state.inner().store.pool(), &mut desired, &existing).await?;
     super::calendar_interaction::current_static_windows(state.inner().store.pool(), &mut desired).await?;
-    let operations = calendar_projection::diff(&desired, &existing).into_iter().filter(|operation| {
+    // A completed Task's event is frozen: the record of what happened. Completed
+    // only. A Task that failed or became moot did not happen, and its event is
+    // still removed. Keyed on the Task's status now, so a reopened Task, which is
+    // active again, is managed again.
+    let retained = completed_event_ids(state.inner().store.pool(), &existing).await?;
+    let operations = calendar_projection::diff(&desired, &existing, &retained).into_iter().filter(|operation| {
         // A captured Task leaving the plan must never delete the source meeting.
         !matches!(operation, CalendarOperation::Delete { external_id, .. } if origins.values().any(|origin| origin == external_id))
     }).collect();
-    let diagnostics = calendar
+    let mut diagnostics: Vec<DiagnosticBody> = calendar
         .steps
         .iter()
         .filter(|step| calendar_projection::external_id_for(&step.task_id, origins.get(&step.task_id).map(String::as_str)).is_none())
@@ -141,6 +146,7 @@ pub async fn preview(
             ),
         })
         .collect();
+    diagnostics.extend(retained_diagnostic(&retained));
     let now = state.planning_now();
     let stored = StoredCalendarPreview {
         schema_version: CALENDAR_PROJECTION_PREVIEW_SCHEMA_VERSION.into(),
@@ -172,6 +178,53 @@ pub async fn preview(
         operations: stored.operations.into_iter().map(Into::into).collect(),
         diagnostics,
     })
+}
+
+/// How many retained events one preview names before it counts the rest.
+pub const MAX_RETAINED_NAMED: usize = 3;
+
+/// The external ids of applied events whose Task is `completed` now.
+async fn completed_event_ids(
+    pool: &sqlx::SqlitePool,
+    applied: &[DesiredEvent],
+) -> Result<std::collections::BTreeSet<String>> {
+    let completed: std::collections::BTreeSet<String> =
+        sqlx::query_scalar("SELECT id FROM objects WHERE object_type='Task' AND status='completed'")
+            .fetch_all(pool)
+            .await
+            .map_err(internal)?
+            .into_iter()
+            .collect();
+    Ok(applied
+        .iter()
+        .filter(|event| completed.contains(&event.task_id))
+        .map(|event| event.external_id.clone())
+        .collect())
+}
+
+/// One diagnostic for every retained event of a preview, so the operator knows
+/// why a completed Task's event is in no operation. A week can hold many: the
+/// first few ids are named and the rest counted, as `capture_occupancy_only` is.
+pub fn retained_diagnostic(retained: &std::collections::BTreeSet<String>) -> Option<DiagnosticBody> {
+    let message = match retained.len() {
+        0 => return None,
+        1 => format!(
+            "Calendar event `{}` is left as it is: it is the record of a completed Task, and is neither updated nor deleted",
+            retained.iter().next().expect("one id")
+        ),
+        count => {
+            let named: Vec<_> = retained.iter().take(MAX_RETAINED_NAMED).map(|id| format!("`{id}`")).collect();
+            let rest = match count - named.len() {
+                0 => String::new(),
+                more => format!(" and {more} more"),
+            };
+            format!(
+                "{count} Calendar events are left as they are: each is the record of a completed Task, and is neither updated nor deleted: {}{rest}",
+                named.join(", ")
+            )
+        }
+    };
+    Some(DiagnosticBody { code: "calendar_event_retained".into(), message })
 }
 
 pub async fn load_preview(
