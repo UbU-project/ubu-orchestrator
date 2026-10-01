@@ -104,34 +104,55 @@ async fn recurring_instance_reconciles_as_foreign_inside_the_horizon() {
     println!("P1B44_TEST2={}", response["conflicts"]);
 }
 
+// P1B-51: an event UbU cannot own is captured as occupied time, not refused.
 #[tokio::test]
-async fn recurring_capture_refuses_by_handle_without_admitting_any_object() {
+async fn recurring_capture_records_occupancy_under_a_minted_handle_and_only_reads_the_calendar() {
     let (state, recorder) = setup(vec![fixture(ID)]).await;
     let before = count(&state, "objects").await;
     let admissions = count(&state, "mutation_envelopes").await;
     let response = capture(&state).await;
     let after = count(&state, "objects").await;
-    assert_eq!(after, before);
-    assert_eq!(count(&state, "mutation_envelopes").await, admissions);
-    assert_eq!(response["captured"], 0);
-    assert_eq!(response["skipped"], 1);
+    // Exactly one object was admitted, by exactly one envelope.
+    assert_eq!(after, before + 1);
+    assert_eq!(count(&state, "mutation_envelopes").await, admissions + 1);
+    assert_eq!(response["captured"], 1);
+    assert_eq!(response["skipped"], 0);
     assert_eq!(
         response["diagnostics"],
-        json!([{"code":"capture_event_not_ownable", "message":format!("Calendar event `{ID}` cannot be captured: its id cannot be a UbU Task handle, so UbU cannot own it")} ])
+        json!([{"code":"capture_occupancy_only", "message":format!("Calendar event `{ID}` cannot be owned by UbU, so its time is recorded as an occupied window that UbU will never write back to or export")} ])
     );
     assert!(!response["diagnostics"].to_string().contains(TITLE));
     assert_eq!(
         recorder.recorded_calls(),
         vec![RecordedCalendarCall::ListEvents]
     );
+    // It is Static, at the event's window, with the category its colour maps to.
+    let row: String =
+        sqlx::query_scalar("SELECT payload_json FROM objects WHERE object_type='Task'")
+            .fetch_one(state.inner().store.pool())
+            .await
+            .unwrap();
+    let task: Value = serde_json::from_str(&row).unwrap();
+    assert_eq!(
+        task["static_window"],
+        json!({"start":"2026-09-28T16:30:00Z","end":"2026-09-28T17:00:00Z"})
+    );
+    assert_eq!(task["category_tag"], "personal");
+    assert_eq!(task["occupies_capacity"], true);
+    assert_eq!(
+        task["provenance"]["source"],
+        json!({"source_kind":"google_calendar","source_id":ID})
+    );
+    // The handle is minted: nothing of the Google id is in it.
+    assert!(!task["id"].as_str().unwrap().contains("abc123def456ghij"));
     println!(
-        "P1B44_TEST3={}",
-        json!({"objects_before":before,"objects_after":after,"diagnostics":response["diagnostics"]})
+        "P1B51_A_CAPTURED={}",
+        json!({"objects_before":before,"objects_after":after,"task_id":task["id"],"diagnostics":response["diagnostics"]})
     );
 }
 
 #[tokio::test]
-async fn refusal_never_writes_ownership_and_second_reconcile_remains_foreign() {
+async fn occupancy_capture_never_writes_ownership_and_second_reconcile_remains_foreign() {
     let (state, recorder) = setup(vec![fixture(ID)]).await;
     let first = reconcile(&state).await;
     let before = count(&state, "projection_results").await;
@@ -164,7 +185,8 @@ async fn refusal_never_writes_ownership_and_second_reconcile_remains_foreign() {
         .recorded_calls()
         .iter()
         .all(|call| *call == RecordedCalendarCall::ListEvents));
-    assert_eq!(count(&state, "objects").await, 0);
+    // The one object is the occupancy Task; nothing else was admitted on the way.
+    assert_eq!(count(&state, "objects").await, 1);
     println!(
         "P1B44_TEST4={}",
         json!({"first":first["conflicts"],"second":second["conflicts"],"applied_records_before":before,"applied_records_after_capture":after_capture,"events_after_apply":recorder.events().len()})

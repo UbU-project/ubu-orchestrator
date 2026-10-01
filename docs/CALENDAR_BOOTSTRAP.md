@@ -102,10 +102,11 @@ calendar commitment was meant to be Dynamic work.
 
 ## What a calendar cannot carry
 
-Recurring instances are **not imported**. They are observed and deliberately
-refused because their source IDs cannot be owned by this capture path, as detailed
-below. Reauthor routines natively using the Routines screen or the existing
-Objective/routine endpoints. This does not invent a recurrence importer.
+Recurrence is **not imported**. From P1B-51 each recurring instance inside the
+planning horizon is captured as occupied time, a Static Task UbU does not own,
+as detailed below and in [Calendar occupancy](CALENDAR_OCCUPANCY.md). There is
+still no series: reauthor a routine natively using the Routines screen or the
+existing Objective/routine endpoints. This does not invent a recurrence importer.
 
 Preferences, dependencies, bounded `after` relations, and `establishes`/`requires`
 also do not survive: none exists on the captured calendar event. Reauthor these
@@ -115,7 +116,7 @@ the semantics of the abandoned Quick UbU snapshot.
 The palette review cannot recover those relationships. It determines categories
 only, with the diagnostic and ownership limits above.
 
-## Recurring instances: observe, name, refuse
+## Recurring instances: observe, name, record the occupancy
 
 Google's [event resource](https://developers.google.com/workspace/calendar/api/v3/reference/events)
 requires client-supplied IDs to use lowercase base32hex (`a`–`v`, `0`–`9`),
@@ -134,20 +135,24 @@ fields, invalid timestamps, cancelled items and unsupported all-day events still
 follow their existing refusals. Listing diagnostics identify the entry index and
 readable event ID, never its title or other item content.
 
-A recurring instance is observed as `foreign`, but capture refuses to turn its ID
-into a Task source handle. The reason in `calendar_projection.rs` remains:
+A recurring instance is observed as `foreign`, and UbU cannot own it. The reason
+in `calendar_projection.rs` remains:
 
 > Captured ids must validate on their own; deriving a fallback would duplicate the meeting.
 
-A replacement ID would lose the identity needed to project back onto the source
-meeting. Capture therefore admits no Task and writes no ownership record for a
-refused instance. Reconciliation after capture still sees it as foreign. Neither
-foreign group is repairable. Importing recurrence properly is later work and needs
-its own design.
+Until P1B-51 capture refused it outright and admitted no Task, so its time looked
+free to the planner. From P1B-51 capture records the occupancy and claims nothing:
+it admits one Static Task under a minted handle, keeps the event ID in
+`provenance.source` as the dedupe key, reports `capture_occupancy_only`, and
+writes no ownership record. Reconciliation after capture still sees the event as
+foreign, with `capture_event_not_ownable`. The Task is never in a desired export
+set, so no preview or approval can write to the event. Neither foreign group is
+repairable. Importing recurrence as a series is later work and needs its own design.
 
-| Refusal | Meaning | Operator action |
+| Code | Meaning | Operator action |
 | --- | --- | --- |
-| `capture_event_not_ownable` | The named event ID cannot be a UbU Task handle. | Keep managing this source in Calendar; account for its time manually. Recurring import is not available. Do not substitute an ID to force capture. |
+| `capture_occupancy_only` | Capture: the named event ID cannot be a UbU Task handle, so its time was recorded as an occupied window UbU will never write to. | None. Keep managing the commitment in Calendar; the next capture follows it if it moves. |
+| `capture_event_not_ownable` | Reconcile: the named event ID cannot be a UbU Task handle. The event is foreign and stays foreign. | None. Do not substitute an ID to force ownership. |
 | `capture_event_invalid` | An empty title or unusable concrete window prevents Task admission. | Correct the title or timed window at its source, then retry capture. |
 | `capture_all_day_unsupported` | An all-day item has no supported concrete `dateTime` window. | Keep it outside capture, or explicitly change it to a timed commitment if that reflects its actual meaning. |
 
@@ -156,25 +161,24 @@ ID to locate and correct the source where appropriate; cancelled items are
 intentionally not imported.
 
 **An uncaptured commitment occupies no capacity. The planner may place work over
-it.** The Calendar reconcile view separates `foreign` from `foreign, cannot be
-captured`, reports the latter's count inside the current planning horizon, and
-warns that **UbU cannot see them when planning**. This is a report of the planning
-gap, not a capacity reservation. The count covers represented, unownable foreign
-instances in that observation; it cannot count all-day or malformed items dropped
-by the wire parser. Capture and reconcile show the exact same backend refusal.
+it.** That is now true only of what capture cannot represent at all: all-day
+items, malformed items, and events with no title or no usable window. A recurring
+instance is captured and does occupy capacity, unless the event is Free:
+`plan_capture` sets `occupies_capacity: !event.transparent`.
 
-**Temporary operator workaround (remove during the Phase 1b to Phase 2
-transition):** place an ordinary blocking static event over the same span by
-hand, then capture that ownable placeholder so it reserves capacity. The event
-must be **Busy, not Free**: `plan_capture` sets
-`occupies_capacity: !event.transparent`. A Free/transparent placeholder captures
-as non-occupying and the planner can place work straight over it. The recurring
-source remains uncaptured; this workaround does not implement recurrence import.
+The Calendar reconcile view still separates `foreign` from `foreign, cannot be
+captured` and warns that UbU cannot see the latter when planning. That wording
+describes reconciliation before a capture. After a capture those instances are
+occupied windows in the Plan, and the group means only that UbU does not own them.
+
+**The P1B-44 workaround is removed.** A Busy placeholder placed by hand over a
+recurring commitment is no longer needed and, once the instance is captured,
+doubles the occupancy for that span. Delete the placeholders before capturing.
 
 For operator acceptance, add a recurring series in the dummy account and run
-**reconcile before capture**. Check the refusal group, its reason and horizon
-count. Capture must refuse those instances while continuing to capture ordinary
-timed events. Reconcile again: the refused instances must remain foreign without
-duplicates. Also create an ordinary event by hand and reconcile before capturing
+**reconcile before capture**. Check the group, its reason and horizon
+count. Capture must record those instances as occupied time, with
+`capture_occupancy_only`, while continuing to capture ordinary timed events.
+Reconcile again: the instances must remain foreign without duplicates. Also create an ordinary event by hand and reconcile before capturing
 it: it belongs in plain foreign, without a repair control. Capture claims ordinary
 foreign events immediately, so reversing this order hides that classification.

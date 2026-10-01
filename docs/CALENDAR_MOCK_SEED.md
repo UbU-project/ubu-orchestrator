@@ -87,7 +87,7 @@ because observed always equalled applied:
 | A colour on a Dynamic event completes its Task | P1B-33 | the applied events, with a colour on the Dynamic one |
 | A moved Static event moves the Task's window | P1B-34 | the applied events, with the Static one at another window |
 | An event UbU never applied is `foreign` | P1B-31, P1B-32 | the applied events and one more |
-| A recurring instance is refused | P1B-44 | an event whose id has the `{base32hex}_{timestamp}` shape |
+| A recurring instance is captured as occupied time UbU does not own | P1B-44, P1B-51 | an event whose id has the `{base32hex}_{timestamp}` shape |
 
 `ubu-devshell/scripts/check-ui-contract.sh` asserts all four, as scenarios 7
 to 10.

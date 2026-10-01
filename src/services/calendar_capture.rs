@@ -1,4 +1,9 @@
 //! Capture only foreign Calendar commitments through ordinary Task admission.
+//!
+//! UbU owns an event whose id can round-trip through `external_id`. Any other
+//! event, such as an instance of a recurring one, is captured as occupied time:
+//! a Static Task with a minted handle that UbU never writes back to, never
+//! exports and never records as applied. See docs/CALENDAR_OCCUPANCY.md.
 use super::{
     calendar_apply::{self, StoredCalendarResult, CALENDAR_PROJECTION_RESULT_SCHEMA_VERSION},
     calendar_client::{CalendarApi, CalendarExportMode},
@@ -60,10 +65,12 @@ pub fn plan_capture(
             continue;
         }
         let window = CalendarTimeRange::parse(&event.start_at, &event.end_at);
-        if let Some(diagnostic) = not_ownable_diagnostic(&event.external_id) {
-            diagnostics.push(diagnostic);
-            continue;
-        }
+        // An id UbU cannot own, such as a recurring instance, is still occupied
+        // time. Record the occupancy without claiming the event: the Task gets a
+        // minted handle, the Google id lives in provenance so a repeat capture
+        // updates rather than duplicates, and `external_id_for` keeps it out of
+        // every desired export set because its origin cannot round-trip.
+        let ownable = not_ownable_diagnostic(&event.external_id).is_none();
         if window.is_err() || event.summary.trim().is_empty() {
             diagnostics.push(DiagnosticBody {
                 code: "capture_event_invalid".into(),
@@ -113,6 +120,12 @@ pub fn plan_capture(
                 None
             },
         };
+        if !ownable {
+            diagnostics.push(DiagnosticBody {
+                code: "capture_occupancy_only".into(),
+                message: format!("Calendar event `{}` cannot be owned by UbU, so its time is recorded as an occupied window that UbU will never write back to or export", event.external_id),
+            });
+        }
         tasks.push(CapturedTask {
             task_id: existing_by_source.get(&event.external_id).cloned(),
             origin_event_id: event.external_id.clone(),
@@ -319,6 +332,12 @@ pub async fn capture(
             response.updated += 1;
         } else {
             response.unchanged += 1;
+        }
+        // Only an event UbU can own enters the applied record. An unowned one stays
+        // foreign to reconciliation and is read afresh by every capture: its
+        // occupancy is a Task, never a claim that UbU applied the event.
+        if not_ownable_diagnostic(&task.origin_event_id).is_some() {
+            continue;
         }
         let mut origin = foreign
             .iter()
