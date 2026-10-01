@@ -45,7 +45,7 @@ classification, transparency-to-capacity conversion and concrete event window.
 
 Reconciliation and foreign capture use `CalendarTimeRange::planning`. For a fresh
 workspace without a stored Calendar window, it spans the planning clock's now
-through `now + UBU_PLANNING_HORIZON_SECONDS`. Widen
+through `now + UBU_PLANNING_HORIZON_SECONDS`, which is one week unless set. Widen
 `UBU_PLANNING_HORIZON_SECONDS` for the bootstrap run, start the orchestrator with
 that configuration, then restore the usual value and restart afterwards. Nothing
 automates widening or restoration. Widening the forward span does not make past

@@ -31,9 +31,14 @@ fn at(state: &AppState, now: &str) -> AppState {
         .clone()
         .with_clock(FixedClock(UbuTimestamp::parse(now).unwrap()))
 }
+// These tests were written against a one-day horizon. From P1B-53 the default is
+// one week, so the horizon they rely on is stated, in the config and not in the
+// process environment, which every test shares.
 async fn state() -> AppState {
     at(
-        &AppState::in_memory(ServerConfig::from_env()).await.unwrap(),
+        &AppState::in_memory(ServerConfig::from_env().with_planning_horizon_seconds(86_400))
+            .await
+            .unwrap(),
         NOW,
     )
 }

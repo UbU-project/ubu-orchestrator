@@ -31,7 +31,10 @@ fn sec(time: &str) -> u64 {
 }
 async fn state() -> (AppState, Arc<RecordingCalendarApi>) {
     let recorder = Arc::new(RecordingCalendarApi::new());
-    let state = AppState::in_memory(ServerConfig::from_env())
+    // These tests were written against a one-day horizon. From P1B-53 the default
+    // is one week, so the horizon they rely on is stated, in the config and not
+    // in the process environment, which every test shares.
+    let state = AppState::in_memory(ServerConfig::from_env().with_planning_horizon_seconds(86_400))
         .await
         .unwrap()
         .with_clock(FixedClock(UbuTimestamp::parse(NOW).unwrap()))

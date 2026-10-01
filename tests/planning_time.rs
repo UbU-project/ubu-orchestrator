@@ -26,6 +26,14 @@ async fn state() -> AppState {
         .unwrap()
         .with_clock(FixedClock(UbuTimestamp::parse(NOW).unwrap()))
 }
+/// One day, stated in the config. The process environment is never changed: every
+/// test in this binary shares it.
+async fn one_day_state() -> AppState {
+    AppState::in_memory(ServerConfig::from_env().with_planning_horizon_seconds(86_400))
+        .await
+        .unwrap()
+        .with_clock(FixedClock(UbuTimestamp::parse(NOW).unwrap()))
+}
 async fn post(state: &AppState, uri: &str, body: Value) -> (StatusCode, Value) {
     let response = build_router(state.clone())
         .oneshot(json_request(uri, body))
@@ -241,8 +249,9 @@ async fn exact_static_seconds_and_timestamp_round_trip() {
 }
 
 #[tokio::test]
-async fn default_horizon_starts_now_and_keeps_in_progress_static_whole() {
-    let state = state().await;
+async fn one_day_horizon_starts_now_and_keeps_in_progress_static_whole() {
+    // An explicit 86400 behaves as the default did before P1B-53 made it a week.
+    let state = one_day_state().await;
     let dynamic = admit_task(&state, "Dynamic", json!({"duration_minutes":15})).await;
     let request = planning_service::build_request_from_store(&state)
         .await
@@ -461,7 +470,10 @@ async fn repair_horizon_is_never_earlier_than_clock_or_frozen_end() {
 #[test]
 fn horizon_environment_is_validated_without_global_test_env_races() {
     for (value, expected) in [
-        (None, Some(86400)),
+        // Unset, the horizon is one week (P1B-53). One day is still accepted when asked for.
+        (None, Some(604800)),
+        (Some("86400"), Some(86400)),
+        (Some("604800"), Some(604800)),
         (Some("3600"), Some(3600)),
         (Some("2678400"), Some(2678400)),
         (Some("0"), None),
@@ -764,4 +776,31 @@ async fn json_body(response: axum::response::Response) -> Value {
         .expect("body")
         .to_bytes();
     serde_json::from_slice(&bytes).expect("json")
+}
+
+// P1B-53 §A: one week by default, one day when asked for, and the same bounds.
+// Built from the config, so nothing here reads or changes the process environment.
+#[tokio::test]
+async fn the_default_horizon_is_one_week_and_the_bounds_are_unchanged() {
+    use ubu_orchestrator::config::DEFAULT_PLANNING_HORIZON_SECONDS;
+    assert_eq!(DEFAULT_PLANNING_HORIZON_SECONDS, 604_800);
+    let span = |seconds: u64| ServerConfig::from_env().with_planning_horizon_seconds(seconds).planning_horizon_seconds();
+    assert_eq!(span(604_800).unwrap(), 604_800);
+    assert_eq!(span(86_400).unwrap(), 86_400);
+    assert_eq!(span(1).unwrap(), 1);
+    assert_eq!(span(2_678_400).unwrap(), 2_678_400);
+    for refused in [0, 2_678_401] {
+        let message = span(refused).unwrap_err().to_string();
+        assert!(message.contains("UBU_PLANNING_HORIZON_SECONDS") && message.contains("from 1 to 2678400"), "{message}");
+        assert!(AppState::in_memory(ServerConfig::from_env().with_planning_horizon_seconds(refused)).await.is_err());
+    }
+    // The window a Plan is built over is exactly the configured span, at one week and at one day.
+    for seconds in [604_800, 86_400] {
+        let state = AppState::in_memory(ServerConfig::from_env().with_planning_horizon_seconds(seconds))
+            .await
+            .unwrap()
+            .with_clock(FixedClock(UbuTimestamp::parse(NOW).unwrap()));
+        let window = planning_service::build_request_from_store(&state).await.unwrap().time_window.unwrap();
+        assert_eq!((window.start, window.end - window.start), (timestamp_seconds(NOW), seconds));
+    }
 }

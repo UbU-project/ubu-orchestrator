@@ -17,8 +17,28 @@ Unix seconds. Coordinates outside the RFC 3339 range return
 `invalid_schedule_timestamp` rather than inventing a timestamp.
 
 The horizon applies only to store-built requests: explicit RFC 3339 horizon first,
-then stored Calendar scope, then now plus the configured span (default 86400
-seconds). `UBU_PLANNING_HORIZON_SECONDS` accepts 1 through 2678400 seconds.
+then stored Calendar scope, then now plus the configured span.
+`UBU_PLANNING_HORIZON_SECONDS` accepts 1 through 2678400 seconds.
+
+**The default span is 604800 seconds, one week.** Until P1B-53 it was 86400, one
+day; the operator decided on one week for the switch to mainline planning. One
+day is still a supported setting: export `UBU_PLANNING_HORIZON_SECONDS=86400`.
+
+One week of horizon is one week of calendar. The horizon is the range capture
+and reconciliation observe, so with nothing set:
+
+- capture takes a week of events, and each instance of a recurring commitment
+  inside the week becomes its own occupied-time Task;
+- the Plan covers a week: a routine materialises seven times, and a Task that
+  fits nowhere today can be placed later in the week;
+- **it costs more.** A week-long Plan has several times the Static placements
+  of a one-day Plan and takes longer to generate, and a preview after it
+  proposes an event for every one of them. The rehearsal in `ubu-devshell`
+  measures the generate at both horizons on the same week.
+
+Tests can use `ServerConfig::with_planning_horizon_seconds(seconds)` to state
+the horizon they rely on without changing process environment variables, which
+every test in a binary shares.
 Dynamic placement starts no earlier than now even when a selected scope starts
 earlier. Static Tasks in progress stay whole. Repair also floors its adjusted
 horizon start at now and retains the existing frozen-step adjustment.

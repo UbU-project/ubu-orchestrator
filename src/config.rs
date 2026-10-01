@@ -29,6 +29,9 @@ impl fmt::Debug for SecretToken {
 
 pub const CALENDAR_MOCK_EVENTS_VARIABLE: &str = "UBU_CALENDAR_MOCK_EVENTS";
 
+/// One week. `UBU_PLANNING_HORIZON_SECONDS` overrides it, from 1 to 2678400.
+pub const DEFAULT_PLANNING_HORIZON_SECONDS: u64 = 604_800;
+
 #[derive(Clone, Debug)]
 pub struct ServerConfig {
     bind_addr: SocketAddr,
@@ -117,14 +120,25 @@ impl ServerConfig {
         }
     }
 
+    /// How far ahead UbU plans, and so how much of the calendar it sees. Unset,
+    /// it is one week: the operator's decision for the switch (P1B-53). One day
+    /// was the default until then and is still a supported setting.
     pub fn planning_horizon_seconds(&self) -> Result<u64, crate::errors::StartupError> {
         let Some(value) = &self.planning_horizon_seconds else {
-            return Ok(86400);
+            return Ok(DEFAULT_PLANNING_HORIZON_SECONDS);
         };
         value.parse::<u64>().ok().filter(|span| (1..=2678400).contains(span)
             && value.bytes().all(|byte| byte.is_ascii_digit()))
             .ok_or_else(|| crate::errors::StartupError(format!(
                 "invalid UBU_PLANNING_HORIZON_SECONDS `{value}`: expected an integer from 1 to 2678400")))
+    }
+
+    /// The horizon as if `UBU_PLANNING_HORIZON_SECONDS` had been set to it. A
+    /// test that needs a particular horizon builds its config with this rather
+    /// than changing the process environment, which every test shares.
+    pub fn with_planning_horizon_seconds(mut self, seconds: u64) -> Self {
+        self.planning_horizon_seconds = Some(seconds.to_string());
+        self
     }
 
     pub fn planner_strategy(&self) -> Result<PlannerStrategyChoice, crate::errors::StartupError> {
