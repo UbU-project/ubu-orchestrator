@@ -164,3 +164,35 @@ What follows from keying on the status now, and not on history:
 This is separate from, and wider than, `preserve_completed`, which keeps a
 phone-completed event in the desired set so that removing its colour can undo
 the completion.
+
+## The preview says what the placement is
+
+From P1B-53 a `create` or `update` operation in the preview response carries
+`static_anchor`: whether the event's Task is Static.
+
+It is **read from the Task, never inferred from the colour**. The Plan step
+says whether a Task is a Static anchor; for an event the Plan no longer holds,
+the Task record does, by whether it has a `static_window`.
+
+The Calendar screen had inferred it, as "an event with a colour is Static".
+That is wrong in one direction that matters: a colour comes from a category,
+and a Static Task with no category has no colour. So a night block, and every
+captured event whose colour maps to nothing, previewed as Dynamic, with the
+gestures of a Dynamic event: a colour means done, a window change means
+resize. The stored state was never wrong, and capture refuses a colour
+gesture on a Static Task with `capture_interaction_not_dynamic`. The screen
+was teaching the wrong rule.
+
+| Task | `static_anchor` | `color_id` |
+|---|---|---|
+| a planned Dynamic Task, with or without a category | `false` | none |
+| a Static Task with a category | `true` | its category's |
+| a Static Task with no category | `true` | none |
+| a Static routine occurrence | `true` | its category's, or none |
+| a captured foreign event | `true` | its category's, or the event's own |
+
+The field is on the operation body and not on the event. `events` and the
+`event` inside an operation are unchanged, and so is what the wire parser and
+the mock Calendar seed read. A `delete` has no event and no placement. This is
+the one property the OpenAPI document gained; it appears on the two operation
+variants that carry an event.

@@ -2805,6 +2805,7 @@
             "type": "object",
             "required": [
               "event",
+              "static_anchor",
               "kind"
             ],
             "properties": {
@@ -2816,6 +2817,10 @@
                 "enum": [
                   "create"
                 ]
+              },
+              "static_anchor": {
+                "type": "boolean",
+                "description": "Whether the event's Task is Static: placed at a window of its own, and\nnot packed by the planner. Read from the Plan step, or from the Task\nrecord when the Plan no longer holds it. **Never inferred from the\ncolour**: a Static Task with no category has no colour, and a colour\non a Dynamic event means done."
               }
             }
           },
@@ -2823,6 +2828,7 @@
             "type": "object",
             "required": [
               "event",
+              "static_anchor",
               "kind"
             ],
             "properties": {
@@ -2834,6 +2840,10 @@
                 "enum": [
                   "update"
                 ]
+              },
+              "static_anchor": {
+                "type": "boolean",
+                "description": "As on `create`."
               }
             }
           },

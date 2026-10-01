@@ -47,9 +47,17 @@ impl From<DesiredEvent> for CalendarEventBody {
 pub enum CalendarOperationBody {
     Create {
         event: CalendarEventBody,
+        /// Whether the event's Task is Static: placed at a window of its own, and
+        /// not packed by the planner. Read from the Plan step, or from the Task
+        /// record when the Plan no longer holds it. **Never inferred from the
+        /// colour**: a Static Task with no category has no colour, and a colour
+        /// on a Dynamic event means done.
+        static_anchor: bool,
     },
     Update {
         event: CalendarEventBody,
+        /// As on `create`.
+        static_anchor: bool,
     },
     Delete {
         external_id: String,
@@ -57,13 +65,17 @@ pub enum CalendarOperationBody {
     },
 }
 
-impl From<CalendarOperation> for CalendarOperationBody {
-    fn from(operation: CalendarOperation) -> Self {
+impl CalendarOperationBody {
+    /// `is_static` answers for a Task id. It is the caller's knowledge of the
+    /// Plan and the store; an operation alone does not carry its placement.
+    pub fn from_operation(operation: CalendarOperation, is_static: impl Fn(&str) -> bool) -> Self {
         match operation {
             CalendarOperation::Create(event) => Self::Create {
+                static_anchor: is_static(&event.task_id),
                 event: event.into(),
             },
             CalendarOperation::Update(event) => Self::Update {
+                static_anchor: is_static(&event.task_id),
                 event: event.into(),
             },
             CalendarOperation::Delete {

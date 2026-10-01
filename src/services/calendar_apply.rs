@@ -130,7 +130,7 @@ pub async fn preview(
     // still removed. Keyed on the Task's status now, so a reopened Task, which is
     // active again, is managed again.
     let retained = completed_event_ids(state.inner().store.pool(), &existing).await?;
-    let operations = calendar_projection::diff(&desired, &existing, &retained).into_iter().filter(|operation| {
+    let operations: Vec<CalendarOperation> = calendar_projection::diff(&desired, &existing, &retained).into_iter().filter(|operation| {
         // A captured Task leaving the plan must never delete the source meeting.
         !matches!(operation, CalendarOperation::Delete { external_id, .. } if origins.values().any(|origin| origin == external_id))
     }).collect();
@@ -147,6 +147,30 @@ pub async fn preview(
         })
         .collect();
     diagnostics.extend(retained_diagnostic(&retained));
+    // Placement, for the operations the response shows. From the Plan step where
+    // there is one; from the Task record for an event the Plan no longer holds.
+    // Never from the colour, which a Static Task with no category does not have.
+    let mut static_tasks: std::collections::BTreeSet<String> = calendar
+        .steps
+        .iter()
+        .filter(|step| step.static_anchor)
+        .map(|step| step.task_id.clone())
+        .collect();
+    let planned: std::collections::BTreeSet<&str> = calendar.steps.iter().map(|step| step.task_id.as_str()).collect();
+    for operation in &operations {
+        let (CalendarOperation::Create(event) | CalendarOperation::Update(event)) = operation else {
+            continue;
+        };
+        if planned.contains(event.task_id.as_str()) {
+            continue;
+        }
+        if let Some(row) = queries::get_current_state(state.inner().store.pool(), &event.task_id).await? {
+            let payload: serde_json::Value = serde_json::from_str(&row.payload_json).map_err(internal)?;
+            if payload.get("static_window").is_some_and(|window| !window.is_null()) {
+                static_tasks.insert(event.task_id.clone());
+            }
+        }
+    }
     let now = state.planning_now();
     let stored = StoredCalendarPreview {
         schema_version: CALENDAR_PROJECTION_PREVIEW_SCHEMA_VERSION.into(),
@@ -175,7 +199,11 @@ pub async fn preview(
         plan_id: stored.plan_id,
         stale: stored.stale,
         events: stored.desired_events.into_iter().map(Into::into).collect(),
-        operations: stored.operations.into_iter().map(Into::into).collect(),
+        operations: stored
+            .operations
+            .into_iter()
+            .map(|operation| crate::api::calendar_projection::CalendarOperationBody::from_operation(operation, |task_id| static_tasks.contains(task_id)))
+            .collect(),
         diagnostics,
     })
 }

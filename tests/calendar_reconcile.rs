@@ -263,7 +263,8 @@ async fn externally_dragged_event_becomes_exactly_one_ordinary_update() {
     let fresh = preview(&state).await;
     assert_eq!(
         fresh["operations"],
-        json!([{"kind":"update","event":original}])
+        // Breakfast is a Static Task; from P1B-53 the operation says so.
+        json!([{"kind":"update","event":original,"static_anchor":true}])
     );
     println!("P1B31_EDITED_OPERATIONS {}", fresh["operations"]);
     assert_eq!(
