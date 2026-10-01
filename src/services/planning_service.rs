@@ -490,7 +490,14 @@ async fn build_request_from_store_with_context(
     explicit_horizon: Option<&PlanningHorizonBody>,
 ) -> Result<StorePlanningRequest> {
     let now = timestamp_seconds(&state.planning_now().to_string())?;
-    let pre_repair_horizon = resolve_time_window(state, explicit_horizon, now).await?;
+    // Dynamic packing begins on a whole minute, never at the second of the
+    // request. Anchored at the exact instant, two Plans made seconds apart had
+    // different Dynamic windows, and every re-plan rewrote every Dynamic event
+    // on the calendar. Rounded UP: rounding down would place work in the past.
+    // The horizon's end is derived from the rounded start, so its span is still
+    // exactly the configured number of seconds.
+    let anchor = next_whole_minute(now);
+    let pre_repair_horizon = resolve_time_window(state, explicit_horizon, anchor).await?;
     let routine_context =
         super::routine_service::materialize(state, &pre_repair_horizon, now).await?;
     let pool = state.inner().store.pool();
@@ -753,7 +760,7 @@ async fn build_request_from_store_with_context(
         }
         // Static-prerequisite push precedes the now floor, and its diagnostic
         // takes precedence over an empty/short occupancy window.
-        window.start = window.start.max(now);
+        window.start = window.start.max(anchor);
         let code = if dependency_outside_horizon {
             Some("dependency_outside_horizon")
         } else if window.end <= window.start
@@ -1336,6 +1343,11 @@ fn validate_canonical_plan(plan: &PlanBody) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The first whole minute at or after `seconds`. A time already on the minute is itself.
+pub(super) fn next_whole_minute(seconds: u64) -> u64 {
+    seconds.div_ceil(60).saturating_mul(60)
 }
 
 pub(super) async fn resolve_time_window(
