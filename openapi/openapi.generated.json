@@ -2253,6 +2253,15 @@
             }
           },
           "report": {},
+          "round": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The interview round a Clarify run asked for: one more than the rounds the\noperator has answered. Absent for SuggestTags and when no Task was selected.\n`clarify_no_questions` on round 1 and on a later round mean different things.",
+            "minimum": 0
+          },
           "schema_version": {
             "type": "string"
           },

@@ -306,3 +306,42 @@ async fn a_question_set_proposed_under_a_tag_only_authority_is_rejected_and_neve
     assert!(candidates(&state).await.is_empty());
     println!("P1B48_B_AUTHORITY stored={} rejected={} status={:?} validation_error={:?}", report.candidates_stored, report.candidates_rejected, report.status, report.validation_error);
 }
+
+// P1B-51: `clarify_no_questions` means one thing on round one and another later,
+// so the run says which round it asked for.
+#[tokio::test]
+async fn a_clarify_run_reports_its_round_and_a_run_with_no_task_reports_none() {
+    let stub = Stub::answering([json!({"done":true,"questions":[]}), questions(), json!({"done":true,"questions":[]})]);
+    let state = ready(stub.clone()).await;
+    // With no Task there is no round to report.
+    let nothing = clarify(&state, None).await;
+    assert_eq!(codes(&nothing), ["clarify_no_task"]);
+    assert!(nothing.get("round").is_none(), "{nothing}");
+    let (_, tags) = run_with(&state, json!({"producer":"suggest_tags"})).await;
+    assert!(tags.get("round").is_none(), "{tags}");
+
+    seed(&state, A, "active", json!({})).await;
+    // Round one, and the model declines to ask: the same code, on round 1.
+    let declined = clarify(&state, Some(A)).await;
+    assert_eq!(codes(&declined), ["clarify_no_questions"]);
+    assert_eq!(declined["round"], 1, "{declined}");
+    // Round one again, and it asks. An open interview still names its round.
+    let asked = clarify(&state, Some(A)).await;
+    assert_eq!(asked["candidates_enqueued"], 1);
+    assert_eq!(asked["round"], 1, "{asked}");
+    let queued = clarify(&state, Some(A)).await;
+    assert_eq!(codes(&queued), ["clarify_already_queued"]);
+    assert_eq!(queued["round"], 1, "{queued}");
+    sqlx::query("UPDATE advisory_candidates SET lifecycle_state='admitted', version=2 WHERE advisory_candidate_id=?")
+        .bind(asked["candidate_ids"][0].as_str().unwrap())
+        .execute(state.inner().store.pool())
+        .await
+        .unwrap();
+    // A later round with nothing left to ask: the same code, on round 2.
+    let finished = clarify(&state, Some(A)).await;
+    assert_eq!(codes(&finished), ["clarify_no_questions"]);
+    assert_eq!(finished["round"], 2, "{finished}");
+    assert_eq!(finished["diagnostics"][0]["message"], declined["diagnostics"][0]["message"], "the message alone does not tell the two apart");
+    assert_eq!(stub.asked(), 3);
+    println!("P1B51_B_ROUND={}", json!({"declined":{"round":declined["round"],"diagnostics":declined["diagnostics"]},"finished":{"round":finished["round"],"diagnostics":finished["diagnostics"]}}));
+}

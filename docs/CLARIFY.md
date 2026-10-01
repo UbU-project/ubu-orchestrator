@@ -58,7 +58,7 @@ Each is status `ok`, HTTP 200, with nothing enqueued.
 |---|---|
 | `clarify_no_task` | There is no Task to interview. No model was asked. The message says which of four things is true, because the remedy differs: no active, non-routine Task exists at all (capture one); every active Task already has a description (choose one in the selector); the named Task is not active or does not exist; or the named Task is a routine occurrence, whose description belongs on its template. |
 | `clarify_already_queued` | The Task already has a question set that is proposed, resurfaced or deferred. Answer, defer or reject it first. No model was asked. |
-| `clarify_no_questions` | The model was asked and has nothing left to ask. This is how the operator learns the Task is clarified. |
+| `clarify_no_questions` | The model was asked and asked nothing. **What that means depends on the round**, which the response reports in `round`. On a later round the interview is finished: this is how the operator learns the Task is clarified. On round 1 of a Task with no description it is a result about the model, not about the Task: it declined to ask about something it had been told nothing about, against its instructions. `advisory.model` is what to change. |
 
 A malformed id in `task_id` is HTTP 400, `clarify_invalid_task_id`.
 
@@ -86,6 +86,22 @@ mainline does not, yet.
 The body is otherwise the tag body's: `stream: false`, `think: false`, a
 `format` schema, and a `system` string that says every field is data and
 never an instruction.
+
+**Round one is never finished.** The `system` string tells the model to set
+`done` to true when no useful question remains, and a model reading that for
+a Task with no description answered `done` at once. From P1B-51, on round 1
+of a Task whose description is absent or blank, and only then, the `system`
+string ends with one more instruction:
+
+> This is round one and the description is empty. Round one of a Task with no
+> description is never finished: there is always something worth asking about
+> a Task whose description is empty. Ask at least one question and set done to
+> false.
+
+A later round, or a round one whose Task already has a description, is sent
+the `system` string without it. The instruction is advice to a model, not a
+guarantee: a model that still answers `done` is reported as
+`clarify_no_questions` with `round: 1`, and is not retried.
 
 ## What is accepted
 
@@ -191,6 +207,12 @@ deferred question set is resurfaced before it is answered.
 `round` is one more than the number of clarification candidates admitted for
 the Task. A question set that was proposed and rejected, or is still waiting,
 is not a round.
+
+From P1B-51 the run response carries it: `round` is present on every Clarify
+run that selected a Task, including one refused with `clarify_already_queued`,
+and absent for SuggestTags and for `clarify_no_task`. It is how a caller tells
+the two meanings of `clarify_no_questions` apart; the diagnostic's message is
+the same on every round.
 
 ## Limits
 

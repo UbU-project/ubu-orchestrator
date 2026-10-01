@@ -32,6 +32,11 @@ pub struct AdvisoryRunResponse {
     pub candidate_ids: Vec<String>,
     pub report: Option<Value>,
     pub diagnostics: Vec<DiagnosticBody>,
+    /// The interview round a Clarify run asked for: one more than the rounds the
+    /// operator has answered. Absent for SuggestTags and when no Task was selected.
+    /// `clarify_no_questions` on round 1 and on a later round mean different things.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub round: Option<u32>,
 }
 
 #[utoipa::path(post,path="/advisory/run",request_body=AdvisoryRunRequest,
@@ -94,6 +99,7 @@ pub async fn run(
         candidate_ids: vec![],
         report: None,
         diagnostics: vec![],
+        round: None,
     };
     let model = setting_authoring::advisory_value(&state, "advisory.model").await?;
     let endpoint = setting_authoring::advisory_value(&state, "advisory.endpoint").await?;
@@ -150,6 +156,7 @@ pub async fn run(
                 return Ok(Json(response));
             }
         };
+        response.round = Some(context.round);
         if clarify::interview_open(&state, &context.id).await? {
             response.status = "ok".into();
             response.diagnostics.push(DiagnosticBody {
