@@ -65,18 +65,34 @@ async fn record_task_action_with_calendar(
     let mut diagnostics = Vec::new();
     let transition_applied = if matches!(request.action, RecordedTaskActionKind::Complete) {
         apply_completed_transition(&state, &mut task, authority_source, effective_time).await?;
-        // A completed Task applies its effects to UniverseState; the effect
-        // applies because the Task completed, so success_probability is ignored.
-        diagnostics.extend(
-            apply_completed_effects(
-                &state,
-                &task,
-                authority_source,
-                MVP_INSTANCE_MODE,
-                effective_time,
-            )
-            .await?,
-        );
+        // Effects apply once per Task. This runs before this completion's own
+        // decision is logged, so a completion found here is an earlier one: the
+        // Task completed before, was reopened, and is completing again. Reopen
+        // reverses nothing, so applying the effects again would count them twice.
+        let completed_before = super::calendar_interaction::latest_completion(pool, &task.id)
+            .await?
+            .is_some();
+        if completed_before {
+            if has_effects(&task) {
+                diagnostics.push(ActionDiagnostic {
+                    code: "task_effects_already_applied".to_owned(),
+                    message: format!("Task `{}` completed before, so its recorded effects were not applied a second time", task.id),
+                });
+            }
+        } else {
+            // A completed Task applies its effects to UniverseState; the effect
+            // applies because the Task completed, so success_probability is ignored.
+            diagnostics.extend(
+                apply_completed_effects(
+                    &state,
+                    &task,
+                    authority_source,
+                    MVP_INSTANCE_MODE,
+                    effective_time,
+                )
+                .await?,
+            );
+        }
         true
     } else if matches!(request.action, RecordedTaskActionKind::Skip) {
         apply_skipped_transition(&state, &mut task, effective_time).await?;
@@ -197,10 +213,10 @@ pub async fn reopen_completion(
     });
     let log_id = append_task_decision(state, &task, payload, vec![completion_log_id.to_owned()], AuthoritySource::User, now).await?;
     let mut diagnostics = Vec::new();
-    if task.payload["effects"]["mutations"].as_array().is_some_and(|mutations| !mutations.is_empty()) {
+    if has_effects(&task) {
         diagnostics.push(ActionDiagnostic {
             code: "reopen_effects_not_reversed".into(),
-            message: "The Task is active again. The effects it applied when it completed were not reversed, and will be applied again if it is completed again".into(),
+            message: "The Task is active again. The effects it applied when it completed were not reversed, and will not be applied a second time if it is completed again".into(),
         });
     }
     Ok(crate::api::user_action::ReopenResponse {
@@ -457,6 +473,12 @@ async fn apply_skipped_transition(state: &AppState, task: &mut TaskForTransition
 ///
 /// Only completed transitions reach this path; a Task that transitions to
 /// `failed` applies nothing.
+/// A Task has effects when it lists at least one mutation. One with no `effects`,
+/// or with none listed, has nothing to apply and nothing to say about it.
+fn has_effects(task: &TaskForTransition) -> bool {
+    task.payload["effects"]["mutations"].as_array().is_some_and(|mutations| !mutations.is_empty())
+}
+
 async fn apply_completed_effects(
     state: &AppState,
     task: &TaskForTransition,

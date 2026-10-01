@@ -131,7 +131,7 @@ async fn effects_are_not_reversed_and_the_reopen_says_so() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
         body["diagnostics"],
-        json!([{"code":"reopen_effects_not_reversed","message":"The Task is active again. The effects it applied when it completed were not reversed, and will be applied again if it is completed again"}])
+        json!([{"code":"reopen_effects_not_reversed","message":"The Task is active again. The effects it applied when it completed were not reversed, and will not be applied a second time if it is completed again"}])
     );
     // Said, and true: the fact the completion set is still set.
     assert_eq!(universe(&state).await, applied);
@@ -178,4 +178,84 @@ async fn the_request_is_checked_before_anything_is_read() {
     let (status, _) = reopen(&state, "task_018f3c8e9b2a7c4d8f1e2a3b4c5d6e7f", &completion).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(task(&state, A).await["__status"], "completed");
+}
+
+// P1B-53 §B: effects apply once per Task. Complete, undo, complete used to apply
+// a Task's UniverseState mutations twice, because reopen reverses nothing.
+async fn completions_counted(state: &AppState) -> Value {
+    universe(state)
+        .await
+        .first()
+        .map(|(_, _, payload)| serde_json::from_str::<Value>(payload).unwrap()["numeric_values"]["synthetic_completions"].clone())
+        .unwrap_or(Value::Null)
+}
+fn counting() -> Value {
+    json!({"effects":{"mutations":[
+        {"operation":"increment_numeric","target":"numeric_values.synthetic_completions","payload":1.0},
+        {"operation":"set_fact","target":"facts.synthetic_teapot_bought","payload":true}
+    ]}})
+}
+
+#[tokio::test]
+async fn effects_apply_once_per_task_across_an_undo_and_the_second_completion_says_so() {
+    let state = bare().await;
+    seed(&state, A, "active", counting()).await;
+    // The first completion applies the effects, and says nothing about it.
+    let first = act(&state, A, "complete").await;
+    assert_eq!(first["task_status"], "completed");
+    assert_eq!(first["transition_applied"], true);
+    assert_eq!(first["diagnostics"], json!([]));
+    assert_eq!(completions_counted(&state).await, json!(1.0));
+    let after_first = universe(&state).await;
+
+    // The undo reverses nothing, and says that a second completion will not apply them again.
+    let (status, undone) = reopen(&state, A, first["log_id"].as_str().unwrap()).await;
+    assert_eq!(status, StatusCode::OK, "{undone}");
+    assert_eq!(code(&undone), "reopen_effects_not_reversed");
+    assert!(undone["diagnostics"][0]["message"].as_str().unwrap().contains("will not be applied a second time"));
+    assert_eq!(universe(&state).await, after_first);
+
+    // The second completion still completes the Task, and applies nothing.
+    let second = act(&state, A, "complete").await;
+    assert_eq!(second["task_status"], "completed");
+    assert_eq!(second["transition_applied"], true);
+    assert_eq!(task(&state, A).await["__status"], "completed");
+    assert_ne!(second["log_id"], first["log_id"]);
+    assert_eq!(
+        second["diagnostics"],
+        json!([{"code":"task_effects_already_applied","message":format!("Task `{A}` completed before, so its recorded effects were not applied a second time")}])
+    );
+    // Once: the count is 1 and not 2, and UniverseState has not moved at all, not even a version.
+    assert_eq!(completions_counted(&state).await, json!(1.0));
+    assert_eq!(universe(&state).await, after_first);
+
+    // And again: a third completion after a second undo is the same.
+    let (_, undone) = reopen(&state, A, second["log_id"].as_str().unwrap()).await;
+    assert_eq!(code(&undone), "reopen_effects_not_reversed");
+    let third = act(&state, A, "complete").await;
+    assert_eq!(code(&third), "task_effects_already_applied");
+    assert_eq!(universe(&state).await, after_first);
+    println!("P1B53_B={}", json!({"first":first["diagnostics"],"undo":undone["diagnostics"],"second":second["diagnostics"],"synthetic_completions":completions_counted(&state).await}));
+}
+
+#[tokio::test]
+async fn a_task_with_no_effects_never_reports_them_and_another_tasks_effects_still_apply() {
+    let state = bare().await;
+    seed(&state, A, "active", counting()).await;
+    seed(&state, B, "active", json!({})).await;
+    seed(&state, C, "active", json!({"effects":{"mutations":[]}})).await;
+    // No effects, or none listed: complete, undo, complete says nothing at any point.
+    for id in [B, C] {
+        let first = act(&state, id, "complete").await;
+        assert_eq!(first["diagnostics"], json!([]), "{id}");
+        let (_, undone) = reopen(&state, id, first["log_id"].as_str().unwrap()).await;
+        assert_eq!(undone["diagnostics"], json!([]), "{id}");
+        let second = act(&state, id, "complete").await;
+        assert_eq!(second["diagnostics"], json!([]), "{id}");
+        assert_eq!(second["task_status"], "completed");
+    }
+    assert!(universe(&state).await.is_empty(), "nothing was applied, so no UniverseState was seeded");
+    // Once per Task, not once ever: a different Task's effects apply on its own first completion.
+    assert_eq!(act(&state, A, "complete").await["diagnostics"], json!([]));
+    assert_eq!(completions_counted(&state).await, json!(1.0));
 }

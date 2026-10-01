@@ -56,7 +56,7 @@ calendar, because removing a colour only means "not done" for an event UbU
 projected as Dynamic. In the app the operator is undoing their own click,
 whatever the Task is.
 
-## Effects are not reversed
+## Effects are not reversed, and are applied once
 
 A Task's effects are applied to `UniverseState` when it completes. Reopening
 does not reverse them. The Calendar undo never has, and says nothing.
@@ -64,10 +64,45 @@ does not reverse them. The Calendar undo never has, and says nothing.
 This path says so. When the Task carries effects, the response has:
 
 ```json
-{"code":"reopen_effects_not_reversed","message":"The Task is active again. The effects it applied when it completed were not reversed, and will be applied again if it is completed again"}
+{"code":"reopen_effects_not_reversed","message":"The Task is active again. The effects it applied when it completed were not reversed, and will not be applied a second time if it is completed again"}
 ```
+
+**From P1B-53 effects apply once per Task.** Until then, complete, undo,
+complete applied a Task's mutations twice: an `increment_numeric` counted the
+same piece of work two times. The operator decided that effects are
+idempotent per Task.
+
+When a Task completes, the orchestrator asks the decision log whether that
+Task already has a completion. The question is asked before this completion's
+own decision is written, so a completion found there is an earlier one. If
+there is one, the Task still completes, its effects are **not applied**, and
+the response has:
+
+```json
+{"code":"task_effects_already_applied","message":"Task `task_…` completed before, so its recorded effects were not applied a second time"}
+```
+
+The two diagnostics say the same thing from either side of the undo. There is
+no new column and no flag on the Task: the log is the record.
+
+What follows from keying on "has completed before":
+
+- it is once per Task, not once ever. A routine's occurrences are separate
+  Tasks, so each night's occurrence applies its effects on its own first
+  completion;
+- a Task with no `effects`, or with no mutations listed, behaves as it always
+  did and reports nothing;
+- effects added to a Task after its first completion, while it is reopened,
+  are never applied. That is the cost of not recording which effects were
+  applied; it has not come up.
 
 Reversing effects is not attempted. What a reversal should mean, when
 something else has changed the same fact since, is not decided.
+
+**A stated future direction, not built.** The operator's note, as the P1B-53
+ticket records it: a future version may ask the operator whether to reverse
+`UniverseState` during an undo. That is a decision of its own and wants
+recording in `ubu-design`. Nothing here implements it, and no code carries a
+TODO for it.
 
 The Calendar path is unchanged.
