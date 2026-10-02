@@ -105,7 +105,8 @@ in [QUICK_UBU_IMPORT.md](QUICK_UBU_IMPORT.md). Planning's `routine_occurrences_o
 is the safety net for an error state the importer refuses to create; direct store
 admission, pre-existing state, and DST-only collisions can still reach planning.
 Two overlapping one-off Statics still cause
-`static_task_collision`. Stale precedence edges between Static occurrences are
+`static_task_collision`, which from P1B-54 is a warning and no longer cancels
+the Plan; see [STATIC_CONTAINMENT.md](STATIC_CONTAINMENT.md). Stale precedence edges between Static occurrences are
 dropped with `routine_occurrence_edge_dropped`; fixed placements remain intact.
 
 Occurrences never participate in Preference layering or task priorities. Their

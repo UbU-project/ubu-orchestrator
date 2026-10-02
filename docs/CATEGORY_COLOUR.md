@@ -60,7 +60,9 @@ plan-quality analysis sees the merged candidate steps. In repair, frozen steps
 retain their complete prior representation and win on Task id.
 
 Static conflict clause (b) is read literally: a Static prerequisite that ends too
-late is a precedence conflict even if it does not consume capacity. Non-capacity
+late is a precedence conflict even if it does not consume capacity. From P1B-54
+that conflict is a warning and the edge is dropped; see
+[STATIC_CONTAINMENT.md](STATIC_CONTAINMENT.md). Non-capacity
 steps never cause an occupancy conflict. A pair is reported once if it violates
 both rules, ordered by the earlier `(start, id)` and then the other id.
 

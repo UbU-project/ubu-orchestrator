@@ -261,7 +261,9 @@ async fn all_static_collisions_are_reported_before_kernel_with_preconditions() {
     )
     .await;
     let response = generate(&state).await;
-    assert!(response["plan"].is_null());
+    // From P1B-54 a collision is a warning. Both pairs are still reported, the
+    // kernel is called, and it is handed nothing it refuses: no skeleton failure.
+    assert!(response["plan"].is_object(), "{response}");
     assert!(codes(&response).contains(&"task_precondition_blocked"));
     assert!(!codes(&response).iter().any(|c| c.contains("Skeleton")));
     let conflicts: Vec<_> = response["diagnostics"]
@@ -367,7 +369,9 @@ async fn static_precedence_conflicts_include_absent_noncapacity_prerequisites() 
     dependent["depends_on"] = json!([future]);
     let dependent = admit_task(&state, "Premature", dependent).await;
     let response = generate(&state).await;
-    assert!(response["plan"].is_null());
+    // Still one conflict for the pair. From P1B-54 the edge that cannot hold is
+    // dropped with the warning, and the dependent keeps its fixed window.
+    assert!(response["plan"].is_object(), "{response}");
     let conflicts: Vec<_> = response["diagnostics"]
         .as_array()
         .unwrap()
@@ -377,6 +381,13 @@ async fn static_precedence_conflicts_include_absent_noncapacity_prerequisites() 
     assert_eq!(conflicts.len(), 1);
     let message = conflicts[0]["message"].as_str().unwrap();
     assert!(message.contains(&future) && message.contains(&dependent));
+    assert_eq!(
+        message,
+        format!("Static Task “Premature” (`{dependent}`) depends on “Future routine” (`{future}`), which ends after it starts; both keep their fixed windows and stay on the Calendar, and the dependency is not enforced")
+    );
+    let cal = calendar(&state).await;
+    assert_eq!(step(&cal, &dependent)["start_at"], START);
+    assert_eq!(step(&cal, &dependent)["end_at"], "2026-06-10T15:15:00Z");
 }
 
 #[tokio::test]

@@ -70,7 +70,8 @@ pub async fn recalculate_from_request(
         code: "task_precondition_invalid".into(), message: format!("Task `{}`: {}", task.task_id, task.error),
     }));
     planning_service::add_empty_capacity_diagnostic(&repair_request_body.request, &mut diagnostics);
-    if planning_service::has_static_conflicts(&diagnostics) || repair_request_body.request.tasks.is_empty() {
+    // A Static collision is a warning and the repair still runs; see planning_service::generate.
+    if repair_request_body.request.tasks.is_empty() {
         return Ok(RecalculationResponse {
             schema_version: RECALCULATION_SCHEMA_VERSION.to_owned(), trigger_type: request.trigger_type,
             repair_scope, prior_plan_id: prior_plan.id, plan: None, diagnostics,

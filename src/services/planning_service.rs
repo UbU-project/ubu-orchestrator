@@ -109,8 +109,11 @@ pub async fn generate(
     };
     add_empty_capacity_diagnostic(&planning_request, &mut diagnostics);
     let mut kernel_unplaced = Vec::new();
-    let mut candidates = if has_static_conflicts(&diagnostics) || planning_request.tasks.is_empty()
-    {
+    // A Static collision does not cancel the Plan. It used to: one collision and
+    // the kernel was never called. The colliding Tasks are now one busy span in
+    // the request, each keeps its own window, and the collision is a warning.
+    // An empty store still has nothing to plan.
+    let mut candidates = if planning_request.tasks.is_empty() {
         Vec::new()
     } else {
         let response = adapter.plan(kernel_request.clone());
@@ -680,7 +683,10 @@ async fn build_request_from_store_with_context(
     }
     // One diagnostic per pair, even if both occupancy and precedence conflict.
     // Clause (b) applies to all Static prerequisites, including non-capacity ones.
-    let mut conflicts = BTreeSet::new();
+    // A collision is a warning: the pair's overlap becomes one busy span in
+    // `committed_clusters`, and an edge that cannot hold is dropped here, so the
+    // kernel is never handed an anchor it would refuse.
+    let mut conflicts = BTreeMap::new();
     let mut dropped_edges = HashSet::new();
     for (i, (task, window, capacity)) in participating.iter().enumerate() {
         for (other, other_window, other_capacity) in participating.iter().skip(i + 1) {
@@ -692,7 +698,8 @@ async fn build_request_from_store_with_context(
                 && !mandatory.contains(&other.id)
                 && !nested(window, other_window)
             {
-                add_static_conflict(&mut conflicts, &task.id, window, &other.id, other_window);
+                add_static_conflict(&mut conflicts, &task.id, window, &other.id, other_window)
+                    .overlap = true;
             }
         }
         for dependency in dependency_ids(&task.payload) {
@@ -702,21 +709,23 @@ async fn build_request_from_store_with_context(
                         dropped_edges.insert((task.id.clone(), dependency.clone()));
                         diagnostics.push(DiagnosticBody { code: "routine_occurrence_edge_dropped".into(), message: format!("Routine occurrence `{}` has a stale Static edge to `{dependency}`; both retain their fixed placement",task.id) });
                     } else if !nested(window, other_window) {
+                        dropped_edges.insert((task.id.clone(), dependency.clone()));
                         add_static_conflict(
                             &mut conflicts,
                             &task.id,
                             window,
                             &dependency,
                             other_window,
-                        );
+                        )
+                        .precedence = Some((task.id.clone(), dependency.clone()));
                     }
                 }
             }
         }
     }
-    diagnostics.extend(conflicts.into_iter().map(|(_, first, second)| DiagnosticBody {
-        code: "static_task_collision".into(),
-        message: format!("Static Tasks `{first}` and `{second}` have conflicting fixed placements or dependencies"),
+    let stored_titles = stored_task_titles(pool).await?;
+    diagnostics.extend(conflicts.into_iter().map(|((_, first, second), conflict)| {
+        static_collision_diagnostic(&first, &second, &conflict, &stored_titles)
     }));
     for task in task_bodies.iter_mut().chain(non_capacity_tasks.iter_mut()) {
         task.depends_on
@@ -956,15 +965,9 @@ async fn build_request_from_store_with_context(
             );
         }
     }
-    let task_graph = if has_static_conflicts(&diagnostics) {
-        // Conflicts must return all diagnostics even if their dependency graph cycles.
-        TaskGraphBody {
-            topological_order: Vec::new(),
-            edges: Vec::new(),
-        }
-    } else {
-        task_graph(&task_bodies, &priority_order, &deadlines, &mandatory)?
-    };
+    // Built whether or not Statics collided: a collision is planned around, and
+    // every Static edge that could not hold was dropped above.
+    let task_graph = task_graph(&task_bodies, &priority_order, &deadlines, &mandatory)?;
     let request_id = UbuId::new(ObjectType::Plan).to_string();
     // The seed is a function of what is being planned and of nothing else. It
     // used to include the request id, which is new for every request, so two
@@ -2219,25 +2222,81 @@ pub struct StorePlanningRequest {
     pub compiled_segments: HashMap<String, CompiledSegment>,
 }
 
-pub fn has_static_conflicts(diagnostics: &[DiagnosticBody]) -> bool {
-    diagnostics
-        .iter()
-        .any(|d| d.code == "static_task_collision")
+/// What a colliding pair of Static Tasks broke. A pair is one entry, whichever
+/// rules it broke.
+#[derive(Debug, Default)]
+struct StaticConflict {
+    /// Both occupy capacity and their windows overlap, with neither inside the other.
+    overlap: bool,
+    /// `(dependent, prerequisite)`: the prerequisite ends after the dependent starts.
+    precedence: Option<(String, String)>,
 }
 
-fn add_static_conflict(
-    conflicts: &mut BTreeSet<(u64, String, String)>,
+fn add_static_conflict<'a>(
+    conflicts: &'a mut BTreeMap<(u64, String, String), StaticConflict>,
     first: &str,
     first_window: &TimeWindowBody,
     second: &str,
     second_window: &TimeWindowBody,
-) {
+) -> &'a mut StaticConflict {
     let (first, start, second) = if (first_window.start, first) <= (second_window.start, second) {
         (first, first_window.start, second)
     } else {
         (second, second_window.start, first)
     };
-    conflicts.insert((start, first.to_owned(), second.to_owned()));
+    conflicts
+        .entry((start, first.to_owned(), second.to_owned()))
+        .or_default()
+}
+
+/// The collision, as a warning, by title and by id. Both Tasks keep their
+/// windows and the Plan is still made; the message says what was done about it.
+fn static_collision_diagnostic(
+    first: &str,
+    second: &str,
+    conflict: &StaticConflict,
+    titles: &HashMap<String, String>,
+) -> DiagnosticBody {
+    let name = |id: &str| match titles.get(id) {
+        Some(title) => format!("“{title}” (`{id}`)"),
+        None => format!("`{id}`"),
+    };
+    let message = match (&conflict.precedence, conflict.overlap) {
+        (None, _) => format!(
+            "Static Tasks {} and {} overlap; both keep their fixed windows and stay on the Calendar, and the whole span is busy",
+            name(first),
+            name(second)
+        ),
+        (Some((dependent, prerequisite)), overlap) => format!(
+            "Static Task {} depends on {}, which ends after it starts; both keep their fixed windows and stay on the Calendar, and the dependency is not enforced{}",
+            name(dependent),
+            name(prerequisite),
+            if overlap { "; the whole span is busy" } else { "" }
+        ),
+    };
+    DiagnosticBody {
+        code: "static_task_collision".into(),
+        message,
+    }
+}
+
+/// The title of every active Task, for a diagnostic that names a Task a person
+/// has to recognise. A prerequisite outside the horizon is not among the Tasks
+/// being planned, so the titles are read from the store.
+async fn stored_task_titles(pool: &sqlx::SqlitePool) -> Result<HashMap<String, String>> {
+    let rows = queries::query_active_tasks(pool)
+        .await
+        .map_err(AppError::from)?;
+    let mut titles = HashMap::new();
+    for row in rows {
+        let payload: Value = serde_json::from_str(&row.payload_json).map_err(|e| {
+            AppError::Internal(format!("failed to deserialize Task `{}`: {e}", row.id))
+        })?;
+        if let Some(title) = payload.get("title").and_then(Value::as_str) {
+            titles.insert(row.id, title.to_owned());
+        }
+    }
+    Ok(titles)
 }
 
 async fn stored_static_windows(pool: &sqlx::SqlitePool) -> Result<HashMap<String, TimeWindowBody>> {
@@ -2630,10 +2689,11 @@ fn committed_clusters(
             }
             let a = tasks[i].window.as_ref().unwrap();
             let b = tasks[j].window.as_ref().unwrap();
-            let joins = mandatory.contains(&tasks[i].id)
-                || mandatory.contains(&tasks[j].id)
-                || nested(a, b);
-            if joins && a.start < b.end && a.end > b.start {
+            // Every overlapping pair joins. A routine occurrence over a commitment
+            // and one Static inside another always did; two Statics that collide
+            // now do too, so the kernel sees one busy span and not two anchors it
+            // would refuse.
+            if a.start < b.end && a.end > b.start {
                 let x = root(&mut parents, i);
                 let y = root(&mut parents, j);
                 parents[x] = y;
@@ -2662,13 +2722,27 @@ fn committed_clusters(
             .collect();
         occurrences.sort();
         if occurrences.is_empty() {
-            let count = group.len() - 1;
-            let wording = if count == 1 {
-                "Static Task happens"
-            } else {
-                "Static Tasks happen"
-            };
-            warnings.push(DiagnosticBody { code: "static_tasks_share_committed_time".into(), message: format!("{count} {wording} during `{}`; the whole span is busy and every one of them stays on the Calendar", tasks[carrier].id) });
+            // "During" is said of a Static that lies inside another. A pair that
+            // only overlaps is a collision, and was reported as one already.
+            let window = |i: usize| tasks[i].window.as_ref().unwrap();
+            for &outer in &group {
+                if group.iter().any(|&other| contains(window(other), window(outer))) {
+                    continue;
+                }
+                let count = group
+                    .iter()
+                    .filter(|&&inner| contains(window(outer), window(inner)))
+                    .count();
+                if count == 0 {
+                    continue;
+                }
+                let wording = if count == 1 {
+                    "Static Task happens"
+                } else {
+                    "Static Tasks happen"
+                };
+                warnings.push(DiagnosticBody { code: "static_tasks_share_committed_time".into(), message: format!("{count} {wording} during `{}`; the whole span is busy and every one of them stays on the Calendar", tasks[outer].id) });
+            }
         }
         let commitment = group
             .iter()

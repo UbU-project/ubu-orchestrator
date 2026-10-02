@@ -186,12 +186,27 @@ async fn equal_static_windows_remain_collisions() {
             admit(&state, 3, "Shared container", fixed("09:00", "15:00")).await;
         }
         let response = generate(&state).await;
-        assert_eq!(response["status"], "rejected", "{response}");
-        assert!(response["plan"].is_null());
+        // Still a collision, and reported as one. From P1B-54 it is a warning: the Plan is made.
+        assert_eq!(response["status"], "ok", "{response}");
+        assert!(response["plan"].is_object());
         let collisions = diagnostics(&response, COLLISION);
         assert_eq!(collisions.len(), 1);
         assert!(collisions[0]["message"].as_str().unwrap().contains(&id(1)));
         assert!(collisions[0]["message"].as_str().unwrap().contains(&id(2)));
+        // Neither pin is inside the other, so "during" is said only of the container.
+        let shared = diagnostics(&response, SHARE);
+        if container {
+            assert_eq!(shared.len(), 1, "{response}");
+            assert_eq!(shared[0]["message"], format!("2 Static Tasks happen during `{}`; the whole span is busy and every one of them stays on the Calendar", id(3)));
+        } else {
+            assert!(shared.is_empty(), "{response}");
+        }
+        let calendar = request(&state, "GET", "/calendar/current", Value::Null).await;
+        assert_static(&calendar, 1, "12:00", "12:05");
+        assert_static(&calendar, 2, "12:00", "12:05");
+        if container {
+            assert_static(&calendar, 3, "09:00", "15:00");
+        }
     }
 }
 
@@ -205,12 +220,27 @@ async fn partial_overlaps_remain_collisions_even_inside_a_container() {
             admit(&state, 3, "Shared container", fixed("09:00", "15:00")).await;
         }
         let response = generate(&state).await;
-        assert_eq!(response["status"], "rejected", "{response}");
-        assert!(response["plan"].is_null());
+        // Still a collision, and reported as one. From P1B-54 it is a warning: the Plan is made.
+        assert_eq!(response["status"], "ok", "{response}");
+        assert!(response["plan"].is_object());
         let collisions = diagnostics(&response, COLLISION);
         assert_eq!(collisions.len(), 1);
         assert!(collisions[0]["message"].as_str().unwrap().contains(&id(1)));
         assert!(collisions[0]["message"].as_str().unwrap().contains(&id(2)));
+        // Neither pin is inside the other, so "during" is said only of the container.
+        let shared = diagnostics(&response, SHARE);
+        if container {
+            assert_eq!(shared.len(), 1, "{response}");
+            assert_eq!(shared[0]["message"], format!("2 Static Tasks happen during `{}`; the whole span is busy and every one of them stays on the Calendar", id(3)));
+        } else {
+            assert!(shared.is_empty(), "{response}");
+        }
+        let calendar = request(&state, "GET", "/calendar/current", Value::Null).await;
+        assert_static(&calendar, 1, "12:00", "12:20");
+        assert_static(&calendar, 2, "12:10", "12:30");
+        if container {
+            assert_static(&calendar, 3, "09:00", "15:00");
+        }
     }
 }
 
