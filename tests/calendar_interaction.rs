@@ -496,3 +496,117 @@ async fn an_already_completed_coloured_event_is_a_noop_without_another_log_or_ef
     assert_eq!(actions(&state, &id).await.len(), 1);
     assert_eq!(universe(&state).await, effects);
 }
+
+// ---- P1B-55 §B: the gesture boundary.
+//
+// Capture now reads a colour as a placement: none is Dynamic work, any is a Static
+// commitment. Export has always read it the other way, and on a Dynamic event UbU
+// exported for a Task of its own a colour still means done. The two readings never
+// meet, because they read different events. These tests assert that from both sides.
+
+async fn task_count(state: &AppState) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM objects WHERE object_type='Task'")
+        .fetch_one(state.inner().store.pool())
+        .await
+        .unwrap()
+}
+async fn captured_count(state: &AppState) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM objects WHERE object_type='Task' AND json_extract(payload_json,'$.provenance.source.source_kind')='google_calendar'")
+        .fetch_one(state.inner().store.pool())
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn colouring_an_event_ubu_exported_for_its_own_dynamic_task_is_still_a_completion_and_not_a_placement() {
+    let (state, recorder, id) = setup(dynamic()).await;
+    // UbU exported it with no colour: that is what Dynamic looks like on the calendar.
+    assert_eq!(event(&recorder, &id).color_id, None);
+    let before = task(&state, &id).await;
+    // Colour 9 is `work`. If the capture rule reached this event it would become a Static `work` Task.
+    phone(&recorder, &id, Some("9"), false).await;
+    let response = capture(&state).await;
+    assert_eq!(
+        counts(&response),
+        json!({"captured":0,"updated":1,"unchanged":0,"skipped":0,"diagnostics":[]})
+    );
+    let after = task(&state, &id).await;
+    assert_eq!(after["status"], "completed");
+    // Done, and nothing else: no window, the same duration, and the category it always had.
+    assert!(after["payload"].get("static_window").is_none(), "{after}");
+    assert_eq!(after["payload"]["duration_estimate"], before["payload"]["duration_estimate"]);
+    assert_eq!(after["payload"]["category_tag"], "personal");
+    let recorded = actions(&state, &id).await;
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0]["payload"]["source"], json!({"source_kind":"google_calendar","source_id":event(&recorder, &id).external_id}));
+    // And no Task was captured from it.
+    assert_eq!((task_count(&state).await, captured_count(&state).await), (1, 0));
+}
+
+#[tokio::test]
+async fn a_foreign_coloured_event_is_captured_as_static_and_completes_nothing() {
+    let (state, recorder, id) = setup(dynamic()).await;
+    let before = task(&state, &id).await;
+    let foreign = DesiredEvent {
+        external_id: ORIGIN.into(),
+        task_id: format!("task_{ORIGIN}"),
+        summary: "Synthetic foreign appointment".into(),
+        start_at: "2026-09-25T15:00:00Z".into(),
+        end_at: "2026-09-25T15:30:00Z".into(),
+        color_id: Some("9".into()),
+        transparent: false,
+        reminders_minutes: vec![],
+    };
+    recorder.insert_event(&foreign).await.unwrap();
+    recorder.clear_recorded_calls();
+    let response = capture(&state).await;
+    assert_eq!(
+        counts(&response),
+        json!({"captured":1,"updated":0,"unchanged":1,"skipped":0,"diagnostics":[]})
+    );
+    // A commitment at its own time, in its colour's category.
+    let captured: String = sqlx::query_scalar("SELECT payload_json FROM objects WHERE object_type='Task' AND json_extract(payload_json,'$.provenance.source.source_id')=?")
+        .bind(ORIGIN)
+        .fetch_one(state.inner().store.pool())
+        .await
+        .unwrap();
+    let captured: Value = serde_json::from_str(&captured).unwrap();
+    assert_eq!(captured["static_window"], json!({"start":"2026-09-25T15:00:00Z","end":"2026-09-25T15:30:00Z"}));
+    assert_eq!((captured["category_tag"].clone(), captured["status"].clone()), (json!("work"), json!("active")));
+    // It completed nothing: not itself, and not the Task UbU exported.
+    assert!(actions(&state, captured["id"].as_str().unwrap()).await.is_empty());
+    assert!(actions(&state, &id).await.is_empty());
+    assert_eq!(task(&state, &id).await, before);
+    let completions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM logs WHERE event_type='task_done' OR (event_type='decision_recorded' AND json_extract(payload_json,'$.decision')='task_completed')")
+        .fetch_one(state.inner().store.pool())
+        .await
+        .unwrap();
+    assert_eq!(completions, 0);
+}
+
+#[tokio::test]
+async fn an_event_ubu_owns_for_a_task_of_its_own_is_never_read_by_the_capture_rule() {
+    // A Static Task of UbU's own, exported in its category colour. The operator removes the
+    // colour. Under the capture rule that would make it Dynamic. It is owned, so it is not read.
+    let (state, recorder, id) = setup(fixed()).await;
+    assert_eq!(event(&recorder, &id).color_id.as_deref(), Some("9"));
+    let before = task(&state, &id).await;
+    phone(&recorder, &id, None, false).await;
+    let response = capture(&state).await;
+    assert_eq!((response["captured"].clone(), response["updated"].clone()), (json!(0), json!(0)));
+    assert_eq!(response["diagnostics"].as_array().unwrap().iter().map(|d| d["code"].as_str().unwrap()).collect::<Vec<_>>(), ["capture_owned_drift"]);
+    assert_eq!(task(&state, &id).await, before);
+    assert!(before["payload"]["static_window"].is_object());
+    assert_eq!((task_count(&state).await, captured_count(&state).await), (1, 0));
+
+    // A Dynamic Task of UbU's own, exported with no colour. An uncoloured event is what capture
+    // takes as new work, and this one is owned: unchanged, no diagnostic, no second Task.
+    let (state, _, id) = setup(dynamic()).await;
+    let before = task(&state, &id).await;
+    assert_eq!(
+        counts(&capture(&state).await),
+        json!({"captured":0,"updated":0,"unchanged":1,"skipped":0,"diagnostics":[]})
+    );
+    assert_eq!(task(&state, &id).await, before);
+    assert_eq!((task_count(&state).await, captured_count(&state).await), (1, 0));
+}
