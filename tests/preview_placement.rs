@@ -21,7 +21,7 @@ async fn setup() -> AppState {
     // One event on the calendar that UbU did not make, with a colour that maps to nothing here.
     let calendar = Arc::new(RecordingCalendarApi::with_wire_events(&json!({"items":[
         {"id":FOREIGN,"summary":"Synthetic teapot delivery","start":{"dateTime":"2026-09-29T15:00:00Z"},"end":{"dateTime":"2026-09-29T15:30:00Z"},
-         "transparency":"opaque","reminders":{"useDefault":false,"overrides":[]}}
+         "colorId":"99","transparency":"opaque","reminders":{"useDefault":false,"overrides":[]}}
     ]})));
     let state = bare().await.with_calendar_api(calendar);
     seed(&state, DYNAMIC, "active", json!({"duration_estimate":{"type":"fixed","seconds":1800},"category_tag":"work","tags":["work"]})).await;
@@ -58,7 +58,8 @@ fn operation<'a>(preview: &'a Value, task_id: &str) -> (&'a str, &'a Value, &'a 
 #[tokio::test]
 async fn create_and_update_carry_the_placement_from_the_task_and_never_from_the_colour() {
     let state = setup().await;
-    // Capture claims the foreign event: a Static Task with no category, because its event has no colour.
+    // Capture claims the foreign event: a Static Task with no category, because its colour maps to nothing.
+    // From P1B-55 an event with no colour at all would be Dynamic work, so this one has a colour.
     ok(&state, "POST", "/projection/calendar/capture", json!({"schema_version":"ubu.orchestrator.calendar_capture.v1","export_mode":"mock"})).await;
     let plan = generate(&state).await;
     let occurrence = plan["plan"]["steps"].as_array().unwrap().iter().find(|step| step["summary"] == ROUTINE).expect("the routine is in the Plan")["task_id"]
@@ -102,8 +103,8 @@ async fn create_and_update_carry_the_placement_from_the_task_and_never_from_the_
     let later = state.clone().with_clock(FixedClock(UbuTimestamp::parse("2026-09-29T08:05:00Z").unwrap()));
     generate(&later).await;
     let second = preview(&later).await;
-    // A captured foreign event: Static, and with no colour, because its event had none.
-    assert_eq!(operation(&second, captured_id), ("update", &json!(true), &Value::Null));
+    // A captured foreign event: Static, with no category. It keeps the colour its event came with.
+    assert_eq!(operation(&second, captured_id), ("update", &json!(true), &json!("99")));
     assert_eq!(operation(&second, STATIC_BARE), ("update", &json!(true), &Value::Null));
     // The Dynamic Task moved with the re-plan: an update, and still not Static.
     assert_eq!(operation(&second, DYNAMIC), ("update", &json!(false), &Value::Null));

@@ -1,9 +1,17 @@
-//! Capture only foreign Calendar commitments through ordinary Task admission.
+//! Capture only foreign Calendar events through ordinary Task admission.
+//!
+//! A colour decides the placement. An event with no colour is work for UbU to
+//! schedule: a Dynamic Task of the event's length, at no fixed time. An event
+//! with any colour is a commitment at its own time: a Static Task, whose
+//! category is the colour's. This is the inverse of export, where a Static Task
+//! carries its category colour and a Dynamic one carries none, so a round trip
+//! closes. See docs/CALENDAR_CAPTURE.md.
 //!
 //! UbU owns an event whose id can round-trip through `external_id`. Any other
 //! event, such as an instance of a recurring one, is captured as occupied time:
 //! a Static Task with a minted handle that UbU never writes back to, never
-//! exports and never records as applied. See docs/CALENDAR_OCCUPANCY.md.
+//! exports and never records as applied. UbU cannot move such an event, so it
+//! is Static whatever its colour. See docs/CALENDAR_OCCUPANCY.md.
 use super::{
     calendar_apply::{self, StoredCalendarResult, CALENDAR_PROJECTION_RESULT_SCHEMA_VERSION},
     calendar_client::{CalendarApi, CalendarExportMode},
@@ -32,14 +40,27 @@ use ubu_core::{
 };
 use ubu_store::{models::object_record::NewObjectRecord, queries};
 
+/// What the event's colour decided.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapturedPlacement {
+    /// A coloured event, or one UbU cannot own: pinned to the event's own window.
+    Static,
+    /// An uncoloured event: the planner decides when. Only the event's length is
+    /// kept, as a fixed duration; its start time is discarded.
+    Dynamic { seconds: u64 },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct CapturedTask {
     /// None for a new source: allocation belongs to admission, keeping planning pure.
     pub task_id: Option<String>,
     pub origin_event_id: String,
     pub title: String,
+    /// The event's own window. A Static Task is pinned to it. For a Dynamic Task
+    /// it is only what the applied record remembers of the event.
     pub start_at: String,
     pub end_at: String,
+    pub placement: CapturedPlacement,
     pub occupies_capacity: bool,
     pub category_tag: Option<String>,
 }
@@ -108,6 +129,8 @@ pub fn plan_capture(
             continue;
         }
         let window = window.unwrap();
+        // Whole planning seconds, as the canonical window below has them.
+        let span_seconds = u64::try_from(window.end.inner().unix_timestamp() - window.start.inner().unix_timestamp()).unwrap_or(0);
         // Planning coordinates are whole UTC seconds; canonicalize both sides of the round trip.
         let times = [window.start, window.end].map(|timestamp| {
             u64::try_from(timestamp.inner().unix_timestamp())
@@ -129,35 +152,51 @@ pub fn plan_capture(
             });
             continue;
         }
-        let category_tag = match event
-            .color_id
-            .as_ref()
-            .and_then(|color| palette_inverse.get(color))
-        {
-            Some(Some(category)) => Some(category.clone()),
-            Some(None) => {
-                diagnostics.push(DiagnosticBody { code: "capture_colour_ambiguous".into(), message: format!("Calendar event `{}` has a colour shared by multiple categories; no category assigned", event.external_id) });
-                None
+        // The colour decides the placement, and only its absence makes work
+        // Dynamic. A colour mapped to no category, or to several, is still a
+        // colour: the event is a commitment whose category is merely unknown.
+        let (placement, category_tag) = match &event.color_id {
+            None if ownable => {
+                diagnostics.push(DiagnosticBody { code: "capture_colour_absent".into(), message: format!("Calendar event `{}` has no colour, so it is taken as work for UbU to schedule: a Dynamic Task of the event's length, at no fixed time", event.external_id) });
+                (CapturedPlacement::Dynamic { seconds: span_seconds }, None)
             }
             None => {
-                let (code, message) = match &event.color_id {
-                    Some(color) => ("capture_colour_unmapped", format!("Calendar event `{}` has unmapped colour `{color}`; no category assigned; map that colour in Settings to assign a category", event.external_id)),
-                    None => ("capture_colour_absent", format!("Calendar event `{}` has no colour; no category assigned", event.external_id)),
+                diagnostics.push(DiagnosticBody { code: "capture_colour_absent".into(), message: format!("Calendar event `{}` has no colour, but UbU cannot own it and so cannot move it: it stays a commitment at its own time, with no category", event.external_id) });
+                (CapturedPlacement::Static, None)
+            }
+            Some(color) => {
+                let category = match palette_inverse.get(color) {
+                    Some(Some(category)) => Some(category.clone()),
+                    Some(None) => {
+                        diagnostics.push(DiagnosticBody { code: "capture_colour_ambiguous".into(), message: format!("Calendar event `{}` has a colour shared by multiple categories; no category assigned", event.external_id) });
+                        None
+                    }
+                    None => {
+                        diagnostics.push(DiagnosticBody { code: "capture_colour_unmapped".into(), message: format!("Calendar event `{}` has unmapped colour `{color}`; no category assigned; map that colour in Settings to assign a category", event.external_id) });
+                        None
+                    }
                 };
-                diagnostics.push(DiagnosticBody { code: code.into(), message });
-                None
-            },
+                (CapturedPlacement::Static, category)
+            }
         };
         if !ownable {
             unowned.push(event.external_id.clone());
         }
+        // A Dynamic Task that occupied nothing would be scheduled into a void, so
+        // it always occupies capacity. A Free commitment that does not block is a
+        // real distinction, and a Static capture keeps it.
+        let occupies_capacity = match placement {
+            CapturedPlacement::Static => !event.transparent,
+            CapturedPlacement::Dynamic { .. } => true,
+        };
         tasks.push(CapturedTask {
             task_id: existing_by_source.get(&event.external_id).cloned(),
             origin_event_id: event.external_id.clone(),
             title: event.summary.clone(),
             start_at,
             end_at,
-            occupies_capacity: !event.transparent,
+            placement,
+            occupies_capacity,
             category_tag,
         });
     }
@@ -219,6 +258,13 @@ pub async fn capture(
     observed.retain(|event| range.overlaps(event) || applied.iter().any(|old| old.external_id == event.external_id));
     let mut diagnostics = client.take_diagnostics().await;
     let wire_skipped = diagnostics.len();
+    // An event that gained or lost its colour since UbU last saw it. Read here,
+    // before a gesture accepts the whole observation into the applied record.
+    let colour_flipped: BTreeSet<String> = observed
+        .iter()
+        .filter(|event| applied.iter().any(|old| old.external_id == event.external_id && old.color_id.is_some() != event.color_id.is_some()))
+        .map(|event| event.external_id.clone())
+        .collect();
     let interaction = super::calendar_interaction::apply(state, &observed, &mut applied).await?;
     diagnostics.extend(interaction.diagnostics);
     let conflicts =
@@ -228,12 +274,25 @@ pub async fn capture(
         .filter(|c| c.conflict_type == "foreign")
         .map(|c| c.external_id.as_str())
         .collect();
+    let existing = calendar_sources::by_source(pool).await?;
+    // A captured Task follows its event's colour for as long as the event exists.
+    // Such an event is in the applied record, so it is not foreign and is not
+    // captured again. But when it gains or loses its colour the same rule decides
+    // its placement afresh: the Task becomes Static or Dynamic, and is not left as
+    // drift. Only a Task that capture made is read this way. An event UbU exported
+    // for a Task of its own is never offered here: its colour is a gesture, and
+    // means done.
+    let replaced: BTreeSet<&str> = colour_flipped
+        .iter()
+        .filter(|id| !foreign_ids.contains(id.as_str()))
+        .filter(|id| existing.get(*id).is_some_and(|(row, _)| row.status == "active"))
+        .map(String::as_str)
+        .collect();
     let foreign: Vec<_> = observed
         .iter()
-        .filter(|e| foreign_ids.contains(e.external_id.as_str()))
+        .filter(|e| foreign_ids.contains(e.external_id.as_str()) || replaced.contains(e.external_id.as_str()))
         .cloned()
         .collect();
-    let existing = calendar_sources::by_source(pool).await?;
     let by_source = existing
         .iter()
         .map(|(source, (row, _))| (source.clone(), row.id.clone()))
@@ -263,7 +322,7 @@ pub async fn capture(
     // Successful gestures changed the Task; otherwise report owned matches and
     // unresolved drift separately from entries that could not be captured.
     for event in observed.iter().filter(|event| !foreign_ids.contains(event.external_id.as_str())) {
-        if interaction.changed_external_ids.contains(&event.external_id) { continue; }
+        if interaction.changed_external_ids.contains(&event.external_id) || replaced.contains(event.external_id.as_str()) { continue; }
         match applied.iter().find(|old| old.external_id == event.external_id) {
             Some(old) if old == event => response.unchanged += 1,
             Some(old) => diagnostics.push(DiagnosticBody {
@@ -295,7 +354,21 @@ pub async fn capture(
             "id":id, "status":"active", "provenance":{"created_at":now,"authority_source":"user","source":{"source_kind":"google_calendar","source_id":task.origin_event_id}}
         }));
         payload["title"] = task.title.clone().into();
-        payload["static_window"] = json!({"start":task.start_at,"end":task.end_at});
+        // One scheduling form, never both. A Task that changes placement loses
+        // the other form's field rather than keeping a stale one.
+        let fields = payload.as_object_mut().unwrap();
+        match task.placement {
+            CapturedPlacement::Static => {
+                if fields.get("static_window").is_none_or(|window| window.is_null()) {
+                    fields.remove("duration_estimate");
+                }
+                fields.insert("static_window".into(), json!({"start":task.start_at,"end":task.end_at}));
+            }
+            CapturedPlacement::Dynamic { seconds } => {
+                fields.remove("static_window");
+                fields.insert("duration_estimate".into(), json!({"type":"fixed","seconds":seconds}));
+            }
+        }
         payload["occupies_capacity"] = task.occupies_capacity.into();
         if let Some(category) = &task.category_tag {
             payload["category_tag"] = category.clone().into();
@@ -356,7 +429,10 @@ pub async fn capture(
         if previous.is_none() {
             response.captured += 1;
         } else if changed {
-            response.updated += 1;
+            // A gesture on the same event was counted as its update already.
+            if !interaction.changed_external_ids.contains(&task.origin_event_id) {
+                response.updated += 1;
+            }
         } else {
             response.unchanged += 1;
         }
@@ -374,6 +450,8 @@ pub async fn capture(
         origin.task_id = id.to_string();
         origin.start_at = task.start_at;
         origin.end_at = task.end_at;
+        // An event already in the applied record is replaced, not listed twice.
+        applied.retain(|old| old.external_id != origin.external_id);
         applied.push(origin);
         recorded = true;
     }

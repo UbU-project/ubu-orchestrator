@@ -198,7 +198,7 @@ async fn ordinary_ids_still_capture_with_unchanged_colour_diagnostics() {
     for (id, color, expected) in [
         ("aaaaa", Some("3"), None),
         ("bbbbb", Some("99"), Some(("capture_colour_unmapped", "Calendar event `bbbbb` has unmapped colour `99`; no category assigned; map that colour in Settings to assign a category"))),
-        ("ccccc", None, Some(("capture_colour_absent", "Calendar event `ccccc` has no colour; no category assigned"))),
+        ("ccccc", None, Some(("capture_colour_absent", "Calendar event `ccccc` has no colour, so it is taken as work for UbU to schedule: a Dynamic Task of the event's length, at no fixed time"))),
     ] {
         let mut item = fixture(id);
         match color { Some(color) => item["colorId"] = color.into(), None => { item.as_object_mut().unwrap().remove("colorId"); } }
@@ -211,7 +211,14 @@ async fn ordinary_ids_still_capture_with_unchanged_colour_diagnostics() {
         let row: String = sqlx::query_scalar("SELECT payload_json FROM objects WHERE object_type='Task'").fetch_one(state.inner().store.pool()).await.unwrap();
         let task: Value = serde_json::from_str(&row).unwrap();
         assert_eq!(task["provenance"]["source"]["source_id"], id);
-        assert_eq!(task["static_window"], json!({"start":"2026-09-28T16:30:00Z","end":"2026-09-28T17:00:00Z"}));
+        // A colour, mapped or not, is a commitment at the event's own time. No colour is Dynamic work.
+        if color.is_some() {
+            assert_eq!(task["static_window"], json!({"start":"2026-09-28T16:30:00Z","end":"2026-09-28T17:00:00Z"}));
+            assert!(task.get("duration_estimate").is_none());
+        } else {
+            assert!(task.get("static_window").is_none(), "{task}");
+            assert_eq!(task["duration_estimate"], json!({"type":"fixed","seconds":1800}));
+        }
         assert_eq!(task["category_tag"], if color == Some("3") { json!("personal") } else { Value::Null });
     }
     let event = parse_event(&fixture("ddddd")).unwrap();
@@ -273,7 +280,7 @@ async fn all_day_recurring_instance_keeps_its_distinct_refusal() {
     assert_eq!(response["skipped"], 1);
     assert_eq!(
         response["diagnostics"],
-        json!([{"code":"capture_all_day_unsupported","message":format!("list event `{ID}` entry 0: all-day event has no dateTime")} ])
+        json!([{"code":"capture_all_day_unsupported","message":format!("list event `{ID}` entry 0: all-day event has no dateTime; it carries no duration, so it cannot be scheduled and is skipped")} ])
     );
     assert_eq!(count(&state, "objects").await, 0);
     assert_eq!(count(&state, "projection_results").await, 0);

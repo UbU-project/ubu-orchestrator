@@ -1,5 +1,77 @@
 # Calendar capture
 
+## A colour decides the placement
+
+From P1B-55, and this section overrides anything below that says otherwise:
+
+- **An event with no colour is work for UbU to schedule.** It is captured as a
+  Dynamic Task. Its duration is the event's length, as
+  `duration_estimate: {"type":"fixed","seconds": end - start}`, and nothing
+  else of its time is kept: no `static_window`, no `allowed_time_range`. The
+  planner decides when. It always occupies capacity, whatever the event's
+  Busy or Free setting, and it has no category.
+- **An event with any colour is a commitment at its own time.** It is captured
+  as a Static Task, exactly as every event was before: `static_window` from
+  the event, `category_tag` from the palette's inverse, and
+  `occupies_capacity` from the event's transparency. A colour that maps to no
+  category, or to several, is still a colour. The event is Static and its
+  category is unknown.
+
+This is the inverse of export. A Static Task is exported in its category's
+colour and a Dynamic Task with none, so an event UbU exported for a Dynamic
+Task and captured again is Dynamic again. Busy against Free decides nothing
+about placement. That was a Quick UbU workaround and is retired.
+
+What follows from it:
+
+- **Two uncoloured events at overlapping times do not collide.** Neither is
+  Static. They are two pieces of work, placed one after the other.
+- **The first preview after a capture moves them.** A Dynamic capture is in the
+  applied record at the time its event had. The Plan puts it somewhere else,
+  so the preview proposes an `update` of the event to its new window, with no
+  colour. A Dynamic capture that does not fit is left where it is: a captured
+  event is never deleted.
+- **A captured Task follows its event's colour.** A captured event is in the
+  applied record, so later captures do not treat it as foreign. But when it
+  **gains or loses** its colour, the rule is applied again to the same Task.
+  Losing the colour removes `static_window` and `category_tag` and sets the
+  duration from the event's length. Gaining one removes `duration_estimate`
+  and sets `static_window` to the event's window as it then stands, with the
+  colour's category. The Task keeps its id; its version goes up by one. A
+  change from one colour to another is not read: it is `capture_owned_drift`,
+  as before.
+- **This reads captured Tasks only.** An event UbU exported for a Task of its
+  own is never offered to this rule. Its colour is a gesture: on a Dynamic
+  Task it means done. See [CALENDAR_INTERACTION.md](CALENDAR_INTERACTION.md).
+  So colouring a to-do that came from the calendar pins it; colouring one
+  that was made in UbU completes it.
+- **An event UbU cannot own is Static whatever its colour.** An instance of a
+  recurring event cannot be written to, so it cannot be moved. Uncoloured, it
+  still stays a commitment at its own time, and its `capture_colour_absent`
+  says so.
+- **Nothing shorter than one planning second is captured.** A duration of
+  zero is invalid, and a duration is never invented. From the Calendar API
+  such an event is skipped at the wire as `calendar_event_skipped`; an event
+  that reaches capture with no span is refused as `capture_event_invalid`.
+- **An all-day event is skipped**, as before, with
+  `capture_all_day_unsupported`. It has a date and no time, so it carries no
+  duration and cannot be scheduled.
+- **Nothing converts Tasks already captured.** A store captured before P1B-55
+  holds every event as Static. Capture into a fresh store.
+
+| Diagnostic | Sentence |
+|---|---|
+| `capture_colour_absent` | Calendar event `<id>` has no colour, so it is taken as work for UbU to schedule: a Dynamic Task of the event's length, at no fixed time |
+| `capture_colour_absent`, for an event UbU cannot own | Calendar event `<id>` has no colour, but UbU cannot own it and so cannot move it: it stays a commitment at its own time, with no category |
+| `capture_colour_unmapped` | unchanged: Static, no category; map the colour in Settings |
+| `capture_colour_ambiguous` | unchanged: Static, no category |
+| `capture_all_day_unsupported` | list event `<id>` entry N: all-day event has no dateTime; it carries no duration, so it cannot be scheduled and is skipped |
+
+`capture_colour_absent` is not a deficiency. It is the ordinary case for a
+to-do, and it says what was done with the event.
+
+## History
+
 P1B-32 closes P1B-31's known limit 3:
 
 > **Foreign events are not planning constraints.** A real meeting on the calendar is reported and ignored. The planner still does not know the operator is busy then.
@@ -41,7 +113,8 @@ Capture appends the origin event, paired with its admitted Task ID, to a new app
 | `transparency: "opaque"` or absent | `occupies_capacity: true` | `transparency: "opaque"` |
 | Unique palette `colorId` | Matching `category_tag` | The same palette colour |
 | Shared palette `colorId` | No category; `capture_colour_ambiguous` | Preserve the recorded source colour |
-| Unmapped or absent `colorId` | No category; no diagnostic | Preserve the recorded source colour or absence |
+| Unmapped `colorId` | No category; `capture_colour_unmapped` | Preserve the recorded source colour |
+| Absent `colorId` | **A Dynamic Task**, from P1B-55: `duration_estimate` and no `static_window`; `capture_colour_absent` | No colour, at the window the Plan chose |
 | Event ID | `provenance.source.source_id` | The original event ID |
 
 The inverse uses the configured `CategoryPalette`, including operator overrides. It never picks an arbitrary category or uses freeform tags. Time is normalized to whole UTC planning seconds on both sides. A span that cannot occupy at least one planning second is skipped with `capture_event_invalid`. Offset spellings do not create spurious updates.
@@ -94,6 +167,6 @@ The ticket mentions `/task/:id/reject`. That existing legacy endpoint records a 
 3. **No recurrence.** `singleEvents=true` expands a recurring meeting into instances, so each occurrence captures as its own Task with no link between them and no notion of the series.
 4. **No attendees, location, description or conferencing data.** A captured Task carries a title, a window, a capacity flag and possibly a category. Everything else on the event is dropped.
 5. **All-day events are skipped.** They have no `dateTime`, and UbU plans concrete spans.
-6. **A captured Task is Static forever.** Even if the operator would rather UbU moved it, nothing demotes it to Dynamic.
+6. ~~A captured Task is Static forever.~~ No longer true, from P1B-55: an uncoloured event is captured as Dynamic, and removing an event's colour demotes its Task to Dynamic at the next capture.
 7. **Deleting a captured Task does not delete its event.** The Task leaves the plan; the meeting stays on the calendar, which is almost certainly right for a real appointment but is worth knowing.
 

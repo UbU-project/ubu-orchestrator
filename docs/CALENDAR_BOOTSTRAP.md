@@ -29,7 +29,7 @@ Capture reports three distinct advisory diagnostics, naming the source event:
 |---|---|---|
 | `capture_colour_ambiguous` | Multiple categories map to the event colour. | Resolve the collision in the inverse view before bootstrap capture. |
 | `capture_colour_unmapped` | No category maps to the event colour; the diagnostic names the colour ID too. | Map that colour in Settings before bootstrap capture. |
-| `capture_colour_absent` | The event has no explicit colour. | Give the source event a suitable colour before capture, or assign the Task category explicitly afterwards. |
+| `capture_colour_absent` | The event has no colour. From P1B-55 that is not a problem to fix: it is how an event says it is work for UbU to schedule, and it is captured as a Dynamic Task of the event's length. | Nothing, if it is a to-do. If it is a commitment at a fixed time, give the event a colour and capture again. |
 
 All three are advisory: the Task is still admitted without a category. Mapping a
 colour after capture does **not** automatically recategorise already-owned Tasks;
@@ -154,7 +154,7 @@ repairable. Importing recurrence as a series is later work and needs its own des
 | `capture_occupancy_only` | Capture: the named event ID cannot be a UbU Task handle, so its time was recorded as an occupied window UbU will never write to. | None. Keep managing the commitment in Calendar; the next capture follows it if it moves. |
 | `capture_event_not_ownable` | Reconcile: the named event ID cannot be a UbU Task handle. The event is foreign and stays foreign. | None. Do not substitute an ID to force ownership. |
 | `capture_event_invalid` | An empty title or unusable concrete window prevents Task admission. | Correct the title or timed window at its source, then retry capture. |
-| `capture_all_day_unsupported` | An all-day item has no supported concrete `dateTime` window. | Keep it outside capture, or explicitly change it to a timed commitment if that reflects its actual meaning. |
+| `capture_all_day_unsupported` | An all-day item has a date and no time, so it carries no duration and cannot be scheduled. It is skipped. | Keep it outside capture, or explicitly change it to a timed event in the calendar. |
 
 Malformed wire items instead produce `calendar_event_skipped`. Use its index and
 ID to locate and correct the source where appropriate; cancelled items are

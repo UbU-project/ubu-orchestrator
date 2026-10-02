@@ -15,6 +15,22 @@ color_id: if visible && task.pinned.is_some() {
 | unpinned / Dynamic | **no colour** | **done** |
 | pinned / Static | its category colour | its category |
 
+**Capture reads the same table backwards**, from P1B-55: a foreign event with
+no colour is captured as Dynamic work, and one with a colour as a Static
+commitment in that colour's category. See
+[CALENDAR_CAPTURE.md](CALENDAR_CAPTURE.md). The two readings do not compete,
+because they read different events:
+
+| the event | read by | a colour means |
+|---|---|---|
+| exported by UbU for a Task made in UbU, Dynamic | the gesture, below | **done** |
+| exported by UbU for a Task made in UbU, Static | nothing | its category, as exported |
+| foreign: not in the applied record | capture | a Static commitment in that category |
+| captured earlier, so its Task's source is the calendar | capture, when the colour appears or disappears | Static with it, Dynamic without it |
+
+A completion gesture is never read from a captured Task, and the capture rule
+is never applied to an event UbU exported for a Task of its own.
+
 Mainline uses `ScheduledTaskBody.static_anchor` at step construction. `TaskDisplay` keeps the palette's resolved colour and every step retains its `category_tag`; only Static steps receive `gcal_color_id`. Direct Static steps retain their existing colours. Dynamic work loses its category colour on the phone, buying the familiar one-tap completion gesture.
 
 ## Complete from the phone

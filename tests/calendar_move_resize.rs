@@ -169,7 +169,8 @@ async fn meeting() -> (AppState, Arc<RecordingCalendarApi>, String) {
         summary: "Dentist".into(),
         start_at: "2026-09-26T14:00:00Z".into(),
         end_at: "2026-09-26T14:30:00Z".into(),
-        color_id: None,
+        // A commitment has a colour. From P1B-55 an uncoloured event is Dynamic work, not a meeting.
+        color_id: Some("3".into()),
         transparent: false,
         reminders_minutes: vec![],
     };

@@ -77,6 +77,11 @@ fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str, String>
         .ok_or_else(|| format!("missing or invalid {field}"))
 }
 
+/// An all-day event has a date and no time, so it has no length. It cannot be a
+/// Dynamic Task without inventing a duration, and a commitment with no time has
+/// no window to pin. It is skipped, and the message says why.
+pub const ALL_DAY_MESSAGE: &str = "all-day event has no dateTime; it carries no duration, so it cannot be scheduled and is skipped";
+
 pub fn parse_event(value: &Value) -> Result<DesiredEvent, String> {
     if value.get("status").and_then(Value::as_str) == Some("cancelled") {
         return Err("cancelled event".into());
@@ -85,7 +90,7 @@ pub fn parse_event(value: &Value) -> Result<DesiredEvent, String> {
     let task_id = format!("task_{id}");
     let summary = required_string(value, "summary")?;
     if value["start"].get("date").is_some() && value["start"].get("dateTime").is_none() {
-        return Err("all-day event has no dateTime".into());
+        return Err(ALL_DAY_MESSAGE.into());
     }
     let start_at = required_string(&value["start"], "dateTime")?;
     let end_at = required_string(&value["end"], "dateTime")?;
@@ -168,7 +173,7 @@ pub fn parse_event_list(value: &Value) -> (Vec<DesiredEvent>, Vec<String>) {
 
 pub fn list_diagnostic(message: String) -> crate::api::planning::DiagnosticBody {
     crate::api::planning::DiagnosticBody {
-        code: if message.ends_with("all-day event has no dateTime") { "capture_all_day_unsupported" } else { "calendar_event_skipped" }.into(),
+        code: if message.ends_with(ALL_DAY_MESSAGE) { "capture_all_day_unsupported" } else { "calendar_event_skipped" }.into(),
         message,
     }
 }

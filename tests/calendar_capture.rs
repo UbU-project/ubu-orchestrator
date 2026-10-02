@@ -465,21 +465,24 @@ async fn unmapped_foreign_colour_is_advisory_and_still_captured() {
 }
 
 #[tokio::test]
-async fn absent_foreign_colour_is_advisory_and_still_captured() {
+async fn absent_foreign_colour_is_dynamic_work_and_still_captured() {
+    // Until P1B-55 this event became a Static Task with no category. No colour now
+    // means work for UbU to schedule; tests/capture_partition.rs holds the whole rule.
     let mut foreign = companion();
     foreign.external_id = "ddddd".into();
     foreign.task_id = "task_ddddd".into();
-    foreign.summary = "Synthetic uncoloured appointment".into();
+    foreign.summary = "Synthetic uncoloured to-do".into();
     foreign.color_id = None;
     let (state, recorder) = setup(vec![foreign]).await;
     let response = capture(&state).await;
     assert_eq!(response["captured"], 1);
     assert_eq!(response["skipped"], 0);
-    assert_eq!(response["diagnostics"], json!([{"code":"capture_colour_absent","message":"Calendar event `ddddd` has no colour; no category assigned"}]));
+    assert_eq!(response["diagnostics"], json!([{"code":"capture_colour_absent","message":"Calendar event `ddddd` has no colour, so it is taken as work for UbU to schedule: a Dynamic Task of the event's length, at no fixed time"}]));
     let rows = tasks(&state).await;
     assert_eq!(rows.len(), 1);
     assert!(rows[0].get("category_tag").is_none());
-    assert_eq!(rows[0]["static_window"], json!({"start":"2026-09-25T12:00:00Z","end":"2026-09-25T12:30:00Z"}));
+    assert!(rows[0].get("static_window").is_none());
+    assert_eq!(rows[0]["duration_estimate"], json!({"type":"fixed","seconds":1800}));
     assert_eq!(rows[0]["occupies_capacity"], true);
     assert_eq!(recorder.recorded_calls(), vec![RecordedCalendarCall::ListEvents]);
     println!("EVIDENCE[P1B42_test11]={}", json!({"response":response,"captured_task":rows[0]}));
