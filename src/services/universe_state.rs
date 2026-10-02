@@ -62,7 +62,7 @@ pub async fn apply(
         Some((current, _)) => current.clone(),
         None => UniverseState::new(now, "empty UniverseState seeded by an operator edit"),
     };
-    let next = apply_universe_mutations(&base, mutations).map_err(|error| {
+    let next = apply_universe_mutations(&base, mutations, now).map_err(|error| {
         AppError::bad_request_diagnostic("universe_mutation_invalid", error.to_string())
     })?;
 
@@ -126,7 +126,7 @@ mod tests {
             operation: operation.to_owned(),
             target: target.to_owned(),
             payload,
-            note: None,
+            provenance_kind: None,
         }
     }
 

@@ -541,7 +541,7 @@ async fn apply_completed_effects(
             .ok_or_else(|| AppError::Internal("UniverseState missing after seed admission".into()))?
     };
 
-    let next_state = match apply_universe_mutations(&current_state, &effect.mutations) {
+    let next_state = match apply_universe_mutations(&current_state, &effect.mutations, effective_time) {
         Ok(next_state) => next_state,
         Err(error) => {
             return Ok(vec![ActionDiagnostic {

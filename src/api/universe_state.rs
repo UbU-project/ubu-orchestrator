@@ -110,7 +110,7 @@ pub async fn edit(
             operation: mutation.operation,
             target: mutation.target,
             payload: mutation.payload,
-            note: mutation.note,
+            provenance_kind: None,
         })
         .collect();
     let (next, version) = universe_state::apply(&state, &mutations, MVP_INSTANCE_MODE).await?;
