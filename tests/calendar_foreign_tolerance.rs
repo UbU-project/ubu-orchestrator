@@ -226,6 +226,7 @@ async fn ordinary_ids_still_capture_with_unchanged_colour_diagnostics() {
         &[event],
         &[("3".into(), None)].into_iter().collect(),
         &Default::default(),
+        &Default::default(),
     );
     assert_eq!(tasks.len(), 1);
     assert!(tasks[0].category_tag.is_none());

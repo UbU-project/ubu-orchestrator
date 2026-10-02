@@ -397,7 +397,7 @@ fn daily(days: u32) -> Vec<Value> {
 fn planned(items: Vec<Value>) -> (usize, Vec<(String, String)>) {
     let events: Vec<_> = items.iter().map(|item| parse_event(item).unwrap()).collect();
     let inverse = [("3".to_owned(), Some("personal".to_owned()))].into_iter().collect();
-    let (tasks, diagnostics) = plan_capture(&events, &inverse, &Default::default());
+    let (tasks, diagnostics) = plan_capture(&events, &inverse, &Default::default(), &Default::default());
     (tasks.len(), diagnostics.into_iter().map(|d| (d.code, d.message)).collect())
 }
 

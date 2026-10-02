@@ -37,6 +37,12 @@ without claiming ownership. The known-ID set includes every active Task, even
 unscheduled Tasks. An inactive/unknown Task provides no such evidence. Existing
 applied ownership remains ownership even when its Task is no longer active.
 
+From P1B-57 UbU stamps the events it creates, and capture reads the stamp; see
+[CAPTURE_PROVENANCE.md](CAPTURE_PROVENANCE.md). The rule above is unchanged: a
+stamp does not establish ownership. Reconciliation does not read it, so an
+event UbU created for a store it no longer has is still classified `foreign`
+here.
+
 Foreign events are never touched or adopted by reconciliation or repair and are
 never added to the applied side of a later diff. Their presence alone generates
 no Calendar write. Adopting them as planning constraints is a separate feature;

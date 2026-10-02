@@ -251,6 +251,17 @@ impl RecordingCalendarApi {
         self
     }
 
+    /// Put an event on the calendar as someone other than UbU would: the operator, on
+    /// a phone. It carries no stamp. `insert_event` is what UbU itself calls, and an
+    /// insert stamps, so a test that means "the operator added this" uses this.
+    pub fn place_event(&self, event: DesiredEvent) {
+        self.state
+            .lock()
+            .unwrap()
+            .events
+            .insert(event.external_id.clone(), event);
+    }
+
     /// Deterministic failure injection. A failed call is recorded but changes no event.
     pub fn fail_for(&self, external_id: impl Into<String>) {
         self.state

@@ -82,7 +82,7 @@ what capture does with them can be asserted:
 The stamp is read by the production reader, `calendar_wire::ubu_created_ids`,
 and the mock client reports the id as UbU-minted after each list, as the live
 client does. An entry in the plain shape has no place for a stamp and carries
-none.
+none. See [CAPTURE_PROVENANCE.md](CAPTURE_PROVENANCE.md).
 
 Startup is refused, naming the path and the entry, when the file cannot be
 read, is not JSON, is not an array, or holds an event that lacks a field,

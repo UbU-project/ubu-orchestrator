@@ -86,7 +86,8 @@ IDs remain stable, and from P1B-57 it adds one more key, the stamp:
 the body above: no `id` and no `extendedProperties`. A PATCH leaves an omitted
 field alone, so a stamp written at insert survives every later patch. Only an
 insert stamps, because a PATCH is also what UbU sends to an event the operator
-made and UbU captured: the stamp means "UbU minted this event". Unlike Quick UbU's create
+made and UbU captured: the stamp means "UbU minted this event". See
+[CAPTURE_PROVENANCE.md](CAPTURE_PROVENANCE.md). Unlike Quick UbU's create
 path, UbU must supply an ID rather than accept a generated one. Both calendar and
 event path segments are percent-encoded, including `@` and `/`.
 

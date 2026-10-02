@@ -557,7 +557,8 @@ async fn a_foreign_coloured_event_is_captured_as_static_and_completes_nothing() 
         transparent: false,
         reminders_minutes: vec![],
     };
-    recorder.insert_event(&foreign).await.unwrap();
+    // The operator's own event: placed, not inserted. An insert is what UbU does, and it stamps.
+    recorder.place_event(foreign.clone());
     recorder.clear_recorded_calls();
     let response = capture(&state).await;
     assert_eq!(

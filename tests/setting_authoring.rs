@@ -335,7 +335,8 @@ async fn inverse_uses_changed_palette_for_capture_and_dynamic_completion_still_w
         transparent: false,
         reminders_minutes: vec![],
     };
-    recorder.insert_event(&foreign).await.unwrap();
+    // The operator's own event: placed, not inserted. An insert is what UbU does, and it stamps.
+    recorder.place_event(foreign.clone());
     let captured = capture(&s).await;
     assert_eq!(captured["captured"], 1);
     assert_eq!(captured["diagnostics"], json!([]));

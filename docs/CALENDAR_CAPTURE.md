@@ -56,6 +56,11 @@ What follows from it:
 - **An all-day event is skipped**, as before, with
   `capture_all_day_unsupported`. It has a date and no time, so it carries no
   duration and cannot be scheduled.
+- **UbU's own stale exports are not captured**, from P1B-57. An event UbU
+  stamped when it created it, arriving as foreign, is UbU's echo from a store
+  it no longer has. It becomes no Task, counts as skipped, and is reported
+  once as `capture_stale_export`. See
+  [CAPTURE_PROVENANCE.md](CAPTURE_PROVENANCE.md).
 - **Nothing converts Tasks already captured.** A store captured before P1B-55
   holds every event as Static. Capture into a fresh store.
 
@@ -66,6 +71,7 @@ What follows from it:
 | `capture_colour_unmapped` | unchanged: Static, no category; map the colour in Settings |
 | `capture_colour_ambiguous` | unchanged: Static, no category |
 | `capture_all_day_unsupported` | list event `<id>` entry N: all-day event has no dateTime; it carries no duration, so it cannot be scheduled and is skipped |
+| `capture_stale_export`, from P1B-57 | Calendar event `<id>` was created by UbU for a Task this store does not have, so it is left alone and becomes no Task |
 
 `capture_colour_absent` is not a deficiency. It is the ordinary case for a
 to-do, and it says what was done with the event.

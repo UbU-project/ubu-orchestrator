@@ -12,6 +12,10 @@
 //! a Static Task with a minted handle that UbU never writes back to, never
 //! exports and never records as applied. UbU cannot move such an event, so it
 //! is Static whatever its colour. See docs/CALENDAR_OCCUPANCY.md.
+//!
+//! An event UbU minted itself carries a stamp. One that arrives here as foreign is
+//! UbU's own echo from a store it no longer has, and becomes no Task. See
+//! docs/CAPTURE_PROVENANCE.md.
 use super::{
     calendar_apply::{self, StoredCalendarResult, CALENDAR_PROJECTION_RESULT_SCHEMA_VERSION},
     calendar_client::{CalendarApi, CalendarExportMode},
@@ -100,17 +104,53 @@ pub fn occupancy_diagnostic(ids: &[String]) -> Option<DiagnosticBody> {
     Some(DiagnosticBody { code: "capture_occupancy_only".into(), message })
 }
 
+/// One diagnostic for every event of a capture that is UbU's own echo: an event UbU
+/// minted, by its stamp, for a Task this store does not have. The same shape as
+/// `occupancy_diagnostic`: the first few are named and the rest are counted. Ids
+/// only: an event's title is never echoed.
+pub fn stale_export_diagnostic(ids: &[String]) -> Option<DiagnosticBody> {
+    let message = match ids {
+        [] => return None,
+        [id] => format!("Calendar event `{id}` was created by UbU for a Task this store does not have, so it is left alone and becomes no Task"),
+        _ => {
+            let named: Vec<_> = ids.iter().take(MAX_OCCUPANCY_NAMED).map(|id| format!("`{id}`")).collect();
+            let rest = match ids.len() - named.len() {
+                0 => String::new(),
+                more => format!(" and {more} more"),
+            };
+            format!(
+                "{} Calendar events were created by UbU for Tasks this store does not have, so each is left alone and becomes no Task: {}{rest}",
+                ids.len(),
+                named.join(", ")
+            )
+        }
+    };
+    Some(DiagnosticBody { code: "capture_stale_export".into(), message })
+}
+
 pub fn plan_capture(
     foreign: &[DesiredEvent],
     palette_inverse: &BTreeMap<String, Option<String>>,
     existing_by_source: &BTreeMap<String, String>,
+    ubu_created_ids: &BTreeSet<String>,
 ) -> (Vec<CapturedTask>, Vec<DiagnosticBody>) {
     let mut tasks = Vec::new();
     let mut diagnostics = Vec::new();
     let mut seen = BTreeSet::new();
     let mut unowned = Vec::new();
+    let mut stale = Vec::new();
     for event in foreign {
         if !seen.insert(&event.external_id) {
+            continue;
+        }
+        // A foreign event reaches this function only when the store has neither an
+        // applied record for it nor an active Task of that handle. A stamp UbU wrote
+        // when it minted the event therefore means a store UbU no longer has: it is
+        // UbU's own echo, not a commitment the operator made, and it becomes no Task.
+        // An event this store already holds a Task for is not an echo, whatever it
+        // carries: that is a captured Task following its event's colour.
+        if ubu_created_ids.contains(&event.external_id) && !existing_by_source.contains_key(&event.external_id) {
+            stale.push(event.external_id.clone());
             continue;
         }
         let window = CalendarTimeRange::parse(&event.start_at, &event.end_at);
@@ -200,7 +240,8 @@ pub fn plan_capture(
             category_tag,
         });
     }
-    // After the per-event colour diagnostics, and once for the whole capture.
+    // After the per-event colour diagnostics, and once each for the whole capture.
+    diagnostics.extend(stale_export_diagnostic(&stale));
     diagnostics.extend(occupancy_diagnostic(&unowned));
     (tasks, diagnostics)
 }
@@ -258,6 +299,9 @@ pub async fn capture(
     observed.retain(|event| range.overlaps(event) || applied.iter().any(|old| old.external_id == event.external_id));
     let mut diagnostics = client.take_diagnostics().await;
     let wire_skipped = diagnostics.len();
+    // Which of the listed events UbU minted, by the stamp an insert writes. Drained
+    // after the list, as the diagnostics are.
+    let ubu_created_ids = client.take_ubu_created_ids().await;
     // An event that gained or lost its colour since UbU last saw it. Read here,
     // before a gesture accepts the whole observation into the applied record.
     let colour_flipped: BTreeSet<String> = observed
@@ -301,8 +345,11 @@ pub async fn capture(
         &foreign,
         &crate::category_palette::CategoryPalette::from_pool(pool).await?.inverse(),
         &by_source,
+        &ubu_created_ids,
     );
-    let invalid = foreign
+    // Every candidate that became no Task: the unusable ones, and UbU's own stale
+    // exports, which are skipped on purpose.
+    let not_captured = foreign
         .iter()
         .map(|e| &e.external_id)
         .collect::<BTreeSet<_>>()
@@ -315,7 +362,7 @@ pub async fn capture(
         moved: interaction.moved,
         resized: interaction.resized,
         unchanged: 0,
-        skipped: invalid + wire_skipped,
+        skipped: not_captured + wire_skipped,
         diagnostics: Vec::new(),
     };
     diagnostics.extend(plan_diagnostics);
