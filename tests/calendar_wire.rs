@@ -432,3 +432,146 @@ async fn live_refusals_never_call_a_client_and_enablement_is_only_in_memory() {
         .load(Ordering::Acquire));
     assert!(CalendarExportMode::Live.ensure_available(&fresh).is_err());
 }
+
+// ---- P1B-57 §B: reading the stamp back.
+
+/// A Google list item with only what the reader looks at, plus whatever is given.
+fn listed(id: &str, extra: Value) -> Value {
+    let mut item = json!({"id": id, "summary": "Synthetic event", "start": {"dateTime": "2026-09-25T09:00:00Z"}, "end": {"dateTime": "2026-09-25T09:30:00Z"}, "reminders": {"useDefault": false}});
+    item.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+    item
+}
+fn stamped(task: &str) -> Value {
+    json!({"extendedProperties": {"private": {"ubu_task": task}}})
+}
+
+#[test]
+fn the_reader_keeps_only_an_id_whose_stamp_names_its_own_task() {
+    const MINTED: &str = "018f3c8e9b2a7c4d8f1e2a3b4c5d6e70";
+    const OPERATORS: &str = "018f3c8e9b2a7c4d8f1e2a3b4c5d6e71";
+    const MISNAMED: &str = "018f3c8e9b2a7c4d8f1e2a3b4c5d6e72";
+    let list = json!({"items": [
+        // UbU minted this one: the stamp names the Task whose handle the id is.
+        listed(MINTED, stamped(&format!("task_{MINTED}"))),
+        // The same shape of id with no stamp: the operator's, or UbU's from before P1B-57.
+        listed(OPERATORS, json!({})),
+        // A stamp that names some other Task is evidence of nothing.
+        listed(MISNAMED, stamped(&format!("task_{MINTED}"))),
+    ]});
+    assert_eq!(ubu_created_ids(&list), BTreeSet::from([MINTED.to_owned()]));
+    // The events themselves are read as before: the stamp is not part of an event.
+    let (events, skipped) = parse_event_list(&list);
+    assert_eq!(events.iter().map(|e| e.external_id.as_str()).collect::<Vec<_>>(), [MINTED, OPERATORS, MISNAMED]);
+    assert!(skipped.is_empty());
+}
+
+#[test]
+fn the_reader_tolerates_every_absence_by_returning_fewer_ids() {
+    const ID: &str = "018f3c8e9b2a7c4d8f1e2a3b4c5d6e70";
+    let own = format!("task_{ID}");
+    for (what, value) in [
+        ("no items", json!({})),
+        ("items is not a list", json!({"items": {"id": ID}})),
+        ("an empty list", json!({"items": []})),
+        ("an item that is not an object", json!({"items": ["synthetic", 7, null]})),
+        ("no id", json!({"items": [stamped(&own)]})),
+        ("an id that is not a string", json!({"items": [{"id": 7, "extendedProperties": {"private": {"ubu_task": own}}}]})),
+        ("no extendedProperties", json!({"items": [listed(ID, json!({}))]})),
+        ("extendedProperties is not an object", json!({"items": [listed(ID, json!({"extendedProperties": "synthetic"}))]})),
+        ("no private", json!({"items": [listed(ID, json!({"extendedProperties": {"shared": {"ubu_task": own}}}))]})),
+        ("private is not an object", json!({"items": [listed(ID, json!({"extendedProperties": {"private": [own]}}))]})),
+        ("another private property", json!({"items": [listed(ID, json!({"extendedProperties": {"private": {"synthetic": own}}}))]})),
+        ("a stamp that is not a string", json!({"items": [listed(ID, json!({"extendedProperties": {"private": {"ubu_task": 7}}}))]})),
+        ("a stamp without the prefix", json!({"items": [listed(ID, stamped(ID))]})),
+        ("an empty stamp", json!({"items": [listed(ID, stamped(""))]})),
+    ] {
+        assert_eq!(ubu_created_ids(&value), BTreeSet::new(), "{what}");
+    }
+    // One malformed neighbour does not cost the others.
+    let mixed = json!({"items": ["synthetic", listed(ID, stamped(&own)), {"id": 7}]});
+    assert_eq!(ubu_created_ids(&mixed), BTreeSet::from([ID.to_owned()]));
+    // An entry the event parser skips can still be recognised: the two passes are independent.
+    let all_day = json!({"items": [{"id": ID, "summary": "Synthetic all day", "start": {"date": "2026-09-25"}, "end": {"date": "2026-09-26"}, "extendedProperties": {"private": {"ubu_task": own}}}]});
+    assert_eq!(ubu_created_ids(&all_day), BTreeSet::from([ID.to_owned()]));
+    assert!(parse_event_list(&all_day).0.is_empty());
+}
+
+#[test]
+fn an_inserts_body_read_back_through_the_reader_yields_that_events_id() {
+    // §A and §B agreeing: the one assertion that fails if either side's key or shape drifts.
+    let event = event();
+    let insert = event_request(Operation::Insert, CALENDAR_API_BASE, "primary", &event).body.unwrap();
+    // Google returns what was inserted, so the insert body stands for the listed item.
+    assert_eq!(ubu_created_ids(&json!({"items": [insert]})), BTreeSet::from([event.external_id.clone()]));
+    // What a PATCH sends, listed back, is recognised as nobody's.
+    let mut patched = event_request(Operation::Patch, CALENDAR_API_BASE, "primary", &event).body.unwrap();
+    patched["id"] = json!(event.external_id);
+    assert_eq!(ubu_created_ids(&json!({"items": [patched]})), BTreeSet::new());
+    // An event UbU re-creates for a captured Task keeps the operator's id, so its stamp
+    // names a Task that id is not the handle of: it is not read as UbU-minted.
+    let mut recreated = event.clone();
+    recreated.external_id = "0inv3nt3dkett1edescaling".into();
+    let insert = event_request(Operation::Insert, CALENDAR_API_BASE, "primary", &recreated).body.unwrap();
+    assert_eq!(ubu_created_ids(&json!({"items": [insert]})), BTreeSet::new());
+}
+
+#[tokio::test]
+async fn the_recording_client_reads_stamps_through_the_reader_and_drains_them_after_a_list() {
+    use ubu_orchestrator::services::{calendar_client::CalendarApi, calendar_range::CalendarTimeRange};
+    const MINTED: &str = "018f3c8e9b2a7c4d8f1e2a3b4c5d6e70";
+    const OPERATORS: &str = "018f3c8e9b2a7c4d8f1e2a3b4c5d6e71";
+    let list = json!({"items": [listed(MINTED, stamped(&format!("task_{MINTED}"))), listed(OPERATORS, json!({}))]});
+    let range = CalendarTimeRange::parse("2026-09-25T00:00:00Z", "2026-09-26T00:00:00Z").unwrap();
+    let recorder = RecordingCalendarApi::with_wire_events(&list);
+    // Nothing is known before a list, as with diagnostics.
+    assert!(recorder.take_ubu_created_ids().await.is_empty());
+    assert_eq!(recorder.list_events(&range).await.unwrap().len(), 2);
+    assert_eq!(recorder.take_ubu_created_ids().await, BTreeSet::from([MINTED.to_owned()]));
+    // Drained: a second take with no list between them is empty.
+    assert!(recorder.take_ubu_created_ids().await.is_empty());
+    // The stamp stays on the event, as it does on the calendar: the next list finds it again.
+    recorder.list_events(&range).await.unwrap();
+    assert_eq!(recorder.take_ubu_created_ids().await, BTreeSet::from([MINTED.to_owned()]));
+    // An event out of the listed range is not reported.
+    let elsewhere = CalendarTimeRange::parse("2026-10-25T00:00:00Z", "2026-10-26T00:00:00Z").unwrap();
+    recorder.list_events(&elsewhere).await.unwrap();
+    assert!(recorder.take_ubu_created_ids().await.is_empty());
+
+    // The builder stands in for a stamp without a synthetic list.
+    let built = RecordingCalendarApi::with_events([event()]).with_ubu_created_ids([event().external_id]);
+    built.list_events(&range).await.unwrap();
+    assert_eq!(built.take_ubu_created_ids().await, BTreeSet::from([event().external_id]));
+
+    // An insert stamps, a patch does not, and a delete takes the stamp with the event.
+    let fresh = RecordingCalendarApi::new();
+    let mut captured = event();
+    captured.external_id = "0inv3nt3dkett1edescaling".into();
+    fresh.insert_event(&event()).await.unwrap();
+    fresh.insert_event(&captured).await.unwrap();
+    fresh.patch_event(&event()).await.unwrap();
+    fresh.list_events(&range).await.unwrap();
+    assert_eq!(fresh.take_ubu_created_ids().await, BTreeSet::from([event().external_id]));
+    fresh.delete_event(&event().external_id).await.unwrap();
+    fresh.list_events(&range).await.unwrap();
+    assert!(fresh.take_ubu_created_ids().await.is_empty());
+}
+
+#[tokio::test]
+async fn a_client_that_does_not_know_reports_no_minted_ids() {
+    use ubu_orchestrator::services::{
+        calendar_client::{CalendarApi, CalendarApiFuture},
+        calendar_range::CalendarTimeRange,
+    };
+    // The trait's default: "nothing is known to be UbU's".
+    struct Bare;
+    impl CalendarApi for Bare {
+        fn list_events<'a>(&'a self, _: &'a CalendarTimeRange) -> CalendarApiFuture<'a, Vec<DesiredEvent>> { Box::pin(async { Ok(vec![event()]) }) }
+        fn insert_event<'a>(&'a self, _: &'a DesiredEvent) -> CalendarApiFuture<'a, ()> { Box::pin(async { Ok(()) }) }
+        fn patch_event<'a>(&'a self, _: &'a DesiredEvent) -> CalendarApiFuture<'a, ()> { Box::pin(async { Ok(()) }) }
+        fn delete_event<'a>(&'a self, _: &'a str) -> CalendarApiFuture<'a, ()> { Box::pin(async { Ok(()) }) }
+    }
+    let range = CalendarTimeRange::parse("2026-09-25T00:00:00Z", "2026-09-26T00:00:00Z").unwrap();
+    Bare.list_events(&range).await.unwrap();
+    assert!(Bare.take_ubu_created_ids().await.is_empty());
+    assert!(Bare.take_diagnostics().await.is_empty());
+}

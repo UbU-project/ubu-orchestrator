@@ -307,3 +307,35 @@ async fn a_seed_can_hold_an_event_of_no_length_and_an_all_day_entry_for_capture_
     let error = AppState::in_memory(config(Some(&seed))).await.err().unwrap().to_string();
     assert!(error.contains("entry `0`: invalid range start"), "{error}");
 }
+
+// P1B-57: a seed entry in Google's own shape may carry UbU's stamp, read by the production reader.
+#[tokio::test]
+async fn a_seed_entry_in_googles_shape_can_carry_ubus_stamp() {
+    const MINTED: &str = "018f3c8e9b2a7c4d8f1e2a3b4c5d6e70";
+    const MISNAMED: &str = "018f3c8e9b2a7c4d8f1e2a3b4c5d6e71";
+    let wire = |id: &str, stamp: Option<&str>| {
+        let mut entry = json!({"id": id, "summary": "Synthetic event", "start": {"dateTime": "2026-09-25T13:00:00Z"}, "end": {"dateTime": "2026-09-25T13:30:00Z"}, "reminders": {"useDefault": true}});
+        if let Some(stamp) = stamp {
+            entry["extendedProperties"] = json!({"private": {"ubu_task": stamp}});
+        }
+        entry
+    };
+    let seed = Fixture::events(
+        "p1b57",
+        &json!([
+            wire(MINTED, Some(&format!("task_{MINTED}"))),
+            wire(MISNAMED, Some(&format!("task_{MINTED}"))),
+            wire("ccccc", None),
+            // The plain shape has no place for a stamp, and carries none.
+            foreign_event()
+        ]),
+    );
+    let state = empty(Some(&seed)).await;
+    assert_eq!(state.inner().calendar_mock_events.as_ref().unwrap().len(), 4);
+    assert_eq!(
+        state.inner().calendar_mock_created_ids.iter().map(String::as_str).collect::<Vec<_>>(),
+        [MINTED]
+    );
+    // With no seed there is none.
+    assert!(empty(None).await.inner().calendar_mock_created_ids.is_empty());
+}

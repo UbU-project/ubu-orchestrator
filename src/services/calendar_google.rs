@@ -24,6 +24,8 @@ pub struct GoogleCalendarApi {
     authenticator: OnceCell<DefaultAuthenticator>,
     consent_failed: Arc<Notify>,
     diagnostics: Mutex<Vec<DiagnosticBody>>,
+    /// Ids of listed events carrying UbU's own stamp, accumulated across pages and drained after a list.
+    ubu_created_ids: Mutex<BTreeSet<String>>,
 }
 
 impl GoogleCalendarApi {
@@ -52,6 +54,7 @@ impl GoogleCalendarApi {
             authenticator: OnceCell::new(),
             consent_failed: Arc::new(Notify::new()),
             diagnostics: Mutex::new(Vec::new()),
+            ubu_created_ids: Mutex::new(BTreeSet::new()),
         })
     }
 
@@ -163,6 +166,9 @@ impl CalendarApi for GoogleCalendarApi {
     fn take_diagnostics(&self) -> super::calendar_client::CalendarDiagnosticsFuture<'_> {
         Box::pin(GoogleCalendarApi::take_diagnostics(self))
     }
+    fn take_ubu_created_ids(&self) -> super::calendar_client::CalendarCreatedIdsFuture<'_> {
+        Box::pin(async move { std::mem::take(&mut *self.ubu_created_ids.lock().await) })
+    }
     fn list_events<'a>(&'a self, range: &'a CalendarTimeRange) -> CalendarApiFuture<'a, Vec<DesiredEvent>> {
         Box::pin(async move {
             let mut events = Vec::new();
@@ -187,6 +193,10 @@ impl CalendarApi for GoogleCalendarApi {
                     .lock()
                     .await
                     .extend(skipped.into_iter().map(wire::list_diagnostic));
+                self.ubu_created_ids
+                    .lock()
+                    .await
+                    .extend(wire::ubu_created_ids(&value));
                 page = wire::next_page(&value, &mut seen)?;
                 if page.is_none() {
                     return Ok(events);

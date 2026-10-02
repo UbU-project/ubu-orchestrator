@@ -16,8 +16,15 @@ pub type CalendarApiFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, String
 
 pub type CalendarDiagnosticsFuture<'a> = Pin<Box<dyn Future<Output = Vec<crate::api::planning::DiagnosticBody>> + Send + 'a>>;
 
+/// The ids of listed events that UbU minted itself, read from the stamp an insert writes.
+pub type CalendarCreatedIdsFuture<'a> = Pin<Box<dyn Future<Output = BTreeSet<String>> + Send + 'a>>;
+
 pub trait CalendarApi: Send + Sync {
     fn take_diagnostics(&self) -> CalendarDiagnosticsFuture<'_> { Box::pin(async { Vec::new() }) }
+    /// Which of the events `list_events` returned were minted by UbU: drained after a
+    /// list, as diagnostics are, and accumulated across its pages. The default is
+    /// none, which reads as "nothing is known to be UbU's" and captures as before.
+    fn take_ubu_created_ids(&self) -> CalendarCreatedIdsFuture<'_> { Box::pin(async { BTreeSet::new() }) }
     fn list_events<'a>(&'a self, range: &'a CalendarTimeRange) -> CalendarApiFuture<'a, Vec<DesiredEvent>>;
     fn insert_event<'a>(&'a self, event: &'a DesiredEvent) -> CalendarApiFuture<'a, ()>;
     fn patch_event<'a>(&'a self, event: &'a DesiredEvent) -> CalendarApiFuture<'a, ()>;
@@ -80,6 +87,8 @@ pub fn require_live_configuration(state: &crate::state::AppState) -> crate::erro
 pub struct MockCalendarSeed {
     pub events: Vec<DesiredEvent>,
     pub skipped: Vec<String>,
+    /// The entries in Google's own shape that carry UbU's stamp for their own id.
+    pub ubu_created_ids: BTreeSet<String>,
 }
 
 /// Read the mock Calendar fixture named by `UBU_CALENDAR_MOCK_EVENTS`: a JSON
@@ -94,7 +103,9 @@ pub struct MockCalendarSeed {
 /// - an entry in Google's own shape, recognised by its `id` field. It goes
 ///   through the production wire parser. An entry that parser skips, such as an
 ///   all-day event, is not an event the calendar observes: it becomes the same
-///   list diagnostic a live read reports.
+///   list diagnostic a live read reports. Such an entry may carry UbU's stamp,
+///   `extendedProperties.private.ubu_task`, which the production reader reads
+///   (P1B-57).
 pub fn load_mock_events(
     path: Option<&std::path::Path>,
 ) -> Result<Option<MockCalendarSeed>, crate::errors::StartupError> {
@@ -125,6 +136,10 @@ pub fn load_mock_events(
             .filter(|_| entry.get("external_id").is_none())
             .map(str::to_owned);
         let event = if let Some(id) = wire_id {
+            // The stamp is read by the production reader, from the entry as a one-item list.
+            seed.ubu_created_ids.extend(super::calendar_wire::ubu_created_ids(
+                &serde_json::json!({"items": [entry.clone()]}),
+            ));
             match super::calendar_wire::parse_event(&entry) {
                 Ok(event) => event,
                 Err(message) => {
@@ -180,6 +195,11 @@ struct RecordingState {
     calls: Vec<RecordedCalendarCall>,
     fail_ids: BTreeSet<String>,
     wire_messages: Vec<String>,
+    /// The stamp each event carries, by event id: the Task id an insert wrote. It
+    /// stays with the event, as it does on the calendar, until the event is deleted.
+    stamps: BTreeMap<String, String>,
+    /// What the last list found to be UbU-minted, waiting to be drained.
+    ubu_created_ids: BTreeSet<String>,
 }
 
 #[derive(Debug, Default)]
@@ -211,11 +231,24 @@ impl RecordingCalendarApi {
     }
 
     /// Decode a synthetic Google list through the production wire parser, without transport.
+    /// The stamps are read by the production reader, `calendar_wire::ubu_created_ids`.
     pub fn with_wire_events(value: &serde_json::Value) -> Self {
         let (events, messages) = super::calendar_wire::parse_event_list(value);
-        let recorder = Self::with_events(events);
+        let recorder = Self::with_events(events)
+            .with_ubu_created_ids(super::calendar_wire::ubu_created_ids(value));
         recorder.state.lock().unwrap().wire_messages = messages;
         recorder
+    }
+
+    /// Stands in for a stamp without a synthetic list: these events carry the stamp
+    /// UbU writes when it mints them, naming the Task whose handle the id is.
+    pub fn with_ubu_created_ids(self, ids: impl IntoIterator<Item = String>) -> Self {
+        self.state
+            .lock()
+            .unwrap()
+            .stamps
+            .extend(ids.into_iter().map(|id| (id.clone(), format!("task_{id}"))));
+        self
     }
 
     /// Deterministic failure injection. A failed call is recorded but changes no event.
@@ -255,6 +288,9 @@ impl RecordingCalendarApi {
 }
 
 impl CalendarApi for RecordingCalendarApi {
+    fn take_ubu_created_ids(&self) -> CalendarCreatedIdsFuture<'_> {
+        Box::pin(async move { std::mem::take(&mut self.state.lock().unwrap().ubu_created_ids) })
+    }
     fn take_diagnostics(&self) -> CalendarDiagnosticsFuture<'_> {
         Box::pin(async move { self.state.lock().unwrap().wire_messages.iter().cloned().map(super::calendar_wire::list_diagnostic).collect() })
     }
@@ -262,7 +298,16 @@ impl CalendarApi for RecordingCalendarApi {
         Box::pin(async move {
             let mut state = self.state.lock().unwrap();
             state.calls.push(RecordedCalendarCall::ListEvents);
-            Ok(state.events.values().filter(|event| range.overlaps(event)).cloned().collect())
+            let listed: Vec<DesiredEvent> = state.events.values().filter(|event| range.overlaps(event)).cloned().collect();
+            // The reader's predicate, on what this list returned: a stamp that names the
+            // Task whose handle the event id is.
+            let minted: Vec<String> = listed
+                .iter()
+                .filter(|event| state.stamps.get(&event.external_id).is_some_and(|stamp| *stamp == format!("task_{}", event.external_id)))
+                .map(|event| event.external_id.clone())
+                .collect();
+            state.ubu_created_ids.extend(minted);
+            Ok(listed)
         })
     }
     fn insert_event<'a>(&'a self, event: &'a DesiredEvent) -> CalendarApiFuture<'a, ()> {
@@ -278,6 +323,8 @@ impl CalendarApi for RecordingCalendarApi {
             state
                 .events
                 .insert(event.external_id.clone(), event.clone());
+            // An insert stamps the Task it mints the event for, as the wire body does.
+            state.stamps.insert(event.external_id.clone(), event.task_id.clone());
             Ok(())
         })
     }
@@ -307,6 +354,7 @@ impl CalendarApi for RecordingCalendarApi {
                 .events
                 .remove(external_id)
                 .ok_or_else(|| format!("event `{external_id}` does not exist"))?;
+            state.stamps.remove(external_id);
             Ok(())
         })
     }

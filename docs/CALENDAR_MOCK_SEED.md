@@ -73,6 +73,17 @@ what capture does with them can be asserted:
   counts as skipped. An entry the parser accepts is an observed event like any
   other.
 
+**An entry in Google's shape may carry UbU's stamp**, from P1B-57:
+
+```json
+{"id": "018f3c8e9b2a7c4d8f1e2a3b4c5d6e70", "summary": "Synthetic leftover", "start": {"dateTime": "2026-09-25T13:00:00Z"}, "end": {"dateTime": "2026-09-25T13:30:00Z"}, "extendedProperties": {"private": {"ubu_task": "task_018f3c8e9b2a7c4d8f1e2a3b4c5d6e70"}}}
+```
+
+The stamp is read by the production reader, `calendar_wire::ubu_created_ids`,
+and the mock client reports the id as UbU-minted after each list, as the live
+client does. An entry in the plain shape has no place for a stamp and carries
+none.
+
 Startup is refused, naming the path and the entry, when the file cannot be
 read, is not JSON, is not an array, or holds an event that lacks a field,
 ends before it starts, or repeats an `external_id`:

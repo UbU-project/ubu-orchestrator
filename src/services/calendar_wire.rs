@@ -173,6 +173,32 @@ pub fn parse_event_list(value: &Value) -> (Vec<DesiredEvent>, Vec<String>) {
     (events, messages)
 }
 
+/// Ids of listed events UbU minted itself: the stamp is present and names the Task
+/// whose handle the event id is. An event UbU only patched carries no stamp, and a
+/// stamp that does not match the id is not evidence of minting.
+///
+/// Every absence yields fewer ids and never a failure: no `items`, no
+/// `extendedProperties`, a `private` that is not an object, a stamp that is not a
+/// string. `parse_event_list` reads the same JSON for the events themselves; this is
+/// a second pass over it for where they came from.
+pub fn ubu_created_ids(value: &Value) -> BTreeSet<String> {
+    value
+        .get("items")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            let id = item.get("id")?.as_str()?;
+            let stamp = item
+                .get("extendedProperties")?
+                .get("private")?
+                .get(UBU_TASK_PROPERTY)?
+                .as_str()?;
+            (stamp == format!("task_{id}")).then(|| id.to_owned())
+        })
+        .collect()
+}
+
 pub fn list_diagnostic(message: String) -> crate::api::planning::DiagnosticBody {
     crate::api::planning::DiagnosticBody {
         code: if message.ends_with(ALL_DAY_MESSAGE) { "capture_all_day_unsupported" } else { "calendar_event_skipped" }.into(),
