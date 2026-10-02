@@ -2108,6 +2108,60 @@
           }
         }
       }
+    },
+    "/universe-state": {
+      "get": {
+        "tags": [
+          "crate::api::universe_state"
+        ],
+        "operationId": "read",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UniverseStateResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "crate::api::universe_state"
+        ],
+        "operationId": "edit",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UniverseStateEditRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UniverseStateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown schema version, or a mutation was refused; nothing was written"
+          },
+          "409": {
+            "description": "The state changed while this edit was being applied"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -6963,6 +7017,131 @@
           },
           "schema_version": {
             "type": "string"
+          }
+        }
+      },
+      "UniverseMutationBody": {
+        "type": "object",
+        "description": "One `ubu-core` `UniverseMutation`, field for field.",
+        "required": [
+          "operation",
+          "target"
+        ],
+        "properties": {
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "operation": {
+            "type": "string",
+            "description": "`set_fact`, `clear_fact`, `increment_numeric`, `decrement_numeric`,\n`add_membership`, `remove_membership` or `append_event_marker`."
+          },
+          "payload": {},
+          "target": {
+            "type": "string",
+            "description": "`<collection>.<key>`, the spelling a precondition uses."
+          }
+        },
+        "additionalProperties": false
+      },
+      "UniverseStateEditRequest": {
+        "type": "object",
+        "required": [
+          "mutations"
+        ],
+        "properties": {
+          "mutations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UniverseMutationBody"
+            }
+          },
+          "schema_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "UniverseStateResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "id",
+          "captured_at",
+          "facts",
+          "numeric_values",
+          "set_memberships",
+          "event_markers",
+          "source_summary"
+        ],
+        "properties": {
+          "captured_at": {
+            "type": "string"
+          },
+          "confidence_summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "event_markers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {}
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "facts": {
+            "type": "object",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "numeric_values": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number",
+              "format": "double"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "set_memberships": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {}
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "source_summary": {
+            "type": "string"
+          },
+          "version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The stored version, or null when the store holds no `UniverseState` and\nthis is the empty state preconditions are evaluated against."
           }
         }
       },

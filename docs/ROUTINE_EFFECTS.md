@@ -61,6 +61,10 @@ mode-rejected actions do not create a seed. The absent-state diagnostic's sole
 production emitter was removed; an unexpected missing state after admission is
 an internal error, not a successful action with discarded effects.
 
+P1B-58 added a third creation path: the operator's first edit through
+`PATCH /universe-state` seeds an empty state the same way, labelled
+`user-capture`. See `UNIVERSE_STATE.md`.
+
 ## Reactive versus predictive
 
 The ticket's supplied cold-store loop illustrates the intended behavior:

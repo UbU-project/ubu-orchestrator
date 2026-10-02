@@ -2404,12 +2404,16 @@ async fn current_universe_state(pool: &sqlx::SqlitePool) -> Result<UniverseState
     Ok(read_current_universe_state(pool)
         .await?
         .map(|(state, _)| state)
-        .unwrap_or_else(|| {
-            UniverseState::new(
-                UbuTimestamp::now_utc(),
-                "empty UniverseState synthesized by orchestrator",
-            )
-        }))
+        .unwrap_or_else(synthesized_universe_state))
+}
+
+/// The empty state a store with no `UniverseState` is read as. It is never
+/// stored: nothing has been captured, so there is nothing to record.
+pub(crate) fn synthesized_universe_state() -> UniverseState {
+    UniverseState::new(
+        UbuTimestamp::now_utc(),
+        "empty UniverseState synthesized by orchestrator",
+    )
 }
 
 /// Read the current (latest) persisted `UniverseState`, or `None` when none has
