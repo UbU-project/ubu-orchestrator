@@ -138,7 +138,7 @@ async fn defaults_have_default_origin_and_no_settings() {
         ("relationship", "5"),
         ("business", "6"),
         ("committed", "11"),
-        ("location", "8"),
+        ("sleep", "8"),
         ("entertainment", "1"),
         ("grocery", "2"),
         ("commute", "7"),
@@ -413,4 +413,99 @@ async fn inverse_lists_collisions_and_every_unmapped_allowed_colour() {
         &json!({"color_id":"9","categories":[],"status":"unmapped"})
     );
     println!("EVIDENCE[P1B42_test9]={}", body["inverse"]);
+}
+
+// P1B-54 §C: `location` is retired from the default palette and `sleep` takes colour 8.
+#[tokio::test]
+async fn the_default_palette_has_sleep_at_colour_eight_and_no_location() {
+    let s = state().await;
+    let body = list(&s).await;
+    let rows = body["palette"].as_array().unwrap();
+    assert_eq!(rows.len(), 11);
+    assert_eq!(
+        entry(&body, "sleep"),
+        &json!({"category":"sleep","color_id":"8","origin":"default"})
+    );
+    assert!(rows.iter().all(|row| row["category"] != "location"), "{rows:?}");
+    // Graphite is one category, and so is every other colour: the default palette has no collision.
+    let inverse = body["inverse"].as_array().unwrap();
+    let colour = |id: &str| inverse.iter().find(|v| v["color_id"] == id).unwrap().clone();
+    assert_eq!(
+        colour("8"),
+        json!({"color_id":"8","categories":["sleep"],"status":"mapped"})
+    );
+    assert_eq!(
+        colour("2"),
+        json!({"color_id":"2","categories":["grocery"],"status":"mapped"})
+    );
+    assert!(inverse.iter().all(|v| v["status"] == "mapped"), "{inverse:?}");
+    println!("P1B54_C_INVERSE_2={}", colour("2"));
+    println!("P1B54_C_INVERSE_8={}", colour("8"));
+}
+
+#[tokio::test]
+async fn an_operators_own_location_setting_is_still_honoured() {
+    let s = state().await;
+    // Retiring a default does not delete an operator's record. The Setting is admitted as before.
+    let first = put(&s, "location", "8").await;
+    assert_eq!(first["version"], 1);
+    let body = list(&s).await;
+    assert_eq!(body["settings"].as_array().unwrap().len(), 1);
+    assert_eq!(body["settings"][0]["id"], first["setting_id"]);
+    assert_eq!(body["settings"][0]["name"], "calendar.color.location");
+    assert_eq!(
+        entry(&body, "location"),
+        &json!({"category":"location","color_id":"8","origin":"setting"})
+    );
+    assert_eq!(body["palette"].as_array().unwrap().len(), 12);
+    // And it means what it says: colour 8 is now shared, which the inverse table reports.
+    let inverse = body["inverse"].as_array().unwrap();
+    assert_eq!(
+        inverse.iter().find(|v| v["color_id"] == "8").unwrap(),
+        &json!({"color_id":"8","categories":["location","sleep"],"status":"collision"})
+    );
+    // On a colour of its own it maps alone, and a real event of that colour captures as `location`.
+    put(&s, "location", "4").await;
+    put(&s, "undefined", "9").await;
+    put(&s, "work", "2").await;
+    let body = list(&s).await;
+    let inverse = body["inverse"].as_array().unwrap();
+    assert_eq!(
+        inverse.iter().find(|v| v["color_id"] == "4").unwrap(),
+        &json!({"color_id":"4","categories":["location"],"status":"mapped"})
+    );
+    assert_eq!(
+        inverse.iter().find(|v| v["color_id"] == "8").unwrap(),
+        &json!({"color_id":"8","categories":["sleep"],"status":"mapped"})
+    );
+    let palette = CategoryPalette::from_pool(s.inner().store.pool()).await.unwrap();
+    assert_eq!(palette.inverse().get("4"), Some(&Some("location".into())));
+}
+
+#[tokio::test]
+async fn the_tag_prompt_offers_sleep_and_no_longer_offers_location() {
+    let source = include_str!("../src/services/advisory_wire.rs");
+    let line = source
+        .lines()
+        .find(|line| line.contains("Use concise category names such as"))
+        .unwrap();
+    let names = line
+        .split("Use concise category names such as ")
+        .nth(1)
+        .unwrap()
+        .split('.')
+        .next()
+        .unwrap();
+    assert_eq!(
+        names,
+        "personal, relationship, business, committed, sleep, entertainment, grocery, commute, undefined, education_house, work"
+    );
+    // The names it offers are the default palette's, and no others.
+    let s = state().await;
+    let body = list(&s).await;
+    let mut palette: Vec<_> = body["palette"].as_array().unwrap().iter().map(|row| row["category"].as_str().unwrap().to_owned()).collect();
+    let mut offered: Vec<_> = names.split(", ").map(str::to_owned).collect();
+    palette.sort();
+    offered.sort();
+    assert_eq!(offered, palette);
 }

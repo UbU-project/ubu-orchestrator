@@ -19,7 +19,10 @@ impl CategoryPalette {
             ("relationship", "5"),
             ("business", "6"),
             ("committed", "11"),
-            ("location", "8"),
+            // `location` held colour 8 until P1B-54. It is retired: geographic state belongs in
+            // UniverseState, not in a category. An operator's own `calendar.color.location`
+            // Setting is still honoured, because a Setting is the operator's record.
+            ("sleep", "8"),
             ("entertainment", "1"),
             ("grocery", "2"),
             ("commute", "7"),

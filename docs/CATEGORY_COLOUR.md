@@ -9,8 +9,35 @@ only `category_tag`. An absent or unmapped category has no colour field; an
 unmapped category is still included. There is no fallback to another tag.
 Thus a Task tagged `commute` and `work`, categorized `commute`, has colour `7`.
 
-Defaults: personal 3, relationship 5, business 6, committed 11, location 8,
+Defaults: personal 3, relationship 5, business 6, committed 11, sleep 8,
 entertainment 1, grocery 2, commute 7, undefined 4, education_house 10, work 9.
+
+**`location` is retired** from P1B-54. Until then it was the default for
+colour 8. The operator's own words: *"the `location` category is depreciated
+as that is a Google Calendar Event that represents a `UniverseState` value of
+geographic location, and was only a rubric for manual estimation of travel."*
+Where the operator is belongs in `UniverseState`, as a fact a precondition can
+read. It does not belong in a category, which says what kind of time a Task
+is.
+
+`sleep` takes colour 8, Graphite. Three things follow:
+
+- Graphite is one category, so a real event coloured Graphite is captured as
+  `sleep`, and the Settings inverse table reports colour 8 as `mapped`;
+- a routine in the `sleep` category exports its events in Graphite with no
+  Setting. `calendar.color.sleep` is needed only to choose another colour;
+- `sleep` is in the palette, so the app's Colours card and its Routines
+  Category select both offer it.
+
+An operator who had set `calendar.color.location` keeps it. Settings override
+defaults, and retiring a default does not delete an operator's record: the
+category `location` stays in that store's palette with origin `setting`, at
+the colour the operator gave it. If that colour is 8, it now shares Graphite
+with `sleep`, and the inverse table reports the collision. Reverting the
+Setting removes `location` from that palette.
+
+The `suggest_tags` prompt lists the default category names. It no longer
+offers `location` and now offers `sleep`.
 
 Set `UBU_CATEGORY_PALETTE_PATH` to an operator-owned JSON object such as
 `{"commute":"6","study":"10"}` to merge overrides over these defaults at startup.
