@@ -427,6 +427,7 @@ fn skeleton_subject(message: &str) -> Option<String> {
     (!subject.is_empty()).then(|| subject.to_owned())
 }
 
+/// Planning seconds from the Plan's start to the end of its first checkpoint, or of its last step when it has none.
 fn feedback_latency(steps: &[ScheduledTaskBody], tasks: &HashMap<String, Value>) -> u64 {
     let Some(plan_start) = steps.iter().map(|step| step.start).min() else {
         return 0;
