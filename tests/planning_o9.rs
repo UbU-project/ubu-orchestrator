@@ -1091,3 +1091,93 @@ async fn json_body(response: axum::response::Response) -> Value {
         .to_bytes();
     serde_json::from_slice(&bytes).expect("json")
 }
+
+// ---- P1B-56 §C: an affect state that was never recorded is not a measurement.
+
+async fn generate_report(state: &AppState) -> Value {
+    let response = ubu_orchestrator::build_router(state.clone())
+        .oneshot(json_request("/planning/generate", json!({})))
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    json_body(response).await
+}
+fn finding_categories(response: &Value) -> Vec<String> {
+    response["risk_report"]["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .map(|finding| finding["category"].as_str().expect("category").to_owned())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_plan_with_no_snapshot_reports_no_affect_finding_and_is_not_high() {
+    let state = test_state().await;
+    admit_task(&state, "Synthetic first", json!({"duration_minutes": 15})).await;
+    admit_task(&state, "Synthetic second", json!({"duration_minutes": 20})).await;
+    store_calendar_window(&state, "2026-06-10T15:00:00Z", "2026-06-10T17:00:00Z").await;
+
+    let response = generate_report(&state).await;
+    assert!(response["plan"].is_object(), "{response}");
+    // The request really carried the stand-in, and the kernel really scored it at zero.
+    assert!(response["legitimization"]["stale_affect_warning"]
+        .as_str()
+        .expect("warning")
+        .contains("missing affect observation; using bootstrap default profile observation"));
+    assert_eq!(response["legitimization"]["affect_margin"], 0.0);
+
+    let categories = finding_categories(&response);
+    assert_ne!(response["risk_report"]["level"], "high", "{response}");
+    for absent in ["affect_margin", "post_plan_depletion", "destructive_pressure"] {
+        assert!(!categories.iter().any(|category| category == absent), "{absent}: {categories:?}");
+    }
+    // A missing observation is not a stale one.
+    assert!(!categories.iter().any(|category| category == "stale_affect"), "{categories:?}");
+
+    let quality = &response["human_complete_plan_quality"];
+    assert_eq!(quality["affect_margin"], 0.0);
+    assert_eq!(quality["post_plan_state_delta"], "neutral");
+    assert_eq!(quality["stretch_pressure"], "sustainable_stretch");
+    let suggestions = quality["revision_suggestions"].as_array().expect("suggestions");
+    assert!(suggestions[0].as_str().unwrap().starts_with("Record how you are feeling:"), "{suggestions:?}");
+    assert!(!suggestions.iter().any(|s| s.as_str().unwrap().contains("recovery time")), "{suggestions:?}");
+    println!(
+        "P1B56_C_HTTP={}",
+        json!({
+            "affect_margin": quality["affect_margin"], "post_plan_state_delta": quality["post_plan_state_delta"],
+            "stretch_pressure": quality["stretch_pressure"], "revision_suggestions": suggestions,
+            "level": response["risk_report"]["level"], "findings": categories
+        })
+    );
+}
+
+#[tokio::test]
+async fn the_same_zero_margin_from_a_real_snapshot_is_still_reported() {
+    // The mirror, over HTTP. A Snapshot taken exactly at the default tolerances' locations
+    // gives the same margin of zero. It was measured, so every affect reading is live.
+    let state = test_state().await;
+    admit_task(&state, "Synthetic first", json!({"duration_minutes": 15})).await;
+    store_calendar_window(&state, "2026-06-10T15:00:00Z", "2026-06-10T17:00:00Z").await;
+    admit_snapshot(
+        &state,
+        "2026-06-10T15:00:00Z",
+        json!({"energy": 4.0, "stress": 7.0, "mood_intensity": 8.0}),
+    )
+    .await;
+
+    let response = generate_report(&state).await;
+    assert!(response["plan"].is_object(), "{response}");
+    assert_eq!(response["legitimization"]["affect_margin"], 0.0);
+    let categories = finding_categories(&response);
+    for present in ["affect_margin", "post_plan_depletion"] {
+        assert!(categories.iter().any(|category| category == present), "{present}: {categories:?}");
+    }
+    let quality = &response["human_complete_plan_quality"];
+    assert_eq!(quality["post_plan_state_delta"], "depleted");
+    assert!(!quality["revision_suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|s| s.as_str().unwrap().starts_with("Record how you are feeling:")));
+}

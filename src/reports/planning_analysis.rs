@@ -19,6 +19,29 @@ const LITTLE_SLACK_SECONDS: u64 = 300;
 const NEAR_AFFECT_MARGIN: f64 = 0.10;
 const RECENT_LOG_LIMIT: i64 = 50;
 
+/// The orchestrator manufactures a stand-in observation when no Snapshot covers
+/// the profile's dimensions; `bootstrap_affect_observation` stamps each value
+/// with this source kind.
+const BOOTSTRAP_OBSERVATION_SOURCE: &str = "bootstrap_default_profile";
+
+/// What the report says, first, when the affect figures are a stand-in.
+const RECORD_AFFECT_SUGGESTION: &str = concat!(
+    "Record how you are feeling: no affect Snapshot covers this Plan, so its affect margin, ",
+    "stretch pressure and post-plan state are a stand-in and not a measurement."
+);
+
+/// Whether every dimension of the request's observation is the stand-in. One
+/// recorded dimension is a measurement, and keeps the affect findings live.
+fn uses_bootstrap_observation(request: &PlanningRequestBody) -> bool {
+    request.affect_observation.as_ref().is_some_and(|observation| {
+        !observation.dimensions.is_empty()
+            && observation
+                .dimensions
+                .values()
+                .all(|value| value.source_kind == BOOTSTRAP_OBSERVATION_SOURCE)
+    })
+}
+
 pub struct PlanningAnalysisInput<'a> {
     pub plan_ref: &'a str,
     pub selected_candidate: Option<&'a PlanCandidateBody>,
@@ -74,6 +97,11 @@ fn derive_reports(
                 .map(|score| score - minimum_affect_threshold(input.request))
         });
     let margin = margin_signal.unwrap_or(0.0);
+    // The stand-in observation is placed on each tolerance's own location, so its
+    // satisfaction is sigmoid(0) = 0.5 against a 0.5 threshold: a margin of exactly
+    // 0.000, every run, which read as "at the limit" rather than "not recorded".
+    // Nothing was measured, so nothing is projected.
+    let affect_recorded = !uses_bootstrap_observation(input.request);
     let violated_dimensions = input
         .legitimization
         .map(|report| report.violated_dimensions.clone())
@@ -86,7 +114,16 @@ fn derive_reports(
             })
         })
         .unwrap_or_default();
-    let projection = post_plan_affect_projection(margin, recovery_present);
+    let projection = if affect_recorded {
+        post_plan_affect_projection(margin, recovery_present)
+    } else {
+        // `sustainable_stretch` is what the Plan is, read off its placements; the
+        // enum has no "unknown". `neutral` is the truthful state: none was projected.
+        AffectProjection {
+            stretch_pressure: StretchPressure::SustainableStretch,
+            post_plan_state_delta: PostPlanStateDelta::Neutral,
+        }
+    };
     let checkpoint_coverage = checkpoint_coverage(steps, &context.tasks);
     let failure_pattern = failure_pattern(&context.recent_logs);
 
@@ -105,6 +142,7 @@ fn derive_reports(
             failure_pattern,
             projection,
             context.active_worker_count,
+            affect_recorded,
         ),
     };
 
@@ -156,7 +194,9 @@ fn derive_reports(
             subject_ref: None,
         });
     }
-    if let Some(margin) = margin_signal {
+    // `affect_margin`, `destructive_pressure` and `post_plan_depletion` all read the
+    // same number. When it was manufactured, none of them has anything to say.
+    if let Some(margin) = margin_signal.filter(|_| affect_recorded) {
         if margin <= NEAR_AFFECT_MARGIN {
             findings.push(RiskFinding {
                 category: RiskCategory::AffectMargin,
@@ -489,6 +529,7 @@ fn revision_suggestions(
     failure_pattern: FailurePattern,
     projection: AffectProjection,
     active_worker_count: usize,
+    affect_recorded: bool,
 ) -> Vec<String> {
     let mut suggestions = Vec::new();
     if checkpoint_coverage != CheckpointCoverage::Adequate {
@@ -514,7 +555,8 @@ fn revision_suggestions(
         }
         FailurePattern::None => {}
     }
-    if projection.stretch_pressure != StretchPressure::Comfort {
+    // A repair for a load nobody measured is not advice.
+    if affect_recorded && projection.stretch_pressure != StretchPressure::Comfort {
         suggestions.push("Add recovery time or reduce the plan's stretch load.".to_owned());
     }
     if active_worker_count > 1 {
@@ -522,6 +564,10 @@ fn revision_suggestions(
     }
     suggestions.sort();
     suggestions.dedup();
+    if !affect_recorded {
+        // First, whatever else there is to say: it qualifies every affect figure.
+        suggestions.insert(0, RECORD_AFFECT_SUGGESTION.to_owned());
+    }
     suggestions
 }
 
@@ -665,6 +711,126 @@ mod tests {
             "tasks": []
         }))
         .expect("request")
+    }
+
+    /// A request whose affect observation has these source kinds, one per dimension.
+    fn request_observed(sources: &[(&str, &str)]) -> PlanningRequestBody {
+        let dimensions: serde_json::Map<String, Value> = sources
+            .iter()
+            .map(|(dimension, source)| {
+                (
+                    (*dimension).to_owned(),
+                    serde_json::json!({"value": 4.0, "observed_at": 0, "source_kind": source}),
+                )
+            })
+            .collect();
+        serde_json::from_value(serde_json::json!({
+            "request_id": "request",
+            "tasks": [],
+            "affect_observation": {"dimensions": dimensions}
+        }))
+        .expect("request")
+    }
+
+    /// The reports for a candidate whose margin is exactly zero: what the stand-in yields.
+    fn reports_at_zero_margin(
+        request: &PlanningRequestBody,
+    ) -> (RiskReportResponse, HumanCompletePlanQualityResponse) {
+        let candidate = candidate(Vec::new(), 0.0);
+        let context = StoreContext {
+            tasks: HashMap::new(),
+            recent_logs: Vec::new(),
+            active_worker_count: 0,
+        };
+        derive_reports(
+            PlanningAnalysisInput {
+                unplaced_tasks: &[],
+                plan_ref: "plan",
+                selected_candidate: Some(&candidate),
+                legitimization: None,
+                diagnostics: &[],
+                request,
+            },
+            &context,
+        )
+    }
+
+    const AFFECT_CATEGORIES: [RiskCategory; 3] = [
+        RiskCategory::AffectMargin,
+        RiskCategory::PostPlanDepletion,
+        RiskCategory::DestructivePressure,
+    ];
+
+    #[test]
+    fn a_stand_in_observation_is_not_reported_as_a_measurement() {
+        let request = request_observed(&[
+            ("energy", BOOTSTRAP_OBSERVATION_SOURCE),
+            ("stress", BOOTSTRAP_OBSERVATION_SOURCE),
+            ("mood_intensity", BOOTSTRAP_OBSERVATION_SOURCE),
+        ]);
+        assert!(uses_bootstrap_observation(&request));
+        let (risk, quality) = reports_at_zero_margin(&request);
+        // None of the three findings that read the manufactured margin.
+        assert!(
+            !risk
+                .findings
+                .iter()
+                .any(|finding| AFFECT_CATEGORIES.contains(&finding.category)),
+            "{:?}",
+            risk.findings
+        );
+        assert_eq!(risk.level, RiskLevel::Low);
+        // Nothing was measured, so nothing is projected.
+        assert_eq!(quality.post_plan_state_delta, PostPlanStateDelta::Neutral);
+        assert_eq!(quality.stretch_pressure, StretchPressure::SustainableStretch);
+        // The schema requires the number. It is still the stand-in's zero.
+        assert_eq!(quality.affect_margin, 0.0);
+        // The first suggestion says so, and no repair is advised for a load nobody measured.
+        assert_eq!(quality.revision_suggestions[0], RECORD_AFFECT_SUGGESTION);
+        assert!(RECORD_AFFECT_SUGGESTION.contains("stand-in"));
+        assert!(!RECORD_AFFECT_SUGGESTION.contains("  "), "one sentence, no run of spaces");
+        assert!(!quality
+            .revision_suggestions
+            .iter()
+            .any(|suggestion| suggestion.contains("recovery time")));
+        println!("P1B56_C_SUGGESTIONS={:?}", quality.revision_suggestions);
+    }
+
+    #[test]
+    fn one_recorded_dimension_keeps_every_affect_reading_live() {
+        // The mirror: the same zero margin, with one dimension that was really observed.
+        let request = request_observed(&[
+            ("energy", "snapshot"),
+            ("stress", BOOTSTRAP_OBSERVATION_SOURCE),
+            ("mood_intensity", BOOTSTRAP_OBSERVATION_SOURCE),
+        ]);
+        assert!(!uses_bootstrap_observation(&request));
+        let (risk, quality) = reports_at_zero_margin(&request);
+        let categories: Vec<_> = risk.findings.iter().map(|finding| finding.category).collect();
+        assert!(categories.contains(&RiskCategory::AffectMargin), "{categories:?}");
+        assert!(categories.contains(&RiskCategory::PostPlanDepletion), "{categories:?}");
+        assert_eq!(risk.level, RiskLevel::Medium);
+        assert_eq!(quality.post_plan_state_delta, PostPlanStateDelta::Depleted);
+        assert!(!quality
+            .revision_suggestions
+            .iter()
+            .any(|suggestion| suggestion == RECORD_AFFECT_SUGGESTION));
+        assert!(quality
+            .revision_suggestions
+            .iter()
+            .any(|suggestion| suggestion.contains("recovery time")));
+        // No observation at all, and an observation with no dimensions, are not the stand-in either:
+        // a request supplied in full by its caller is judged on the margin it carries.
+        assert!(!uses_bootstrap_observation(&super::tests::request()));
+        assert!(!uses_bootstrap_observation(&request_observed(&[])));
+        // And a negative margin that was really observed still blocks.
+        let candidate = candidate(Vec::new(), -0.2);
+        let context = StoreContext { tasks: HashMap::new(), recent_logs: Vec::new(), active_worker_count: 0 };
+        let (risk, _) = derive_reports(
+            PlanningAnalysisInput { unplaced_tasks: &[], plan_ref: "plan", selected_candidate: Some(&candidate), legitimization: None, diagnostics: &[], request: &request },
+            &context,
+        );
+        assert!(risk.findings.iter().any(|finding| finding.category == RiskCategory::DestructivePressure && finding.blocking));
     }
 
     #[test]

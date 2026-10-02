@@ -2494,6 +2494,57 @@ pub fn repair_kernel_request(request: &PlanningRequestBody) -> RepairRequest {
 }
 
 #[cfg(test)]
+mod bootstrap_affect_tests {
+    use super::*;
+    use ubu_planning_core::legitimization::satisfaction;
+    use ubu_planning_core::{AffectDirection, AffectTolerance};
+
+    /// The sentence the whole of P1B-56 §C rests on. The stand-in observation is
+    /// placed on each tolerance's own location. The satisfaction of a value at the
+    /// location is sigmoid(0), one half, and every tolerance this service builds
+    /// has a threshold of one half. So the stand-in's margin is exactly zero, in
+    /// every dimension, on every run: not a measurement that landed on the edge.
+    #[test]
+    fn the_stand_in_observation_sits_exactly_on_every_threshold() {
+        let profile = AffectProfileBody {
+            mode: AffectLegitimizationModeBody::Enforce,
+            dimensions: [
+                ("energy", AffectDirectionBody::HigherIsBetter, 4.0),
+                ("stress", AffectDirectionBody::LowerIsBetter, 7.0),
+                ("mood_intensity", AffectDirectionBody::LowerIsBetter, 8.0),
+                ("synthetic", AffectDirectionBody::HigherIsBetter, -2.5),
+            ]
+            .into_iter()
+            .map(|(dimension, direction, location)| {
+                (dimension.to_owned(), affect_tolerance(direction, location, None))
+            })
+            .collect(),
+        };
+        let observation = bootstrap_affect_observation(&profile, 0);
+        assert_eq!(observation.dimensions.len(), 4);
+        for (dimension, tolerance) in &profile.dimensions {
+            let observed = &observation.dimensions[dimension];
+            assert_eq!(observed.source_kind, "bootstrap_default_profile");
+            assert_eq!(observed.value, tolerance.location);
+            let kernel = AffectTolerance {
+                direction: match tolerance.direction {
+                    AffectDirectionBody::HigherIsBetter => AffectDirection::HigherIsBetter,
+                    AffectDirectionBody::LowerIsBetter => AffectDirection::LowerIsBetter,
+                },
+                location: tolerance.location,
+                scale: tolerance.scale,
+                threshold: tolerance.threshold,
+                freshness_seconds: tolerance.freshness_seconds,
+            };
+            let satisfied = satisfaction(&kernel, observed.value).unwrap();
+            assert_eq!(satisfied, tolerance.threshold, "{dimension}");
+            assert_eq!(satisfied - tolerance.threshold, 0.0, "{dimension}");
+        }
+        assert_eq!(DEFAULT_AFFECT_THRESHOLD, 0.5);
+    }
+}
+
+#[cfg(test)]
 mod precondition_mode_tests {
     use super::*;
     use ubu_store::UbuStore;
