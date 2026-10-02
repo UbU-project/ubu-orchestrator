@@ -265,3 +265,45 @@ async fn a_malformed_or_unreadable_seed_refuses_startup_naming_the_path() {
         assert!(error.contains("entry `<file>`"), "{error}");
     }
 }
+
+// P1B-55: the seed can hold the two things a real calendar holds that capture does not take.
+#[tokio::test]
+async fn a_seed_can_hold_an_event_of_no_length_and_an_all_day_entry_for_capture_to_refuse() {
+    let todo = json!({"external_id":"aaaaa","summary":"Synthetic: descale the kettle","start_at":"2026-09-25T13:00:00Z","end_at":"2026-09-25T13:30:00Z","color_id":null,"transparent":false,"reminders_minutes":[]});
+    let instant = json!({"external_id":"bbbbb","summary":"Synthetic instant","start_at":"2026-09-25T14:00:00Z","end_at":"2026-09-25T14:00:00Z","color_id":null,"transparent":false,"reminders_minutes":[]});
+    // Google's own shape, recognised by `id`: it goes through the production wire parser.
+    let all_day = json!({"id":"ccccc","summary":"Synthetic all day","start":{"date":"2026-09-25"},"end":{"date":"2026-09-26"}});
+    let timed = json!({"id":"ddddd","summary":"Synthetic dentist","start":{"dateTime":"2026-09-25T15:00:00Z"},"end":{"dateTime":"2026-09-25T15:30:00Z"},"colorId":"3","reminders":{"useDefault":true}});
+    let seed = Fixture::events("p1b55", &json!([todo, instant, all_day, timed]));
+    let state = empty(Some(&seed)).await;
+    // The all-day entry is not an event the calendar observes. The other three are.
+    assert_eq!(
+        state.inner().calendar_mock_events.as_ref().unwrap().iter().map(|e| e.external_id.as_str()).collect::<Vec<_>>(),
+        ["aaaaa", "bbbbb", "ddddd"]
+    );
+    assert_eq!(
+        state.inner().calendar_mock_skipped,
+        ["list event `ccccc` entry 2: all-day event has no dateTime; it carries no duration, so it cannot be scheduled and is skipped"]
+    );
+    let captured = capture(&state).await;
+    assert_eq!(
+        captured,
+        json!({"schema_version":"ubu.orchestrator.calendar_capture.v1","captured":2,"updated":0,"moved":0,"resized":0,"unchanged":0,"skipped":2,"diagnostics":[
+            {"code":"capture_all_day_unsupported","message":"list event `ccccc` entry 2: all-day event has no dateTime; it carries no duration, so it cannot be scheduled and is skipped"},
+            {"code":"capture_colour_absent","message":"Calendar event `aaaaa` has no colour, so it is taken as work for UbU to schedule: a Dynamic Task of the event's length, at no fixed time"},
+            {"code":"capture_event_invalid","message":"Calendar event has an unusable title or concrete time span; skipped"}
+        ]})
+    );
+    assert_eq!(count(&state, "objects").await, 2);
+    // The same skip is reported by every read of the calendar, as a live read would.
+    assert_eq!(reconcile(&state).await["diagnostics"][0]["code"], "capture_all_day_unsupported");
+
+    // A window that runs backwards is still a mistake in the fixture, in either shape of entry
+    // the loader checks itself, and an instant that is not a timestamp is refused too.
+    let mut unreadable = instant.clone();
+    unreadable["start_at"] = json!("synthetic");
+    unreadable["end_at"] = json!("synthetic");
+    let seed = Fixture::events("p1b55-unreadable", &json!([unreadable]));
+    let error = AppState::in_memory(config(Some(&seed))).await.err().unwrap().to_string();
+    assert!(error.contains("entry `0`: invalid range start"), "{error}");
+}

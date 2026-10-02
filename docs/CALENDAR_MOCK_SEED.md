@@ -54,9 +54,28 @@ is what the wire parser gives an observed event. Capture and reconcile
 restore the real Task id of an event UbU owns from the applied record, as
 they do for a live observation.
 
+**Two things a real calendar holds can also be seeded**, from P1B-55, so that
+what capture does with them can be asserted:
+
+- **An event of no length.** `start_at` equal to `end_at` is passed through,
+  and capture refuses it with `capture_event_invalid`. It used to refuse
+  startup.
+- **An entry in Google's own shape**, recognised by an `id` field in place of
+  `external_id`. It goes through the production wire parser:
+
+  ```json
+  {"id": "0inv3nt3da11day", "summary": "Synthetic all day", "start": {"date": "2026-09-25"}, "end": {"date": "2026-09-26"}}
+  ```
+
+  An entry that parser skips, such as this all-day event, is not an event the
+  calendar observes. It becomes the same list diagnostic a live read reports,
+  here `capture_all_day_unsupported`, on every capture and reconcile, and it
+  counts as skipped. An entry the parser accepts is an observed event like any
+  other.
+
 Startup is refused, naming the path and the entry, when the file cannot be
 read, is not JSON, is not an array, or holds an event that lacks a field,
-does not end after it starts, or repeats an `external_id`:
+ends before it starts, or repeats an `external_id`:
 
 ```text
 startup error: invalid mock Calendar events `<path>` (UBU_CALENDAR_MOCK_EVENTS), entry `1`: range start must precede end

@@ -31,6 +31,8 @@ pub struct OrchestratorState {
     pub planner_strategy: PlannerStrategyChoice,
     /// Loaded once at startup from `UBU_CALENDAR_MOCK_EVENTS`; `None` when unset.
     pub calendar_mock_events: Option<Vec<crate::services::calendar_projection::DesiredEvent>>,
+    /// The fixture's entries the wire parser skips, as a live read reports them.
+    pub calendar_mock_skipped: Vec<String>,
     pub store: UbuStore,
     pub device_registration: DeviceRegistration,
     pub causality_issuer: LocalIssuer,
@@ -85,7 +87,7 @@ impl AppState {
         store: UbuStore,
         registration: DeviceRegistration,
         category_palette: CategoryPalette,
-        calendar_mock_events: Option<Vec<crate::services::calendar_projection::DesiredEvent>>,
+        calendar_mock_seed: Option<crate::services::calendar_client::MockCalendarSeed>,
         planning_horizon_seconds: u64,
         planner_strategy: PlannerStrategyChoice,
     ) -> Result<Self, StartupError> {
@@ -103,7 +105,8 @@ impl AppState {
                 config,
                 planning_horizon_seconds,
                 planner_strategy,
-                calendar_mock_events,
+                calendar_mock_skipped: calendar_mock_seed.as_ref().map(|seed| seed.skipped.clone()).unwrap_or_default(),
+                calendar_mock_events: calendar_mock_seed.map(|seed| seed.events),
                 store,
                 device_registration: registration,
                 causality_issuer,
@@ -158,7 +161,7 @@ impl AppState {
         use crate::services::calendar_client::RecordingCalendarApi;
         self.calendar_api().unwrap_or_else(|| {
             let observed = self.inner.calendar_mock_events.as_deref().unwrap_or(applied);
-            Arc::new(RecordingCalendarApi::with_events(observed.iter().cloned()))
+            Arc::new(RecordingCalendarApi::with_events(observed.iter().cloned()).with_skipped(self.inner.calendar_mock_skipped.clone()))
         })
     }
 

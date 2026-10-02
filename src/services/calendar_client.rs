@@ -74,13 +74,30 @@ pub fn require_live_configuration(state: &crate::state::AppState) -> crate::erro
     })
 }
 
+/// What the mock Calendar fixture holds: the events it observes, and the
+/// entries the wire parser would skip, as the messages a live read reports.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MockCalendarSeed {
+    pub events: Vec<DesiredEvent>,
+    pub skipped: Vec<String>,
+}
+
 /// Read the mock Calendar fixture named by `UBU_CALENDAR_MOCK_EVENTS`: a JSON
 /// array of events in the shape `list_events` returns. `task_id` may be omitted
 /// and is then `task_<external_id>`, as the wire parser gives an observed event.
 /// Anything unreadable or malformed refuses startup, as a malformed palette does.
+///
+/// Two things a real calendar holds can also be seeded, so that what capture
+/// does with them can be asserted (P1B-55):
+/// - an event of no length, `start_at` equal to `end_at`. It is passed through
+///   for capture to refuse. A window that runs backwards still refuses startup.
+/// - an entry in Google's own shape, recognised by its `id` field. It goes
+///   through the production wire parser. An entry that parser skips, such as an
+///   all-day event, is not an event the calendar observes: it becomes the same
+///   list diagnostic a live read reports.
 pub fn load_mock_events(
     path: Option<&std::path::Path>,
-) -> Result<Option<Vec<DesiredEvent>>, crate::errors::StartupError> {
+) -> Result<Option<MockCalendarSeed>, crate::errors::StartupError> {
     let Some(path) = path else {
         return Ok(None);
     };
@@ -97,32 +114,55 @@ pub fn load_mock_events(
     let entries = value
         .as_array()
         .ok_or_else(|| error("<JSON>", "expected an array of events".into()))?;
-    let mut events = Vec::with_capacity(entries.len());
+    let mut seed = MockCalendarSeed::default();
     let mut seen = BTreeSet::new();
     for (index, entry) in entries.iter().enumerate() {
         let name = index.to_string();
         let mut entry = entry.clone();
-        if let Some(object) = entry.as_object_mut() {
-            if !object.contains_key("task_id") {
-                if let Some(id) = object.get("external_id").and_then(|id| id.as_str()) {
-                    let task_id = format!("task_{id}");
-                    object.insert("task_id".into(), task_id.into());
+        let wire_id = entry
+            .get("id")
+            .and_then(|id| id.as_str())
+            .filter(|_| entry.get("external_id").is_none())
+            .map(str::to_owned);
+        let event = if let Some(id) = wire_id {
+            match super::calendar_wire::parse_event(&entry) {
+                Ok(event) => event,
+                Err(message) => {
+                    seed.skipped.push(format!("list event `{id}` entry {index}: {message}"));
+                    continue;
                 }
             }
-        }
-        let event: DesiredEvent =
-            serde_json::from_value(entry).map_err(|e| error(&name, e.to_string()))?;
+        } else {
+            if let Some(object) = entry.as_object_mut() {
+                if !object.contains_key("task_id") {
+                    if let Some(id) = object.get("external_id").and_then(|id| id.as_str()) {
+                        let task_id = format!("task_{id}");
+                        object.insert("task_id".into(), task_id.into());
+                    }
+                }
+            }
+            let event: DesiredEvent =
+                serde_json::from_value(entry).map_err(|e| error(&name, e.to_string()))?;
+            // No length is something a calendar can hold, and capture refuses it.
+            // Backwards is a mistake in the fixture.
+            if event.start_at != event.end_at {
+                CalendarTimeRange::parse(&event.start_at, &event.end_at)
+                    .map_err(|e| error(&name, e.to_string()))?;
+            } else {
+                ubu_core::UbuTimestamp::parse(&event.start_at)
+                    .map_err(|_| error(&name, "invalid range start".into()))?;
+            }
+            event
+        };
         if event.external_id.trim().is_empty() {
             return Err(error(&name, "external_id is empty".into()));
         }
-        CalendarTimeRange::parse(&event.start_at, &event.end_at)
-            .map_err(|e| error(&name, e.to_string()))?;
         if !seen.insert(event.external_id.clone()) {
             return Err(error(&name, format!("duplicate external_id `{}`", event.external_id)));
         }
-        events.push(event);
+        seed.events.push(event);
     }
-    Ok(Some(events))
+    Ok(Some(seed))
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -162,6 +202,12 @@ impl RecordingCalendarApi {
                 ..RecordingState::default()
             }),
         }
+    }
+
+    /// The entries a list read skipped, reported as its diagnostics.
+    pub fn with_skipped(self, messages: Vec<String>) -> Self {
+        self.state.lock().unwrap().wire_messages = messages;
+        self
     }
 
     /// Decode a synthetic Google list through the production wire parser, without transport.
