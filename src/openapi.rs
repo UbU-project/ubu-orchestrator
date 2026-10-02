@@ -78,6 +78,8 @@ use utoipa::OpenApi;
         crate::api::setting::InversePaletteEntry,
         crate::api::setting::SettingsResponse,
         crate::api::setting::AdvisorySettingEntry,
+        crate::api::universe_state::ProvenanceKindBody,
+        crate::api::universe_state::FactProvenanceBody,
         crate::api::universe_state::UniverseMutationBody,
         crate::api::universe_state::UniverseStateEditRequest,
         crate::api::universe_state::UniverseStateResponse,

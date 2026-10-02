@@ -174,7 +174,7 @@ async fn a_read_on_an_empty_store_is_the_synthesized_empty_state_and_stores_noth
 }
 
 #[tokio::test]
-async fn each_of_the_seven_operations_round_trips() {
+async fn each_of_the_nine_operations_round_trips() {
     let state = state().await;
     let cases = [
         (
@@ -185,6 +185,16 @@ async fn each_of_the_seven_operations_round_trips() {
         (
             json!({"operation":"clear_fact","target":"facts.kettle.descaled"}),
             "facts",
+            json!({}),
+        ),
+        (
+            json!({"operation":"set_numeric","target":"numeric_values.shelf.lids","payload":0.7}),
+            "numeric_values",
+            json!({"shelf.lids": 0.7}),
+        ),
+        (
+            json!({"operation":"clear_numeric","target":"numeric_values.shelf.lids"}),
+            "numeric_values",
             json!({}),
         ),
         (
@@ -219,10 +229,10 @@ async fn each_of_the_seven_operations_round_trips() {
         // What a later read returns is what the write returned.
         assert_eq!(read(&state).await, written, "{mutation}");
     }
-    // One row, eight versions: the seed and one per edit.
+    // One row, ten versions: the seed and one per edit.
     let rows = rows(&state).await;
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].1, 8);
+    assert_eq!(rows[0].1, 10);
 }
 
 #[tokio::test]
@@ -280,6 +290,12 @@ async fn a_refused_edit_writes_nothing_and_applies_no_part_of_itself() {
         (json!({"operation":"increment_numeric","target":"numeric_values.shelf.jars","payload":"three"}), "payload must be a JSON number"),
         (json!({"operation":"add_membership","target":"set_memberships.toolbox","payload":["spanner"]}), "payload must be a JSON scalar"),
         (json!({"operation":"append_event_marker","target":"event_markers.kettle.boiled","payload":2}), "append_event_marker payload must be a JSON object"),
+        (json!({"operation":"set_numeric","target":"numeric_values.shelf.jars","payload":"three"}), "payload must be a JSON number"),
+        (json!({"operation":"set_numeric","target":"numeric_values.shelf.jars"}), "operation requires a payload"),
+        (json!({"operation":"set_numeric","target":"facts.shelf.jars","payload":3}), "operation target must be in the numeric_values collection"),
+        (json!({"operation":"clear_numeric","target":"numeric_values.shelf.jars","payload":0}), "clear_numeric does not accept a payload"),
+        (json!({"operation":"clear_numeric","target":"numeric_values.shelf.jars","provenance_kind":"measured"}), "clear_numeric does not accept a provenance kind"),
+        (json!({"operation":"clear_fact","target":"facts.kettle.descaled","provenance_kind":"asserted"}), "clear_fact does not accept a provenance kind"),
     ];
 
     // On an empty store a refusal leaves it empty: no seed is written first.
@@ -322,6 +338,10 @@ async fn a_malformed_request_is_refused_before_any_mutation_is_read() {
     for body in [
         json!({"schema_version": SCHEMA, "mutations": [{"operation":"set_fact","target":"facts.kettle.descaled","payload":true,"provenance":"measured"}]}),
         json!({"schema_version": SCHEMA, "mutations": [good], "compartment_label": "bootstrap"}),
+        // `note` was accepted and stored nowhere until P1B-59. It is refused now, not dropped.
+        json!({"schema_version": SCHEMA, "mutations": [{"operation":"set_fact","target":"facts.kettle.descaled","payload":true,"note":"read off the invented dial"}]}),
+        json!({"schema_version": SCHEMA, "mutations": [{"operation":"set_fact","target":"facts.kettle.descaled","payload":true,"provenance_kind":"guessed"}]}),
+        json!({"schema_version": SCHEMA, "mutations": [{"operation":"set_fact","target":"facts.kettle.descaled","payload":true,"provenance_kind":{"kind":"measured","confidence":0.9}}]}),
         json!({"schema_version": SCHEMA, "mutations": [{"operation":"set_fact"}]}),
         json!({"schema_version": SCHEMA}),
     ] {
@@ -372,15 +392,228 @@ async fn a_task_blocked_by_a_precondition_is_planned_once_the_route_records_the_
 }
 
 #[tokio::test]
-async fn the_document_names_the_route_and_its_three_schemas() {
+async fn the_document_names_the_route_and_its_five_schemas() {
     let state = state().await;
     let (status, document) = request(&state, "GET", "/openapi.json", Value::Null).await;
     assert_eq!(status, StatusCode::OK);
     let path = &document["paths"]["/universe-state"];
     assert!(path["get"].is_object() && path["patch"].is_object(), "{path}");
-    for schema in ["UniverseMutationBody", "UniverseStateEditRequest", "UniverseStateResponse"] {
-        assert!(document["components"]["schemas"][schema].is_object(), "{schema}");
-    }
     let committed: Value = serde_json::from_str(include_str!("../openapi/openapi.generated.json")).unwrap();
     assert_eq!(committed["paths"]["/universe-state"], *path);
+    // The committed document is the served one, schema for schema: a route whose
+    // bodies changed and whose document did not would differ here.
+    for schema in [
+        "UniverseMutationBody",
+        "UniverseStateEditRequest",
+        "UniverseStateResponse",
+        "ProvenanceKindBody",
+        "FactProvenanceBody",
+    ] {
+        let served = &document["components"]["schemas"][schema];
+        assert!(served.is_object(), "{schema}");
+        assert_eq!(committed["components"]["schemas"][schema], *served, "{schema}");
+    }
+    assert_eq!(
+        document["components"]["schemas"]["ProvenanceKindBody"]["enum"],
+        json!(["asserted", "measured", "derived", "proposed"])
+    );
+    assert!(document["components"]["schemas"]["UniverseMutationBody"]["properties"]["note"].is_null());
+    assert_eq!(committed["paths"].as_object().unwrap().len(), 56);
 }
+
+// ---- P1B-59: a measured number is a first-class fact.
+
+#[tokio::test]
+async fn a_number_is_set_outright_and_cleared_outright() {
+    let state = state().await;
+    let litres = "numeric_values.shelf.litres";
+    let first = edited(&state, json!([{"operation":"set_numeric","target":litres,"payload":0.7}])).await;
+    assert_eq!(first["numeric_values"], json!({"shelf.litres": 0.7}));
+
+    // The case P1B-58's screen could not do. It sent the difference, 0.7 - 0.1,
+    // as a decrement, and the number landed on 0.09999999999999998.
+    let second = edited(&state, json!([{"operation":"set_numeric","target":litres,"payload":0.1}])).await;
+    assert_eq!(second["numeric_values"]["shelf.litres"].as_f64(), Some(0.1));
+    assert_eq!(read(&state).await["numeric_values"]["shelf.litres"].as_f64(), Some(0.1));
+    assert_ne!(0.7_f64 - (0.7 - 0.1), 0.1, "the difference would not have landed");
+
+    // And a number can be removed, which no operation did before.
+    let cleared = edited(&state, json!([{"operation":"clear_numeric","target":litres}])).await;
+    assert_eq!(cleared["numeric_values"], json!({}));
+    assert_eq!(cleared["fact_provenance"], json!({}));
+    // Clearing what is not there is not an error.
+    let again = edited(&state, json!([{"operation":"clear_numeric","target":litres}])).await;
+    assert_eq!(again["numeric_values"], json!({}));
+}
+
+#[tokio::test]
+async fn a_write_records_how_the_fact_was_established_and_a_clear_removes_the_record() {
+    let state = state().await;
+    let written = edited(
+        &state,
+        json!([
+            {"operation":"set_numeric","target":"numeric_values.tank.level","payload":25,"provenance_kind":"measured"},
+            {"operation":"set_fact","target":"facts.kettle.descaled","payload":true},
+            {"operation":"add_membership","target":"set_memberships.toolbox","payload":"spanner","provenance_kind":"proposed"},
+            {"operation":"increment_numeric","target":"numeric_values.shelf.jars","payload":2,"provenance_kind":"derived"}
+        ]),
+    )
+    .await;
+    // The write time is this orchestrator's clock, which the test fixes.
+    let entry = |kind: &str| json!({"kind": kind, "recorded_at": NOW});
+    assert_eq!(
+        written["fact_provenance"],
+        json!({
+            "numeric_values.tank.level": entry("measured"),
+            "facts.kettle.descaled": entry("asserted"),
+            "set_memberships.toolbox": entry("proposed"),
+            "numeric_values.shelf.jars": entry("derived")
+        })
+    );
+    // It is stored, beside the envelope and not in place of it.
+    let stored: Value = serde_json::from_str(&rows(&state).await[0].3).unwrap();
+    assert_eq!(stored["fact_provenance"]["numeric_values.tank.level"], entry("measured"));
+    assert_eq!(stored["provenance"]["authority_source"], "user");
+    assert_eq!(read(&state).await, written);
+
+    // A value written again on someone's word is asserted again.
+    let reworded = edited(&state, json!([{"operation":"set_numeric","target":"numeric_values.tank.level","payload":18}])).await;
+    assert_eq!(reworded["fact_provenance"]["numeric_values.tank.level"], entry("asserted"));
+
+    // Each removal takes the record with the value. None is left for a value that is gone.
+    let removed = edited(
+        &state,
+        json!([
+            {"operation":"clear_numeric","target":"numeric_values.tank.level"},
+            {"operation":"clear_fact","target":"facts.kettle.descaled"},
+            {"operation":"remove_membership","target":"set_memberships.toolbox","payload":"spanner"}
+        ]),
+    )
+    .await;
+    assert_eq!(removed["fact_provenance"], json!({"numeric_values.shelf.jars": entry("derived")}));
+    for target in removed["fact_provenance"].as_object().unwrap().keys() {
+        let (collection, key) = target.split_once('.').unwrap();
+        assert!(removed[collection].get(key).is_some(), "{target} has provenance and no value");
+    }
+}
+
+#[tokio::test]
+async fn a_state_from_before_provenance_reads_with_an_empty_map() {
+    let state = state().await;
+    admit_state(&state, json!({"lamp.bulb": "fitted"})).await;
+    let body = read(&state).await;
+    assert_eq!(body["facts"], json!({"lamp.bulb": "fitted"}));
+    assert_eq!(body["fact_provenance"], json!({}));
+    // On an empty store too: the key is always there.
+    assert_eq!(read(&crate::state().await).await["fact_provenance"], json!({}));
+}
+
+#[tokio::test]
+async fn a_completed_task_records_the_provenance_its_effect_states() {
+    let state = state().await;
+    let task = admit_task(
+        &state,
+        "Synthetic: read the invented gauge",
+        json!({"effects": {"mutations": [
+            {"operation":"set_numeric","target":"numeric_values.tank.level","payload":31.5,"provenance_kind":"measured"},
+            {"operation":"set_fact","target":"facts.tank.checked","payload":true}
+        ]}}),
+    )
+    .await;
+    let (status, body) = request(
+        &state,
+        "POST",
+        &format!("/task/{task}/action"),
+        json!({"schema_version": "ubu.orchestrator.task_action.v1", "action": "complete"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["diagnostics"], json!([]), "{body}");
+
+    let after = read(&state).await;
+    assert_eq!(after["numeric_values"], json!({"tank.level": 31.5}));
+    assert_eq!(after["fact_provenance"]["numeric_values.tank.level"]["kind"], "measured");
+    assert_eq!(after["fact_provenance"]["facts.tank.checked"]["kind"], "asserted");
+    // One completion, one write time, for both.
+    assert_eq!(
+        after["fact_provenance"]["numeric_values.tank.level"]["recorded_at"],
+        after["fact_provenance"]["facts.tank.checked"]["recorded_at"]
+    );
+}
+
+#[tokio::test]
+async fn a_task_waiting_on_a_number_is_planned_once_the_number_is_at_least_what_it_asks() {
+    // The planner's precondition path needs no change for the four comparisons:
+    // it calls the evaluator, and the evaluator has them. This is that, over HTTP.
+    let state = state().await;
+    let level = "numeric_values.tank.level";
+    let (status, captured) = request(
+        &state,
+        "POST",
+        "/task",
+        json!({
+            "schema_version": "ubu.orchestrator.task_capture.v1",
+            "title": "Synthetic: water the invented bench",
+            "duration_estimate": {"type": "fixed", "seconds": 600},
+            "preconditions": {"target": level, "predicate": "at_least", "expected": 25}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{captured}");
+    let waiting = captured["task_id"].as_str().unwrap().to_owned();
+    admit_task(&state, "Synthetic: rinse the cup", json!({})).await;
+
+    // Never recorded: not ready, and not an error.
+    assert_eq!(blocked_task_ids(&state).await, vec![waiting.clone()]);
+    for (value, blocked) in [(24.5, true), (25.0, false), (40.0, false), (10.0, true)] {
+        edited(&state, json!([{"operation":"set_numeric","target":level,"payload":value,"provenance_kind":"measured"}])).await;
+        let expected = if blocked { vec![waiting.clone()] } else { Vec::new() };
+        assert_eq!(blocked_task_ids(&state).await, expected, "tank.level {value} at_least 25");
+    }
+    // Cleared, it is never-recorded again.
+    edited(&state, json!([{"operation":"set_numeric","target":level,"payload":40}])).await;
+    assert!(blocked_task_ids(&state).await.is_empty());
+    edited(&state, json!([{"operation":"clear_numeric","target":level}])).await;
+    assert_eq!(blocked_task_ids(&state).await, vec![waiting.clone()]);
+
+    // A comparison that cannot be evaluated is an invalid Task, not a blocked one.
+    let (status, odd) = request(
+        &state,
+        "POST",
+        "/task",
+        json!({
+            "schema_version": "ubu.orchestrator.task_capture.v1",
+            "title": "Synthetic: count the invented jars",
+            "duration_estimate": {"type": "fixed", "seconds": 600},
+            "preconditions": {"target": "facts.shelf.jars", "predicate": "greater_than", "expected": 3}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{odd}");
+    let (status, planned) = request(&state, "POST", "/planning/generate", json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{planned}");
+    assert_eq!(planned["invalid_tasks"][0]["task_id"], odd["task_id"]);
+    assert_eq!(
+        planned["invalid_tasks"][0]["error"],
+        "malformed precondition: greater_than requires a numeric_values target"
+    );
+}
+
+#[tokio::test]
+async fn a_task_route_refuses_a_note_on_a_mutation() {
+    // The mutation type has no `note`, wherever a mutation is written.
+    let state = state().await;
+    let (status, body) = request(
+        &state,
+        "POST",
+        "/task",
+        json!({
+            "schema_version": "ubu.orchestrator.task_capture.v1",
+            "title": "Synthetic: an effect with a note",
+            "effects": {"mutations": [{"operation":"set_fact","target":"facts.kettle.descaled","payload":true,"note":"nowhere to go"}]}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}
+

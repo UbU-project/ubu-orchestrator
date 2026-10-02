@@ -7,6 +7,10 @@ effects change it. Until P1B-58 nothing let the operator see it or change it by
 hand. `GET /universe-state` and
 `PATCH /universe-state` do.
 
+**This document is contract.** A change to the route's operations, to the
+predicates the planner evaluates, or to the provenance it records, changes this
+file in the same commit.
+
 ## What "current" means
 
 There is one definition, `planning_service::read_current_universe_state`: the
@@ -34,12 +38,14 @@ state is stored. A read never creates a row.
 | `numeric_values` | Key to number. |
 | `set_memberships` | Key to a list of JSON scalars, in the set's own order. |
 | `event_markers` | Key to a list of JSON objects, oldest first. |
+| `fact_provenance` | Full target to `{kind, recorded_at}`: how the value there was established, and when. |
 | `source_summary` | One sentence for the whole state. An edit does not rewrite it. |
 | `confidence_summary` | One sentence for the whole state, or `null`. |
 
-All four collections are always present, empty or not. A key is the part of a
-target after its collection: the fact a precondition names as
-`facts.kettle.descaled` is stored under `kettle.descaled` in `facts`.
+All four collections and `fact_provenance` are always present, empty or not. A
+key is the part of a target after its collection: the fact a precondition
+names as `facts.kettle.descaled` is stored under `kettle.descaled` in `facts`.
+`fact_provenance` is keyed by the whole target, `facts.kettle.descaled`.
 
 ## Edit
 
@@ -57,23 +63,32 @@ target after its collection: the fact a precondition names as
 and answers with the state after the mutations, in the shape of the read.
 
 A mutation is `ubu-core`'s `UniverseMutation`, field for field: `operation`,
-`target`, and optional `payload` and `note`. The route defines no operation of
-its own. The seven are the ones a Task's `effects` use:
+`target`, and optional `payload` and `provenance_kind`. The route defines no
+operation of its own. The nine are the ones a Task's `effects` use:
 
 | Operation | Collection | Payload |
 |---|---|---|
 | `set_fact` | `facts` | any JSON value, required |
 | `clear_fact` | `facts` | none allowed |
+| `set_numeric` | `numeric_values` | a number |
+| `clear_numeric` | `numeric_values` | none allowed |
 | `increment_numeric` | `numeric_values` | a number |
 | `decrement_numeric` | `numeric_values` | a number |
 | `add_membership` | `set_memberships` | a JSON scalar |
 | `remove_membership` | `set_memberships` | a JSON scalar |
 | `append_event_marker` | `event_markers` | a JSON object |
 
-There is no "set a number" operation. A number is moved to a value by
-incrementing or decrementing it by the difference, and a key that is not there
-counts from zero. There is no operation that removes a number or an event
-marker.
+**A number is set and cleared outright**, from P1B-59. `set_numeric` replaces
+whatever is there and `clear_numeric` removes the key. A reading from a gauge
+is set, not reached from whatever happened to be there. Until then a number
+could only be moved by a difference: from 0.7, a request for 0.1 arrived as
+0.09999999999999998, and a number could never be removed. Clearing a key that
+is not there changes nothing and is not an error. Increment and decrement
+stay, for a tally, and a key that is not there counts from zero. There is no
+operation that removes an event marker.
+
+**A mutation has no `note`.** It was accepted and stored nowhere. A mutation
+that carries one is refused, here with 422 and on a Task's `effects` with 400.
 
 The order of work is fixed, and nothing is written until every check passes:
 
@@ -95,6 +110,70 @@ applied, and on a store with no state no empty row is left behind.
 | 400 | `universe_mutation_invalid` | Step 2 refused. The message is `ubu-core`'s, for example `mutation 1: unknown operation ...`, counting from zero. |
 | 409 | none | The state changed between the read and the write. |
 | 422 | none | The body is not this shape, for example a mutation with a key the type does not have. |
+
+## Provenance
+
+Each value can carry how it was established:
+
+| `provenance_kind` | Means |
+|---|---|
+| `asserted` | A person said so. |
+| `measured` | An instrument or a reading. |
+| `derived` | Computed from other facts. |
+| `proposed` | An advisor suggested it and it has not been confirmed. |
+
+There is no confidence number and no free text. The point of the field is to
+tell evidence from assertion, and a score would blur that.
+
+- **A mutation states the kind of what it writes, and none means `asserted`.**
+  A mutation with no stated evidence is someone's word. Every request that
+  worked before P1B-59 still works and means what it meant.
+- **The write records the kind and the time** under the mutation's target in
+  `fact_provenance`. The time is this orchestrator's clock at the write. It is
+  not `captured_at`, which does not move.
+- **A later write replaces the entry.** A measured number set again with no
+  kind is asserted.
+- **No entry outlives its value.** `clear_fact`, `clear_numeric`, and a
+  `remove_membership` that takes a set's last member, remove the entry with
+  the value. The two clears refuse a `provenance_kind`, as they refuse a
+  payload: they write nothing for it to describe.
+- **A set has one entry**, for the set and not for each member. A
+  `remove_membership` that leaves members is a write to the set.
+- **A completed Task's effects record it too**, through the same applicator,
+  with the completion's time.
+- **A value written before P1B-59, and each fact bootstrap writes, has no
+  entry.** The map says nothing about it.
+
+The map is `fact_provenance` and not `provenance`. Every stored object's
+payload carries its envelope under `provenance`, a `UniverseState`'s included,
+and the store rewrites that key on each write.
+
+## Preconditions the planner evaluates
+
+A Task's `preconditions` are evaluated against the current state when a Plan
+is generated, by `ubu-core`'s `evaluate_universe_precondition`. This
+orchestrator adds nothing to it and has no predicate of its own. A leaf has a
+`target`, a `predicate` and, for all but `absent`, an `expected`:
+
+| Predicate | Target | True when |
+|---|---|---|
+| `equals` | any | the value equals `expected` |
+| `member_of` | `set_memberships` | the set holds `expected` |
+| `absent` | any | nothing is recorded there |
+| `at_least` | `numeric_values` | the number is `expected` or more |
+| `at_most` | `numeric_values` | the number is `expected` or less |
+| `greater_than` | `numeric_values` | the number is more than `expected` |
+| `less_than` | `numeric_values` | the number is less than `expected` |
+
+The four comparisons are from P1B-59. **A number that was never recorded
+satisfies none of them**: the Task is in `blocked_tasks`, not ready, and it is
+not an error to ask. A comparison on a target outside `numeric_values`, or
+with an `expected` that is not a number, is malformed, and the Task is in
+`invalid_tasks` with the evaluator's message.
+
+A precondition is authored over HTTP: `POST /task` and `PATCH /task/{id}`
+accept `preconditions`, per [Task capture](TASK_CAPTURE.md). The app sends
+none.
 
 ## The write
 
@@ -133,27 +212,41 @@ with a new id. On a store that already has one from a completion or an edit,
 the bootstrap row becomes current and what the older row held is no longer
 read. This route does not change that.
 
+## Bootstrap's keys
+
+`POST /bootstrap/seed` stores five values: `operator.work_style`,
+`operator.attention_preference`, `project.repository` and `project.objective`
+in `facts`, and `operator.planning_horizon_days` in `numeric_values`. Their
+targets are `facts.operator.work_style` and so on.
+
+Until P1B-59 each key began with its collection, `facts.operator.work_style`
+inside `facts`, so the target was `facts.facts.operator.work_style`. That was
+more than untidy. `ubu-core` reads the segment after the collection as a
+target's namespace, and refuses the `affect` namespace outside `user_mode`.
+Under the doubled convention an intrinsic-affect fact would have been targeted
+`facts.facts.affect.x`, its namespace would have read as `facts`, and the
+guard would not have fired.
+
+**There is no migration.** A store bootstrapped before P1B-59 keeps its
+doubled keys, and nothing reads them by name. The operator's store held no
+`UniverseState` when this changed.
+
 ## What it does not do
 
-- **No per-fact provenance.** `source_summary` and `confidence_summary`
-  describe the whole state. Nothing records that one fact was measured and
-  another asserted. That needs a `ubu-core` field and is not invented here.
-- **`note` is accepted and not stored.** The mutation type carries it, the
-  applicator ignores it, and the state has nowhere to keep it.
 - **`captured_at` and `source_summary` are not rewritten by an edit**, as they
-  are not by a Task's effects. The row's `updated_at` and its provenance record
-  when and by what authority it last changed.
-- **Bootstrap's keys carry their collection twice.** `bootstrap_service` stores
-  its facts under keys such as `facts.operator.work_style`, inside `facts`. The
-  target that addresses one is therefore `facts.facts.operator.work_style`.
-  The route reports the keys as they are stored.
-- **It authors no precondition.** A Task's `preconditions` are written
-  elsewhere. `evaluate_leaf_precondition` supports `equals`, `member_of` and
-  `absent`.
+  are not by a Task's effects. The row's `updated_at` and its envelope record
+  when and by what authority it last changed, and `fact_provenance` records it
+  for each value.
+- **It authors no precondition.** A Task's `preconditions` are written through
+  the Task routes.
+- **It has no advisor.** Nothing proposes a precondition or a fact. `proposed`
+  is a kind a mutation may state, and nothing here states it.
 
 ## Tests
 
 `tests/universe_state.rs` holds the route's contract, including a Task that a
 precondition blocks until the route records the fact and blocks again when the
-fact is cleared. `src/services/universe_state.rs` holds the tests that need the
+fact is cleared, a Task that waits on a number being `at_least` a value, a
+number set to exactly the value asked for, and the provenance a write records
+and a clear removes. `tests/bootstrap.rs` holds the undoubled keys. `src/services/universe_state.rs` holds the tests that need the
 planner's own reader or a mode other than this instance's.

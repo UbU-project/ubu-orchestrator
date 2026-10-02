@@ -243,25 +243,28 @@ async fn admit_universe_state(state: &AppState, request: &BootstrapSeedRequest) 
         request.selected_repo.owner, request.selected_repo.repo
     );
 
+    // A key is the part of a target after its collection: this fact is addressed
+    // `facts.operator.work_style`. A key that began with its collection would be
+    // addressed `facts.facts.…`, and would hide its namespace from the mode guard.
     universe_state.facts.insert(
-        "facts.operator.work_style".to_owned(),
+        "operator.work_style".to_owned(),
         json!(work_style_value(request.answers.work_style)),
     );
     universe_state.facts.insert(
-        "facts.operator.attention_preference".to_owned(),
+        "operator.attention_preference".to_owned(),
         json!(attention_preference_value(
             request.answers.attention_preference
         )),
     );
     universe_state
         .facts
-        .insert("facts.project.repository".to_owned(), json!(repo));
+        .insert("project.repository".to_owned(), json!(repo));
     universe_state.facts.insert(
-        "facts.project.objective".to_owned(),
+        "project.objective".to_owned(),
         json!(request.answers.primary_objective.trim()),
     );
     universe_state.numeric_values.insert(
-        "numeric_values.operator.planning_horizon_days".to_owned(),
+        "operator.planning_horizon_days".to_owned(),
         f64::from(request.answers.planning_horizon_days),
     );
 

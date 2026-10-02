@@ -65,6 +65,13 @@ P1B-58 added a third creation path: the operator's first edit through
 `PATCH /universe-state` seeds an empty state the same way, labelled
 `user-capture`. See `UNIVERSE_STATE.md`.
 
+From P1B-59 an effect may use `set_numeric` and `clear_numeric`, and each
+mutation may state a `provenance_kind`. A completion records, for each value
+its effects write, that kind and the completion's time; an effect that states
+none records `asserted`. A mutation in `effects` may no longer carry `note`.
+`establishes` still only sets facts true, so a routine imported from Quick UbU
+records `asserted`.
+
 ## Reactive versus predictive
 
 The ticket's supplied cold-store loop illustrates the intended behavior:

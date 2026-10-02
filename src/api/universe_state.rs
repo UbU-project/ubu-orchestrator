@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use ubu_core::core::{UniverseMutation, UniverseState};
+use ubu_core::core::{FactProvenance, ProvenanceKind, UniverseMutation, UniverseState};
 use utoipa::ToSchema;
 
 use crate::{
@@ -15,19 +15,76 @@ use crate::{
 
 pub const UNIVERSE_STATE_SCHEMA_VERSION: &str = "ubu.orchestrator.universe_state.v1";
 
+/// `ubu-core`'s `ProvenanceKind`, spelled out so the document names its four
+/// values. The two conversions below match on every variant, so a kind added to
+/// `ubu-core` does not compile here until it is added to this too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProvenanceKindBody {
+    /// A person said so.
+    Asserted,
+    /// An instrument or a reading.
+    Measured,
+    /// Computed from other facts.
+    Derived,
+    /// An advisor suggested it and it has not been confirmed.
+    Proposed,
+}
+
+impl From<ProvenanceKindBody> for ProvenanceKind {
+    fn from(kind: ProvenanceKindBody) -> Self {
+        match kind {
+            ProvenanceKindBody::Asserted => Self::Asserted,
+            ProvenanceKindBody::Measured => Self::Measured,
+            ProvenanceKindBody::Derived => Self::Derived,
+            ProvenanceKindBody::Proposed => Self::Proposed,
+        }
+    }
+}
+
+impl From<ProvenanceKind> for ProvenanceKindBody {
+    fn from(kind: ProvenanceKind) -> Self {
+        match kind {
+            ProvenanceKind::Asserted => Self::Asserted,
+            ProvenanceKind::Measured => Self::Measured,
+            ProvenanceKind::Derived => Self::Derived,
+            ProvenanceKind::Proposed => Self::Proposed,
+        }
+    }
+}
+
+/// How one value was established, and when. Nothing else.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FactProvenanceBody {
+    pub kind: ProvenanceKindBody,
+    pub recorded_at: String,
+}
+
+impl From<FactProvenance> for FactProvenanceBody {
+    fn from(entry: FactProvenance) -> Self {
+        Self {
+            kind: entry.kind.into(),
+            recorded_at: entry.recorded_at.to_string(),
+        }
+    }
+}
+
 /// One `ubu-core` `UniverseMutation`, field for field.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UniverseMutationBody {
-    /// `set_fact`, `clear_fact`, `increment_numeric`, `decrement_numeric`,
-    /// `add_membership`, `remove_membership` or `append_event_marker`.
+    /// `set_fact`, `clear_fact`, `set_numeric`, `clear_numeric`,
+    /// `increment_numeric`, `decrement_numeric`, `add_membership`,
+    /// `remove_membership` or `append_event_marker`.
     pub operation: String,
     /// `<collection>.<key>`, the spelling a precondition uses.
     pub target: String,
     #[serde(default)]
     pub payload: Option<Value>,
+    /// How the value this mutation writes was established. Absent means
+    /// `asserted`. The two clears refuse it.
     #[serde(default)]
-    pub note: Option<String>,
+    pub provenance_kind: Option<ProvenanceKindBody>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -49,6 +106,9 @@ pub struct UniverseStateResponse {
     pub numeric_values: BTreeMap<String, f64>,
     pub set_memberships: BTreeMap<String, Vec<Value>>,
     pub event_markers: BTreeMap<String, Vec<Value>>,
+    /// Keyed by full target, `<collection>.<key>`. A target with no entry has no
+    /// recorded provenance; an entry is removed with its value.
+    pub fact_provenance: BTreeMap<String, FactProvenanceBody>,
     pub source_summary: String,
     pub confidence_summary: Option<String>,
 }
@@ -70,6 +130,11 @@ fn response(state: UniverseState, version: Option<i64>) -> UniverseStateResponse
             .event_markers
             .into_iter()
             .map(|(key, markers)| (key, markers.into_iter().map(Value::Object).collect()))
+            .collect(),
+        fact_provenance: state
+            .fact_provenance
+            .into_iter()
+            .map(|(target, entry)| (target, entry.into()))
             .collect(),
         source_summary: state.source_summary,
         confidence_summary: state.confidence_summary,
@@ -110,7 +175,7 @@ pub async fn edit(
             operation: mutation.operation,
             target: mutation.target,
             payload: mutation.payload,
-            provenance_kind: None,
+            provenance_kind: mutation.provenance_kind.map(Into::into),
         })
         .collect();
     let (next, version) = universe_state::apply(&state, &mutations, MVP_INSTANCE_MODE).await?;

@@ -95,23 +95,56 @@ async fn seed_admits_bootstrap_state_and_imports_selected_repo_tasks() {
                 assert_eq!(payload["schema_version"], "core/universe-state/0.1");
                 assert_eq!(payload["provenance"]["authority_source"], "user");
                 assert_eq!(payload["provenance"]["source"]["source_kind"], "bootstrap");
+                // A key is the part of a target after its collection. Until P1B-59
+                // each of these began with its collection, `facts.operator.work_style`
+                // inside `facts`, so its target was `facts.facts.operator.work_style`.
                 assert_eq!(
                     payload["facts"],
                     json!({
-                        "facts.operator.work_style": "focused",
-                        "facts.operator.attention_preference": "deep_work",
-                        "facts.project.repository": "UbU-project/ubu-orchestrator",
-                        "facts.project.objective": "Keep the orchestrator useful"
+                        "operator.work_style": "focused",
+                        "operator.attention_preference": "deep_work",
+                        "project.repository": "UbU-project/ubu-orchestrator",
+                        "project.objective": "Keep the orchestrator useful"
                     })
                 );
                 assert_eq!(
                     payload["numeric_values"],
                     json!({
-                        "numeric_values.operator.planning_horizon_days": 7.0
+                        "operator.planning_horizon_days": 7.0
                     })
                 );
                 assert_eq!(payload["set_memberships"], json!({}));
                 assert_eq!(payload["event_markers"], json!({}));
+
+                // The stored row, envelope and all, is the core type, and each fact
+                // answers to the target a precondition would write for it.
+                let stored: ubu_core::core::UniverseState =
+                    serde_json::from_value(payload.clone()).expect("the stored row deserializes");
+                for (collection, keys) in [
+                    ("facts", stored.facts.keys().collect::<Vec<_>>()),
+                    ("numeric_values", stored.numeric_values.keys().collect()),
+                ] {
+                    for key in keys {
+                        let namespace = key.split('.').next().unwrap();
+                        assert!(
+                            !["facts", "numeric_values", "set_memberships", "event_markers"].contains(&namespace),
+                            "{collection} key `{key}` repeats a collection"
+                        );
+                    }
+                }
+                for precondition in [
+                    json!({"target": "facts.operator.work_style", "predicate": "equals", "expected": "focused"}),
+                    json!({"target": "numeric_values.operator.planning_horizon_days", "predicate": "at_least", "expected": 7}),
+                    json!({"target": "facts.facts.operator.work_style", "predicate": "absent"}),
+                ] {
+                    let parsed: ubu_core::core::UniversePrecondition =
+                        serde_json::from_value(precondition.clone()).unwrap();
+                    assert_eq!(
+                        ubu_core::core::evaluate_universe_precondition(&stored, &parsed),
+                        Ok(true),
+                        "{precondition}"
+                    );
+                }
             }
             _ => {}
         }
