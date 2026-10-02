@@ -7,6 +7,8 @@ use super::calendar_projection::DesiredEvent;
 
 pub const CALENDAR_SCOPE: &str = "https://www.googleapis.com/auth/calendar";
 pub const CALENDAR_API_BASE: &str = "https://www.googleapis.com/calendar/v3/calendars";
+/// The private extended property UbU writes on an event it creates.
+pub const UBU_TASK_PROPERTY: &str = "ubu_task";
 
 // Field order and omission rules match quick-ubu/gcal's GoogleEventBody.
 #[derive(Debug, Serialize)]
@@ -280,6 +282,12 @@ pub fn event_request(
     // masquerade as a completion gesture on newly Dynamic work.
     if operation == Operation::Insert {
         body["id"] = event.external_id.clone().into();
+        // Only an event UbU creates is stamped. A captured Task's event belongs to the
+        // operator and keeps his id, so a PATCH never stamps: the stamp means "UbU
+        // minted this event", which is what a later capture needs to know. A PATCH
+        // leaves an omitted field alone, so the stamp survives every later patch.
+        body["extendedProperties"] =
+            serde_json::json!({"private": {UBU_TASK_PROPERTY: event.task_id.clone()}});
     } else if operation == Operation::Patch && event.color_id.is_none() {
         body["colorId"] = Value::Null;
     }

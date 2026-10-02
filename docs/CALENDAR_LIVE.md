@@ -81,7 +81,12 @@ minutes keep DesiredEvent's i64 representation without narrowing Quick UbU's i32
 wire integers. RFC 3339 strings retain their supplied offset spelling.
 
 Insert adds the Google `id` property from `external_id` so P1B-28's task-derived
-IDs remain stable; patches send only the body above. Unlike Quick UbU's create
+IDs remain stable, and from P1B-57 it adds one more key, the stamp:
+`extendedProperties: {private: {ubu_task: <the Task id>}}`. Patches send only
+the body above: no `id` and no `extendedProperties`. A PATCH leaves an omitted
+field alone, so a stamp written at insert survives every later patch. Only an
+insert stamps, because a PATCH is also what UbU sends to an event the operator
+made and UbU captured: the stamp means "UbU minted this event". Unlike Quick UbU's create
 path, UbU must supply an ID rather than accept a generated one. Both calendar and
 event path segments are percent-encoded, including `@` and `/`.
 
@@ -101,7 +106,7 @@ and detects repeats; no caller uses list_events yet.
 |---|---|---|
 | Any | 2xx (including 200 and 204) | Success |
 | Delete | 404 or 410 | Success: already gone |
-| Insert | 409 | Record `calendar_insert_converted_to_patch`, then patch the same ID once |
+| Insert | 409 | Record `calendar_insert_converted_to_patch`, then patch the same ID once. The patch carries no stamp, so an event that already existed is not stamped by the conversion |
 | Patch after conflict | 2xx | Success, original create operation recorded applied |
 | Any remaining combination | Non-2xx | Per-operation failure, retained for the next preview |
 

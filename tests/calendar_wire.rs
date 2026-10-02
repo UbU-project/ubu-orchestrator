@@ -61,6 +61,11 @@ fn populated_body_matches_expected_fixture_bytes() {
         insert_body.as_object_mut().unwrap().remove("id"),
         Some(json!(event.external_id))
     );
+    // P1B-57: an insert also stamps the Task it mints the event for, and nothing else differs.
+    assert_eq!(
+        insert_body.as_object_mut().unwrap().remove("extendedProperties"),
+        Some(json!({"private": {"ubu_task": event.task_id}}))
+    );
     assert_eq!(insert_body, expected);
     assert_eq!(
         patch.headers("SYNTHETIC_NOT_A_TOKEN"),
@@ -70,6 +75,42 @@ fn populated_body_matches_expected_fixture_bytes() {
             ("content-type", "application/json".into()),
         ]
     );
+}
+
+// P1B-57 §A. Only an insert stamps. A PATCH is also what UbU sends to an event the
+// operator made and UbU captured: stamping it would mark his own event as UbU's, and a
+// fresh store would then discard his commitment.
+#[test]
+fn a_patch_body_carries_no_extended_properties_and_an_insert_carries_the_stamp() {
+    // An event UbU minted for its own Task, and one the operator made that UbU captured:
+    // that one keeps his id, and its Task has a handle of its own.
+    let minted = event();
+    let mut captured = event();
+    captured.external_id = "0inv3nt3dkett1edescaling".into();
+    captured.task_id = "task_018f3c8e9b2a7c4d8f1e2a3b4c5d6e70".into();
+    let mut uncoloured = event();
+    uncoloured.color_id = None;
+    for event in [&minted, &captured, &uncoloured] {
+        let patch = event_request(Operation::Patch, CALENDAR_API_BASE, "primary", event)
+            .body
+            .unwrap();
+        assert!(patch.get("extendedProperties").is_none(), "{patch}");
+        assert!(patch.get("id").is_none(), "{patch}");
+        assert!(!patch.to_string().contains(UBU_TASK_PROPERTY), "{patch}");
+    }
+    // The insert's stamp is the Task the event is minted for, under the private key.
+    let insert = event_request(Operation::Insert, CALENDAR_API_BASE, "primary", &minted)
+        .body
+        .unwrap();
+    assert_eq!(UBU_TASK_PROPERTY, "ubu_task");
+    assert_eq!(
+        insert["extendedProperties"],
+        json!({"private": {"ubu_task": "task_0123456789abcdef0123456789abcdef"}})
+    );
+    assert_eq!(insert["id"], "0123456789abcdef0123456789abcdef");
+    println!("P1B57_A_INSERT_BODY {insert}");
+    // List and delete requests have no body at all.
+    assert!(delete_request(CALENDAR_API_BASE, "primary", &minted.external_id).body.is_none());
 }
 
 #[test]
