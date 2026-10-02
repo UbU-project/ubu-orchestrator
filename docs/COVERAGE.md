@@ -35,9 +35,24 @@ A mixed state counts as uncovered; its failed visits divided by all rollouts
 contribute uncovered mass. The overall estimate still measures successful
 continuation rollouts, with a 95% Wilson interval over those same samples.
 Consequently state counts are not a substitute for the probability estimate.
-Each listed boundary receives attribution from the rollout's full continuation
-result; boundary selection does not truncate the two walks. Boundary masses
-must not be added across boundaries, since they may describe the same samples.
+Each listed boundary receives attribution from the rollout's continuation
+result. Boundary masses must not be added across boundaries, since they may
+describe the same samples.
+
+**The continuation is judged over the reactive horizon, and nothing beyond
+it**, from P1B-56. A step that starts after planning start plus the reactive
+horizon does not enter the continuation verdict, so the estimate covers the
+span its boundaries come from and its scope names. The feasibility walk is
+not truncated: `display_probability` is still about the whole Plan.
+
+Until P1B-56 neither walk was truncated. That was the first slice's stated
+choice, and it made the figure false as reported. A commitment a week out
+could fail the continuation, so the estimate was the same at every horizon,
+it was a verdict on the whole Plan, and the risk report printed it as a
+statement about "the next 60 minutes". On a packed real week it read 9% to
+31% on every run, with `low_coverage` at High. Over a week, a Plan packed to
+modal durations really does not hold, and the rollout was right to say so.
+What was wrong was only that the figure was named after the next hour.
 
 ## API and risk report
 
@@ -54,6 +69,12 @@ uncovered mass; ties prefer the later start then larger id. The id is carried in
 `subject_ref`, and the detail uses the title:
 
 > this Plan holds for 53% of the ways the next 60 minutes could go, below the 99% it aims for; most of the rest stops at Standup
+
+The sentence is true from P1B-56: the figure is computed over the span it
+names. With the default horizon of one hour it will usually read 100% with no
+boundary, because an hour rarely holds a commitment, and then no finding is
+added. When it does fire, a commitment inside the next hour is at stake, and
+High is the right word.
 
 Horizons up to 90 minutes are displayed in minutes; longer horizons use hours.
 Without a sampled boundary, the detail omits the commitment clause rather than
