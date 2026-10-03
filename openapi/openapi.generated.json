@@ -2979,6 +2979,7 @@
           "preview_id",
           "stale",
           "events",
+          "matching_placements",
           "operations",
           "diagnostics"
         ],
@@ -2994,6 +2995,11 @@
             "items": {
               "$ref": "#/components/schemas/CalendarEventBody"
             }
+          },
+          "matching_placements": {
+            "type": "integer",
+            "description": "Current Plan placements matching the applied snapshot, excluding retained completed history.",
+            "minimum": 0
           },
           "operations": {
             "type": "array",

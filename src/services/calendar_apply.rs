@@ -171,6 +171,18 @@ pub async fn preview(
             }
         }
     }
+    // Use the same external-id comparison as diff. Retained history never counts
+    // as planned work, even though it deliberately produces no operation.
+    let changed: std::collections::BTreeSet<&str> = operations.iter().map(|operation| match operation {
+        CalendarOperation::Create(event) | CalendarOperation::Update(event) => event.external_id.as_str(),
+        CalendarOperation::Delete { external_id, .. } => external_id.as_str(),
+    }).collect();
+    let matching_placements = desired.iter()
+        .filter(|event| planned.contains(event.task_id.as_str())
+            && !retained.contains(&event.external_id)
+            && !changed.contains(event.external_id.as_str()))
+        .map(|event| event.external_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>().len();
     let now = state.planning_now();
     let stored = StoredCalendarPreview {
         schema_version: CALENDAR_PROJECTION_PREVIEW_SCHEMA_VERSION.into(),
@@ -199,6 +211,7 @@ pub async fn preview(
         plan_id: stored.plan_id,
         stale: stored.stale,
         events: stored.desired_events.into_iter().map(Into::into).collect(),
+        matching_placements,
         operations: stored
             .operations
             .into_iter()

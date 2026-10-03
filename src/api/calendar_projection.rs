@@ -98,6 +98,8 @@ pub struct CalendarProjectionPreviewResponse {
     pub plan_id: Option<String>,
     pub stale: bool,
     pub events: Vec<CalendarEventBody>,
+    /// Current Plan placements matching the applied snapshot, excluding retained completed history.
+    pub matching_placements: usize,
     pub operations: Vec<CalendarOperationBody>,
     pub diagnostics: Vec<DiagnosticBody>,
 }

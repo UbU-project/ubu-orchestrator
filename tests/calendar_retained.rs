@@ -244,3 +244,44 @@ async fn the_retained_diagnostic_names_the_count_and_collapses_past_a_few() {
     assert!(retained_diagnostic(&Default::default()).is_none());
     println!("P1B53_C_RETAINED={}", five[0]);
 }
+
+// P1B-60: route-level requests are in-process, with the recording Calendar only.
+#[tokio::test]
+async fn matching_placements_counts_all_current_matches_without_operations() {
+    let (state, _) = setup(&[A, B]).await;
+    apply(&state).await;
+    let proposed = preview(&state).await;
+    assert_eq!(proposed["matching_placements"], 2);
+    assert!(operations(&proposed).is_empty());
+}
+
+#[tokio::test]
+async fn matching_placements_is_zero_when_every_placement_moves() {
+    let (state, _) = setup(&[A, B]).await;
+    apply(&state).await;
+    let state = later(&state);
+    generate(&state).await;
+    let proposed = preview(&state).await;
+    assert_eq!(proposed["matching_placements"], 0);
+    assert_eq!(operations(&proposed), vec![("update".into(), ext(A).into()), ("update".into(), ext(B).into())]);
+}
+
+#[tokio::test]
+async fn matching_placements_excludes_retained_calendar_completed_history() {
+    let (state, recorder) = setup(&[A, B]).await;
+    apply(&state).await;
+    let mut observed = recorder.events().into_iter().find(|event| event.task_id == A).unwrap();
+    observed.color_id = Some("10".into());
+    recorder.place_event(observed);
+    let captured = ok(&state, "POST", "/projection/calendar/capture", json!({"schema_version":"ubu.orchestrator.calendar_capture.v1","export_mode":"mock"})).await;
+    assert_eq!(captured["updated"], 1);
+    assert_eq!(task(&state, A).await["status"], "completed");
+    // Regenerate and apply B's new placement. A remains only as history.
+    apply(&state).await;
+    let proposed = preview(&state).await;
+    assert!(proposed["events"].as_array().unwrap().iter().any(|event| event["task_id"] == A));
+    assert_eq!(retained(&proposed).len(), 1);
+    assert!(operations(&proposed).is_empty());
+    assert_eq!(proposed["matching_placements"], 1);
+    println!("P1B60_RETAINED={}", json!({"desired_events":proposed["events"].as_array().unwrap().len(),"retained":retained(&proposed).len(),"matching_placements":proposed["matching_placements"],"operations":proposed["operations"]}));
+}
