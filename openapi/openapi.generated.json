@@ -2998,7 +2998,7 @@
           },
           "matching_placements": {
             "type": "integer",
-            "description": "Current Plan placements matching the applied snapshot, excluding retained completed history.",
+            "description": "Current Dynamic Plan placements matching the applied snapshot; excludes Static commitments and retained completed history.",
             "minimum": 0
           },
           "operations": {

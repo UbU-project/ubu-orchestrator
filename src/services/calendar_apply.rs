@@ -179,6 +179,7 @@ pub async fn preview(
     }).collect();
     let matching_placements = desired.iter()
         .filter(|event| planned.contains(event.task_id.as_str())
+            && !static_tasks.contains(&event.task_id)
             && !retained.contains(&event.external_id)
             && !changed.contains(event.external_id.as_str()))
         .map(|event| event.external_id.as_str())

@@ -58,11 +58,19 @@ The ticket refers to `/task/:id/done`, but this repository's legacy endpoint onl
 
 A successful gesture updates the applied snapshot to the accepted observation, without a Calendar write. Repeated capture of the same completed coloured event does not complete it again, apply effects again, or append another Log entry. Projection retains calendar-completed events, including after regeneration removes the Task from the plan, so it does not erase the gesture or delete the event needed for reopening. This retention has no automatic history cleanup.
 
-From P1B-60, preview `matching_placements` counts current Plan placements whose
+P1B-60 defined preview `matching_placements` as all current Plan placements whose
 events already match UbU's applied snapshot and need no operation. It excludes
 retained completed history and entries outside the current Plan. Preview does
 not read Google; the count describes the applied snapshot, not a fresh calendar
 observation.
+
+From P1B-61 the same property counts **Dynamic placements only**: distinct
+current Plan event IDs with no operation, excluding Static commitments, retained
+completed history and entries outside the Plan. Static commitments are pinned
+to their own times, so including them diluted the planning count. No new response
+property is needed. The UI reads this number without arithmetic and states the
+Static timing rule in the same summary line. Zero matches does not imply a
+failed Plan: creates, updates and work not placed still have to be read beside it.
 
 ## Reopen only a Calendar completion
 

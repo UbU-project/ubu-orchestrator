@@ -285,3 +285,30 @@ async fn matching_placements_excludes_retained_calendar_completed_history() {
     assert_eq!(proposed["matching_placements"], 1);
     println!("P1B60_RETAINED={}", json!({"desired_events":proposed["events"].as_array().unwrap().len(),"retained":retained(&proposed).len(),"matching_placements":proposed["matching_placements"],"operations":proposed["operations"]}));
 }
+
+async fn pin_for_matching_test(state: &AppState, id: &str, start: &str, end: &str) {
+    ok(state, "PATCH", &format!("/task/{id}"), json!({"schema_version":"ubu.orchestrator.task_capture.v1","expected_version":1,"static_window":{"start":start,"end":end}})).await;
+}
+
+#[tokio::test]
+async fn matching_count_is_zero_for_static_only_plan() {
+    let (state, _) = setup(&[A, B]).await;
+    pin_for_matching_test(&state, A, "2026-09-29T10:00:00Z", "2026-09-29T10:30:00Z").await;
+    pin_for_matching_test(&state, B, "2026-09-29T11:00:00Z", "2026-09-29T11:30:00Z").await;
+    apply(&state).await;
+    let proposed = preview(&state).await;
+    assert_eq!(proposed["events"].as_array().unwrap().len(), 2);
+    assert!(operations(&proposed).is_empty());
+    assert_eq!(proposed["matching_placements"], 0);
+}
+
+#[tokio::test]
+async fn matching_count_in_a_mixed_plan_counts_only_dynamic_work() {
+    let (state, _) = setup(&[A, B]).await;
+    pin_for_matching_test(&state, A, "2026-09-29T10:00:00Z", "2026-09-29T10:30:00Z").await;
+    apply(&state).await;
+    let proposed = preview(&state).await;
+    assert_eq!(proposed["events"].as_array().unwrap().len(), 2);
+    assert!(operations(&proposed).is_empty());
+    assert_eq!(proposed["matching_placements"], 1);
+}
