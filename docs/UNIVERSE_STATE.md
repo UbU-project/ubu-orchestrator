@@ -239,8 +239,9 @@ doubled keys, and nothing reads them by name. The operator's store held no
   for each value.
 - **It authors no precondition.** A Task's `preconditions` are written through
   the Task routes.
-- **It has no advisor.** Nothing proposes a precondition or a fact. `proposed`
-  is a kind a mutation may state, and nothing here states it.
+- **This screen has no advisor.** Review can propose a Task precondition from
+  P1B-61, using only existing targets. It proposes no facts. `proposed` is a kind
+  a mutation may state, and nothing here states it.
 
 ## Tests
 

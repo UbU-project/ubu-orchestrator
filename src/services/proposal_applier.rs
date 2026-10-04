@@ -16,7 +16,8 @@ pub(crate) fn proposal_target(candidate: &AdvisoryCandidate) -> Result<&ObjectRe
         .and_then(|v| v.as_str());
     match (operation, candidate.candidate_kind) {
         (Some("add_tag" | "set_category"), CandidateKind::Tag)
-        | (Some("answer_questions"), CandidateKind::ClarificationQuestion) => {}
+        | (Some("answer_questions"), CandidateKind::ClarificationQuestion)
+        | (None, CandidateKind::Precondition) => {}
         _ => {
             return Err(AppError::UnsupportedProposal {
                 operation: operation.unwrap_or("<missing or non-string>").to_owned(),
@@ -189,6 +190,24 @@ pub fn apply_proposal(
             "advisory_answer_required",
             "A clarification proposal is admitted by answering its questions, not by Admit",
         ));
+    }
+    // The kind identifies set-preconditions. Replacement review context must
+    // still match canonical state; never discard a later operator edit.
+    if candidate.candidate_kind == CandidateKind::Precondition {
+        let (mut payload, mut task) = target_task(candidate, target)?;
+        if task.status != ubu_core::core::TaskStatus::Active || task.occurrence.is_some() {
+            return Err(refuse("advisory_target_inactive", "Only an active non-occurrence Task can receive a precondition"));
+        }
+        let (proposed, existing) = super::precondition_advisor::proposal_trees(&candidate.normalized_proposal)?;
+        if task.preconditions != existing {
+            return Err(AppError::conflict_diagnostic("advisory_precondition_changed", "The Task's precondition changed since this proposal; review a new proposal before replacing it"));
+        }
+        let precondition = serde_json::from_value(proposed.clone())
+            .map_err(|_| refuse("advisory_precondition_invalid", "The proposed precondition is malformed"))?;
+        task.preconditions = Some(precondition);
+        task.validate().map_err(|e| AppError::BadRequest(e.to_string()))?;
+        payload["preconditions"] = proposed.clone();
+        return Ok(rewritten(target, payload));
     }
     let category = candidate.normalized_proposal["operation"] == "set_category";
     let tag = candidate

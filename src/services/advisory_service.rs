@@ -182,13 +182,27 @@ async fn prepare(
             .ok_or_else(|| AppError::TargetNotFound {
                 id: target_ref.id.to_string(),
             })?;
+    let mut universe_observation = None;
+    if candidate.candidate_kind == ubu_core::CandidateKind::Precondition {
+        let current = super::planning_service::read_current_universe_state(state.inner().store.pool()).await?;
+        let Some((universe, version)) = current else {
+            return Err(AppError::conflict_diagnostic("advisory_precondition_stale", "The proposal no longer has recorded facts; nothing was admitted"));
+        };
+        let (proposed, _) = super::precondition_advisor::proposal_trees(&candidate.normalized_proposal)?;
+        let missing = super::precondition_advisor::validate_tree(proposed, &universe, crate::instance_mode::MVP_INSTANCE_MODE)
+            .map_err(|_| AppError::bad_request_diagnostic("advisory_precondition_invalid", "The proposed precondition cannot be evaluated in this instance"))?;
+        if !missing.is_empty() {
+            return Err(AppError::conflict_diagnostic("advisory_precondition_stale", "A target required by this proposal is no longer recorded; nothing was admitted"));
+        }
+        universe_observation = Some((universe.id, VersionRef::Version(u64::try_from(version).map_err(|_| AppError::Internal("invalid UniverseState version".into()))?)));
+    }
     let mut record = apply(&candidate, &target)?;
     let version = u64::try_from(target.version)
         .map_err(|_| AppError::Internal("target has an invalid store version".into()))?;
+    let mut observations = std::collections::BTreeMap::from([(target_ref.id.clone(), VersionRef::Version(version))]);
+    observations.extend(universe_observation);
     let envelope = state.envelope_for(
-        [(target_ref.id.clone(), VersionRef::Version(version))]
-            .into_iter()
-            .collect(),
+        observations,
         AuthoritySource::User,
         UbuTimestamp::now_utc(),
     )?;

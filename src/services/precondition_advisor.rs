@@ -350,3 +350,31 @@ pub async fn vet_result(
     result.proposed_candidates = accepted;
     Ok(())
 }
+
+/// Decode review context without trusting a replacement wrapper to discard fields.
+/// The stored prior tree may refer to a fact that has since been removed; only
+/// the proposed tree needs the current vocabulary/evaluation checks.
+pub fn proposal_trees(raw: &Value) -> Result<(&Value, Option<UniversePrecondition>)> {
+    let invalid = || {
+        AppError::bad_request_diagnostic(
+            "advisory_precondition_invalid",
+            "The precondition review payload is malformed",
+        )
+    };
+    if raw.get("existing_precondition").is_some() || raw.get("proposed_precondition").is_some() {
+        let object = raw.as_object().ok_or_else(invalid)?;
+        if object.len() != 2 {
+            return Err(invalid());
+        }
+        let old = object.get("existing_precondition").ok_or_else(invalid)?;
+        let proposed = object.get("proposed_precondition").ok_or_else(invalid)?;
+        let existing: UniversePrecondition =
+            serde_json::from_value(old.clone()).map_err(|_| invalid())?;
+        if serde_json::to_value(&existing).map_err(|_| invalid())? != *old {
+            return Err(invalid());
+        }
+        Ok((proposed, Some(existing)))
+    } else {
+        Ok((raw, None))
+    }
+}

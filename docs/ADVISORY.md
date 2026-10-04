@@ -375,3 +375,21 @@ A missing fact can later be authored, so blocked does not mean blocked forever.
 The advisor changes neither rule. It writes only through candidate enqueue,
 including its ordinary mutation-envelope metadata. It authors no facts and no
 `proposed` provenance, and it does not move Tasks or write Task preconditions.
+
+### Admission of a precondition
+
+Admit uses the existing candidate route and atomic ordinary admission writer.
+The kind identifies the set-preconditions action. A bare tree expects no prior
+precondition; a replacement pair expects exactly its reviewed existing tree.
+Admission sets only `Task.preconditions` to the proposed tree,
+preserving placement and all other Task fields. It revalidates against current
+UniverseState and observes both the Task and UniverseState versions in its
+mutation envelope. A target cleared after proposal therefore refuses admission.
+No UniverseState, fact or provenance is written by admission.
+
+A Task whose precondition differs from the reviewed prior state is refused with
+`advisory_precondition_changed`, including a condition added, changed or cleared
+while the candidate waited. An unchanged prior tree may be explicitly replaced.
+A second admission is refused (409), not applied twice. Reject, defer and resurface use the existing
+lifecycle, and a deferred candidate cannot be admitted until resurfaced. The
+next generated Plan evaluates the admitted precondition against current facts.
