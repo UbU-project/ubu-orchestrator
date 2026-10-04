@@ -41,7 +41,7 @@ pub async fn run_advisory<T: AdvisoryTransport + ?Sized>(
 ) -> Result<AdvisoryRunReport> {
     submission.validate()?;
     let _guard = state.inner().advisory_run_lock.lock().await;
-    let result = transport.submit(&submission).unwrap_or_else(|_| super::advisory_wire::failed(&submission, super::advisory_wire::Failure::Connection));
+    let mut result = transport.submit(&submission).unwrap_or_else(|_| super::advisory_wire::failed(&submission, super::advisory_wire::Failure::Connection));
     let mut report = AdvisoryRunReport {
         submission_id: submission.submission_id.clone(),
         status: result.status,
@@ -49,7 +49,7 @@ pub async fn run_advisory<T: AdvisoryTransport + ?Sized>(
         candidates_rejected: 0,
         candidates_suppressed: 0,
         candidate_ids: Vec::new(),
-        proposals: result.proposed_candidates.iter().map(|candidate| json!({"target_refs":candidate.target_refs,"normalized_proposal":candidate.normalized_proposal,"confidence":candidate.confidence})).collect(),
+        proposals: result.proposed_candidates.iter().filter(|candidate| candidate.candidate_kind != ubu_core::CandidateKind::Precondition).map(|candidate| json!({"target_refs":candidate.target_refs,"normalized_proposal":candidate.normalized_proposal,"confidence":candidate.confidence})).collect(),
         diagnostics: result.diagnostics.clone(),
         validation_error: None,
     };
@@ -61,6 +61,11 @@ pub async fn run_advisory<T: AdvisoryTransport + ?Sized>(
         report.validation_error = Some(error.to_string());
         return Ok(report);
     }
+
+    super::precondition_advisor::vet_result(state, &mut result).await?;
+    report.status = result.status;
+    report.diagnostics = result.diagnostics.clone();
+    report.proposals = result.proposed_candidates.iter().map(|candidate| json!({"target_refs":candidate.target_refs,"normalized_proposal":candidate.normalized_proposal,"confidence":candidate.confidence})).collect();
 
     report.candidates_rejected = result
         .proposed_candidates
@@ -79,11 +84,11 @@ pub async fn run_advisory<T: AdvisoryTransport + ?Sized>(
             report.diagnostics.push(json!({"code":"advisory_proposal_suppressed","message":"A previously rejected proposal was suppressed; it was not re-enqueued"}));
             continue;
         }
-        if candidate.normalized_proposal["operation"] == "set_category" {
+        if candidate.normalized_proposal["operation"] == "set_category" || candidate.candidate_kind == ubu_core::CandidateKind::Precondition {
             let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM advisory_candidates WHERE suppression_key=?)")
                 .bind(key).fetch_one(state.inner().store.pool()).await.map_err(|e|AppError::Internal(e.to_string()))?;
             if exists {
-                report.diagnostics.push(json!({"code":"advisory_proposal_already_queued","message":"This category proposal already has a durable candidate; no duplicate was enqueued"}));
+                report.diagnostics.push(json!({"code":"advisory_proposal_already_queued","message":"This proposal already has a durable candidate; no duplicate was enqueued"}));
                 continue;
             }
         }

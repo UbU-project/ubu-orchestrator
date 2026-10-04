@@ -3,7 +3,7 @@ use crate::services::advisory_wire::SelectedTask;
 use crate::{
     api::planning::DiagnosticBody,
     errors::{AppError, Result},
-    services::{advisory_service, clarify, setting_authoring, suggest_tags},
+    services::{advisory_service, clarify, setting_authoring, suggest_tags, precondition_advisor},
     state::AppState,
 };
 use axum::{extract::State, Json};
@@ -16,9 +16,9 @@ pub const ADVISORY_RUN_SCHEMA_VERSION: &str = "ubu.orchestrator.advisory_run.v1"
 #[serde(deny_unknown_fields)]
 pub struct AdvisoryRunRequest {
     pub schema_version: Option<String>,
-    /// `suggest_tags` or `clarify`.
+    /// `suggest_tags`, `clarify` or `precondition`.
     pub producer: String,
-    /// `suggest_tags` only: how many Tasks to select.
+    /// `suggest_tags` or `precondition`: how many Tasks to select.
     pub limit: Option<usize>,
     /// `clarify` only: the Task to interview. Omitted, the first Task with no description.
     pub task_id: Option<String>,
@@ -61,12 +61,12 @@ pub async fn run(
         }
     }
     let interview = match request.producer.as_str() {
-        "suggest_tags" => false,
+        "suggest_tags" | "precondition" => false,
         "clarify" => true,
         _ => {
             return Err(AppError::bad_request_diagnostic(
                 "advisory_unknown_producer",
-                "The producers are suggest_tags and clarify",
+                "The producers are suggest_tags, clarify and precondition",
             ))
         }
     };
@@ -80,7 +80,7 @@ pub async fn run(
     if !interview && request.task_id.is_some() {
         return Err(AppError::bad_request_diagnostic(
             "advisory_task_id_unsupported",
-            "suggest_tags selects its own Tasks and takes no task_id; use limit",
+            "This producer selects its own Tasks and takes no task_id; use limit",
         ));
     }
     let limit = request.limit.unwrap_or(suggest_tags::DEFAULT_LIMIT);
@@ -90,7 +90,8 @@ pub async fn run(
             "limit must be between 1 and 25",
         ));
     }
-    let producer = if interview { "Clarify" } else { "SuggestTags" };
+    let preconditions = request.producer == "precondition";
+    let producer = if interview { "Clarify" } else if preconditions { "Precondition" } else { "SuggestTags" };
     let mut response = AdvisoryRunResponse {
         schema_version: ADVISORY_RUN_SCHEMA_VERSION.into(),
         status: "unconfigured".into(),
@@ -141,7 +142,17 @@ pub async fn run(
         return Ok(Json(response));
     };
     let mut skipped = Vec::new();
-    let submission = if interview {
+    let submission = if preconditions {
+        let (context, diagnostics) = precondition_advisor::select(&state, limit).await?;
+        skipped = diagnostics;
+        response.selected = context.tasks.iter().map(|task| SelectedTask { id: task.id.clone(), title: task.title.clone() }).collect();
+        if context.tasks.is_empty() || context.targets.is_empty() {
+            response.status = "ok".into();
+            response.diagnostics = skipped;
+            return Ok(Json(response));
+        }
+        precondition_advisor::submission(&state, &context, &model.unwrap()).await?
+    } else if interview {
         // Both refusals below come before any transport is constructed or model asked.
         let named = request.task_id.as_deref();
         let context = match clarify::select(&state, named).await? {

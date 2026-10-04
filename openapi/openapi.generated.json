@@ -2256,12 +2256,12 @@
               "integer",
               "null"
             ],
-            "description": "`suggest_tags` only: how many Tasks to select.",
+            "description": "`suggest_tags` or `precondition`: how many Tasks to select.",
             "minimum": 0
           },
           "producer": {
             "type": "string",
-            "description": "`suggest_tags` or `clarify`."
+            "description": "`suggest_tags`, `clarify` or `precondition`."
           },
           "schema_version": {
             "type": [

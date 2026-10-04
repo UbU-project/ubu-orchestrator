@@ -236,7 +236,9 @@ These two kinds of text are different, and the difference is the point:
   configured and pointed the orchestrator at himself. It is read only from a
   response whose status is outside 2xx. No other field of that body is read.
 - **Generated text** is untrusted content. It is parsed as a proposal or it is
-  refused. It is never copied into a diagnostic, a Log entry or a response.
+  refused. It is never copied as free text into a diagnostic, a Log entry or a response.
+  P1B-61 permits only bounded, syntax-checked target identifiers in a missing-target
+  diagnostic, as specified below; expected values and descriptions are never echoed there.
 
 ### An empty answer is a failure
 
@@ -329,3 +331,47 @@ candidates, not patterns. Uncaptured recurring commitments still occupy no
 planning capacity; see the temporary **Busy** blocking-event workaround in
 [Calendar bootstrap](CALENDAR_BOOTSTRAP.md). Calendar export still records no
 approver, and the Routines screen still cannot clear an override.
+
+## P1B-61: propose a precondition
+
+`POST /advisory/run` accepts `producer: "precondition"` and the existing optional
+`limit` (default 5, maximum 25). It selects active, described, non-occurrence
+Tasks, ordered by ID, including those with an existing precondition. Skipped
+Tasks are diagnosed, up to 25 individually and the rest counted. The candidate
+shows what explicit admission would replace; proposing changes no Task.
+An empty vocabulary gives `precondition_no_facts` without a model call or write.
+
+The model receives Task IDs, titles and descriptions, and the current supported
+UniverseState target names, not its values or provenance. It receives the seven
+core predicates and a response schema whose target enum is that vocabulary.
+Descriptions and target names are data, never instructions. All fixtures are
+invented. A response has `proposals: [{id, precondition}]`; the normalized
+candidate proposal is the tree itself for a Task with no prior precondition.
+For a replacement it is `{existing_precondition, proposed_precondition}`, both
+trees. The controller reads the existing tree from canonical state after model
+validation; it never trusts the model to supply it and does not send that tree
+to the model. Both trees participate in durable duplicate/suppression identity.
+Candidate target_refs names one Task.
+
+The controller validates before enqueueing, even for injected transports. It
+checks the instance mode, strict tree shape, every leaf with core's evaluator,
+and the whole tree. Every branch is checked despite boolean short-circuiting.
+Trees are bounded to 128 nodes and depth 16. Malformed output gives
+`advisory_malformed_result` and no candidate from the batch. Valid trees with
+missing targets give one information diagnostic per Task and no candidate for
+that Task. Repeated identical proposals do not duplicate the durable queue.
+
+Only target identifiers of at most 128 ASCII bytes, with a recognized collection
+and nonempty dot-separated alphanumeric/underscore/hyphen segments, may appear
+in `precondition_missing_targets`. The first three are named and remaining
+unique names counted. Arbitrary model text, expected values and descriptions
+are not copied into this diagnostic. This is the operator-approved narrow
+exception to the generated-text rule above, not permission to echo model prose.
+
+The safety restriction is stronger than predicate evaluation: every leaf must
+name an existing target, including `absent`. Contrary to the ticket's original
+explanation, `absent` is true for a missing target; numeric comparisons are false.
+A missing fact can later be authored, so blocked does not mean blocked forever.
+The advisor changes neither rule. It writes only through candidate enqueue,
+including its ordinary mutation-envelope metadata. It authors no facts and no
+`proposed` provenance, and it does not move Tasks or write Task preconditions.
