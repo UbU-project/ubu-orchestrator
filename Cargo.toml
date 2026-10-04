@@ -22,11 +22,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 utoipa = { version = "5", features = ["axum_extras"] }
 
-ubu_core = { git = "https://github.com/UbU-project/ubu-core", rev = "8ffc936257331c50cd03773c9d1333a3344cf4cc" }
-ubu_store = { git = "https://github.com/UbU-project/ubu-store", rev = "a6ae9b82170b03e231a196d1b9341bfa0e20fce8" }
-ubu_github_adapter = { git = "https://github.com/UbU-project/ubu-github-adapter", rev = "999e0e2f50388db6c5b999449c8620c750f288cf" }
-ubu_planning_core = { git = "https://github.com/UbU-project/ubu-planning-kernel", rev = "072867285ba267bb9caee28a12fb33c6ede51c2b", package = "ubu_planning_core" }
-ubu_planning_cpu = { git = "https://github.com/UbU-project/ubu-planning-kernel", rev = "072867285ba267bb9caee28a12fb33c6ede51c2b", package = "ubu_planning_cpu" }
+ubu_core = { git = "https://github.com/UbU-project/ubu-core", rev = "c4b624d76f210f77f865c61801e02c89219763ce" }
+ubu_store = { git = "https://github.com/UbU-project/ubu-store", rev = "c62eabc5983db554d3b57f694fe49d6597fe3ea8" }
+ubu_github_adapter = { git = "https://github.com/UbU-project/ubu-github-adapter", rev = "50fae565e6d48fb5c41107ab3259096ad243ccf3" }
+ubu_planning_core = { git = "https://github.com/UbU-project/ubu-planning-kernel", rev = "8af10ece07043c307fe351ac867cfd8449e08c4f", package = "ubu_planning_core" }
+ubu_planning_cpu = { git = "https://github.com/UbU-project/ubu-planning-kernel", rev = "8af10ece07043c307fe351ac867cfd8449e08c4f", package = "ubu_planning_cpu" }
 
 
 [dev-dependencies]
