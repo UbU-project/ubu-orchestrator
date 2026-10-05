@@ -37,7 +37,8 @@ pub const MAX_MISSING_NAMED: usize = 3;
 pub struct DescribedTask {
     pub id: String,
     pub title: String,
-    pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -105,12 +106,12 @@ pub async fn select(state: &AppState, limit: usize) -> Result<(Context, Vec<Diag
             serde_json::from_str(&raw).map_err(|e| AppError::Internal(e.to_string()))?;
         let reason = if task.occurrence.is_some() {
             Some("is a routine occurrence; edit its template instead")
-        } else if task
+        } else if task.title.trim().is_empty() && task
             .description
             .as_deref()
             .is_none_or(|s| s.trim().is_empty())
         {
-            Some("has no description to reason over")
+            Some("has neither a title nor a description to reason over")
         } else {
             None
         };
@@ -126,7 +127,7 @@ pub async fn select(state: &AppState, limit: usize) -> Result<(Context, Vec<Diag
             tasks.push(DescribedTask {
                 id: task.id.to_string(),
                 title: task.title,
-                description: task.description.unwrap(),
+                description: task.description.filter(|text| !text.trim().is_empty()),
             });
         }
     }
@@ -134,7 +135,7 @@ pub async fn select(state: &AppState, limit: usize) -> Result<(Context, Vec<Diag
         diagnostics.push(DiagnosticBody {
             code: "precondition_task_skipped".into(),
             message: format!(
-                "{} more Tasks were skipped: they are routine occurrences or have no description",
+                "{} more Tasks were skipped: they are routine occurrences or have neither a title nor a description",
                 skipped - suggest_tags::MAX_LIMIT
             ),
         });

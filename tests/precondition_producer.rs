@@ -6,6 +6,52 @@ use ubu_core::core::{InstanceMode, UniverseState};
 use ubu_orchestrator::services::{advisory_wire, precondition_advisor};
 
 #[tokio::test]
+async fn title_only_task_is_selected_and_its_prompt_omits_description() {
+    let (state, stub) = ready(tree()).await;
+    fact(&state, 0.0).await;
+    seed(&state, B, "active", json!({})).await;
+    let before = canonical_rows(&state).await;
+    assert_eq!(run(&state).await["candidates_enqueued"], 2);
+    assert_eq!(canonical_rows(&state).await, before);
+    let sub = &stub.submissions.lock().unwrap()[0];
+    let wire = advisory_wire::request_body(sub).unwrap();
+    let prompt: Value = serde_json::from_str(wire["prompt"].as_str().unwrap()).unwrap();
+    assert_eq!(prompt["tasks"][0], json!({"id":A,"title":"Synthetic lunar teapot 0","description":"Synthetic orbital teapot launch requires at least 25 charge units."}));
+    assert_eq!(prompt["tasks"][1], json!({"id":B,"title":"Synthetic lunar teapot 1"}));
+    assert!(prompt["tasks"][1].get("description").is_none());
+    let system = wire["system"].as_str().unwrap();
+    assert!(system.starts_with("Propose at most one necessary precondition per Task from its title and description."));
+    assert!(system.contains("A Task may arrive with no description, and its title is then the whole of what is known about it."));
+}
+
+#[tokio::test]
+async fn only_routines_and_tasks_with_neither_title_nor_description_are_skipped() {
+    let (state, _) = ready(tree()).await;
+    fact(&state, 0.0).await;
+    seed(&state, B, "active", json!({"title":" \t", "description":" \n"})).await;
+    let routine = "task_018f3c8e9b2a7c4d8f1e2a3b4c5d6e72";
+    seed(&state, routine, "active", json!({"occurrence":{"routine_objective_id":"obj_018f3c8e9b2a7c4d8f1e2a3b4c5d8e01","local_date":"2026-09-29","key":"synthetic-occurrence"}})).await;
+    let (context, diagnostics) = precondition_advisor::select(&state, 25).await.unwrap();
+    assert_eq!(context.tasks.len(), 1);
+    assert_eq!(context.tasks[0].id, A);
+    assert_eq!(diagnostics.len(), 2);
+    assert_eq!(diagnostics[0].message, format!("Task `{B}` has neither a title nor a description to reason over"));
+    assert_eq!(diagnostics[1].message, format!("Task `{routine}` is a routine occurrence; edit its template instead"));
+}
+
+#[tokio::test]
+async fn blank_description_is_omitted_and_description_only_task_is_eligible() {
+    let (state, _) = ready(tree()).await;
+    fact(&state, 0.0).await;
+    seed(&state, B, "active", json!({"description":" \n"})).await;
+    let (context, _) = precondition_advisor::select(&state, 25).await.unwrap();
+    assert!(serde_json::to_value(&context).unwrap()["tasks"][1].get("description").is_none());
+    seed(&state, "task_018f3c8e9b2a7c4d8f1e2a3b4c5d6e72", "active", json!({"title":"", "description":"Synthetic description-only work"})).await;
+    assert_eq!(precondition_advisor::select(&state, 25).await.unwrap().0.tasks.len(), 3);
+    assert!(serde_json::from_value::<precondition_advisor::DescribedTask>(json!({"id":B,"title":"Synthetic","extra":true})).is_err());
+}
+
+#[tokio::test]
 async fn existing_fact_enqueues_one_candidate_and_only_its_store_metadata_changes() {
     let (state, stub) = ready(tree()).await;
     fact(&state, 0.0).await;
