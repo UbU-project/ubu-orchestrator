@@ -71,8 +71,8 @@ async fn existing_fact_enqueues_one_candidate_and_only_its_store_metadata_change
         "fact values are not model input"
     );
     assert_eq!(
-        wire["format"]["$defs"]["tree"]["oneOf"][2]["properties"]["predicate"]["enum"],
-        json!(precondition_advisor::PREDICATES)
+        wire["format"]["$defs"]["leaf"]["oneOf"][2]["properties"]["predicate"]["enum"],
+        json!(["at_least", "at_most", "greater_than", "less_than"])
     );
     assert_eq!(
         result["report"]["proposals"][0]["normalized_proposal"],

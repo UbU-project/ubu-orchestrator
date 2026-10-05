@@ -82,6 +82,79 @@ pub fn targets(state: &UniverseState) -> BTreeSet<String> {
     .collect()
 }
 
+/// Supported targets partition themselves by collection; no Settings configure
+/// which predicates a vocabulary can support.
+#[derive(Debug, PartialEq, Eq)]
+pub struct TargetPartitions {
+    pub all: Vec<String>,
+    pub numbers: Vec<String>,
+    pub memberships: Vec<String>,
+}
+
+pub fn partition_targets(vocabulary: &[String]) -> TargetPartitions {
+    let all: Vec<_> = vocabulary
+        .iter()
+        .filter(|target| valid_target(target))
+        .cloned()
+        .collect();
+    let collection = |name: &str| {
+        all.iter()
+            .filter(|target| {
+                target
+                    .split_once('.')
+                    .is_some_and(|(prefix, _)| prefix == name)
+            })
+            .cloned()
+            .collect()
+    };
+    TargetPartitions {
+        numbers: collection("numeric_values"),
+        memberships: collection("set_memberships"),
+        all,
+    }
+}
+
+pub const SCHEMA_LEVELS: usize = 3;
+pub const SCHEMA_GROUP_ITEMS: usize = 10;
+
+/// A conservative model grammar, not a relaxation of the admission validator.
+/// Three levels of ten-way groups permit at most 1 + 10 + 100 = 111 nodes.
+pub fn response_schema(context: &Context) -> Option<Value> {
+    let vocabulary = partition_targets(&context.targets);
+    if context.tasks.is_empty() || vocabulary.all.is_empty() {
+        return None;
+    }
+    let scalar = json!({"type":["string","number","boolean"]});
+    let mut leaves = vec![
+        json!({"type":"object","additionalProperties":false,"required":["target","predicate"],"properties":{"target":{"type":"string","enum":vocabulary.all},"predicate":{"const":"absent"}}}),
+        json!({"type":"object","additionalProperties":false,"required":["target","predicate","expected"],"properties":{"target":{"type":"string","enum":vocabulary.all},"predicate":{"const":"equals"},"expected":scalar}}),
+    ];
+    if !vocabulary.memberships.is_empty() {
+        leaves.push(json!({"type":"object","additionalProperties":false,"required":["target","predicate","expected"],"properties":{"target":{"type":"string","enum":vocabulary.memberships},"predicate":{"const":"member_of"},"expected":scalar}}));
+    }
+    if !vocabulary.numbers.is_empty() {
+        leaves.push(json!({"type":"object","additionalProperties":false,"required":["target","predicate","expected"],"properties":{"target":{"type":"string","enum":vocabulary.numbers},"predicate":{"type":"string","enum":["at_least","at_most","greater_than","less_than"]},"expected":{"type":"number"}}}));
+    }
+    let mut definitions = serde_json::Map::new();
+    definitions.insert("leaf".into(), json!({"oneOf":leaves}));
+    for (name, child) in [("group", "leaf"), ("tree", "group")] {
+        let reference = format!("#/$defs/{child}");
+        let mut branches = vec![json!({"$ref":"#/$defs/leaf"})];
+        for operator in ["all_of", "any_of"] {
+            branches.push(json!({"type":"object","additionalProperties":false,"required":[operator],"properties":{operator:{"type":"array","minItems":1,"maxItems":SCHEMA_GROUP_ITEMS,"items":{"$ref":reference}}}}));
+        }
+        definitions.insert(name.into(), json!({"oneOf":branches}));
+    }
+    let ids: Vec<_> = context.tasks.iter().map(|task| &task.id).collect();
+    Some(
+        json!({"type":"object","additionalProperties":false,"required":["proposals"],
+        "properties":{"proposals":{"type":"array","maxItems":context.tasks.len(),"items":{
+            "type":"object","additionalProperties":false,"required":["id","precondition"],
+            "properties":{"id":{"type":"string","enum":ids},"precondition":{"$ref":"#/$defs/tree"}}}}},
+        "$defs":definitions}),
+    )
+}
+
 pub async fn current(state: &AppState) -> Result<UniverseState> {
     Ok(
         planning_service::read_current_universe_state(state.inner().store.pool())
@@ -106,10 +179,11 @@ pub async fn select(state: &AppState, limit: usize) -> Result<(Context, Vec<Diag
             serde_json::from_str(&raw).map_err(|e| AppError::Internal(e.to_string()))?;
         let reason = if task.occurrence.is_some() {
             Some("is a routine occurrence; edit its template instead")
-        } else if task.title.trim().is_empty() && task
-            .description
-            .as_deref()
-            .is_none_or(|s| s.trim().is_empty())
+        } else if task.title.trim().is_empty()
+            && task
+                .description
+                .as_deref()
+                .is_none_or(|s| s.trim().is_empty())
         {
             Some("has neither a title nor a description to reason over")
         } else {
