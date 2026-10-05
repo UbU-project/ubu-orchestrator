@@ -342,9 +342,16 @@ counted in one further line. The candidate
 shows what explicit admission would replace; proposing changes no Task.
 An empty vocabulary gives `precondition_no_facts` without a model call or write.
 
-The model receives Task IDs, titles with or without descriptions, and the current supported
-UniverseState target names, not its values or provenance. It receives the seven
-core predicates and a response schema whose target enum is that vocabulary.
+The model receives Task IDs, titles with or without descriptions, and the current
+supported UniverseState target names, not its values or provenance. From P1B-64,
+the response schema offers only predicates that vocabulary supports. `equals`
+and `absent` use the whole vocabulary; `member_of` uses only `set_memberships`
+targets; the four comparisons use only `numeric_values` targets. An empty
+partition contributes neither its branch nor its predicates. Facts alone offer
+exactly `equals` and `absent`. The partition is derived from target prefixes,
+never configured. Each leaf's grammar requires or forbids `expected`:
+`absent` forbids it; equals and membership require a string, number or boolean;
+comparisons require a number. Null is excluded.
 From P1B-63, a missing or whitespace-only description is omitted from the model
 payload. The title is then the whole known account of the work. A title is on
 screen; the earlier described-only gate made this producer unreachable on a
@@ -358,12 +365,24 @@ trees. The controller reads the existing tree from canonical state after model
 validation; it never trusts the model to supply it and does not send that tree
 to the model. Both trees participate in durable duplicate/suppression identity.
 Candidate target_refs names one Task.
+Evidence refs always name `<task-id>:title`, and also
+`<task-id>:description` when that field was supplied to the model. They name
+input fields, not a claim that the model's hidden reasoning used each field.
 
 The controller validates before enqueueing, even for injected transports. It
 checks the instance mode, strict tree shape, every leaf with core's evaluator,
 and the whole tree. Every branch is checked despite boolean short-circuiting.
-Trees are bounded to 128 nodes and depth 16. Malformed output gives
-`advisory_malformed_result` and no candidate from the batch. Valid trees with
+Trees are bounded to 128 nodes and depth 16. A refused proposal gives
+`precondition_proposal_refused` and loses only its own candidate; surviving
+proposals remain and the run stays `ok`, even when every proposal is refused.
+The diagnostic explains the refusal with code-authored text, naming up to three
+Tasks, then counting further refused Tasks without identifiers or targets.
+Diagnostics already recorded in the run are preserved. Tasks that become
+ineligible at the controller recheck follow the same three-named-then-count
+rule. `advisory_malformed_result` means the response could not be decoded as a
+proposal result at all, rather than that one tree was refused. Existing
+transport failures and oversized-response rejection retain their codes and
+statuses. Valid trees with
 missing targets give one information diagnostic per Task for the first three,
 then one count of further Tasks without ids or targets. No candidate is enqueued
 for those Tasks. Repeated identical proposals do not duplicate the durable queue.
@@ -382,6 +401,54 @@ A missing fact can later be authored, so blocked does not mean blocked forever.
 The advisor changes neither rule. It writes only through candidate enqueue,
 including its ordinary mutation-envelope metadata. It authors no facts and no
 `proposed` provenance, and it does not move Tasks or write Task preconditions.
+
+### The schema is a conservative contract (P1B-64)
+
+Every tree admitted by the model's format schema must pass the unchanged
+validator against the matching current vocabulary in this user-mode instance.
+Every tree refused by that validator must also be refused by the schema. This
+is a safe subset contract, not equality of the two accepted sets. The validator
+continues to check strict shape, non-empty groups, every leaf, instance mode,
+whole-tree evaluation and existing targets before enqueue or admission.
+
+The operator approved three corrections to the ticket's proposed contract:
+
+1. **Keep the validator and describe the schema as a subset.**
+   `UNIVERSE_STATE.md` permits facts containing any JSON value, and core equality
+   can evaluate object/array expectations. The existing validator accepts them.
+   Scalar-only output and shallower trees therefore cannot describe exactly the
+   validator's set. Restricting the validator would break existing authoring and
+   admission; expanding the grammar to every supported JSON expectation would
+   enlarge the small model's grammar and withdraw the ticket's scalar-only
+   choice. Keeping the established evaluator and testing the safe-subset
+   relationship preserves both contracts honestly.
+2. **Use three levels and ten children per group.** A root group may contain
+   groups of leaves; a leaf may also appear at either earlier level. Root depth
+   is zero, so the deepest model leaf has depth two. There are no recursive
+   schema cycles. The largest tree has `1 + 10 + 100 = 111` nodes, inside the
+   validator's 128-node bound. Limiting depth alone while retaining 128 children
+   would admit oversized trees. Fully expanding to depth 16 or enumerating
+   combinations to use all 128 nodes would make the grammar much larger without
+   making an operator's condition easier to read. The conservative limit is
+   explicit; the validator's depth 16 and 128 nodes remain unchanged.
+3. **Make the prompt's predicate count truthful.** “The seven allowed
+   predicates” is replaced by “the predicates allowed by the response schema.”
+   Keeping seven would contradict a facts-only format with two predicates;
+   rewriting the whole prompt would needlessly alter its other constraints.
+   Only this approved phrase and the two now-redundant collection/expected
+   sentences change; every remaining sentence is preserved.
+
+The representative tree table tests both schema membership and validation,
+including equals without expected, comparisons over facts, the intentional
+non-scalar/depth/breadth subset exclusions, and the 111/131-node boundaries.
+Schema tests interpret the built JSON Schema keywords independently of
+precondition semantics, without a new dependency or process. Refusal reasons
+separate bounds, group shape, leaf fields, expected presence, decoding, null,
+mode and evaluator errors. Core evaluator messages are taken only after target
+and predicate validation; they identify the required kind, never the supplied
+expectation. No model prose, expected value or description is copied into a
+refusal diagnostic. No core predicate, admission rule or vocabulary advisor
+is added.
 
 ### Admission of a precondition
 
