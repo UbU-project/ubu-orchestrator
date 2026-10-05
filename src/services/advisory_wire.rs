@@ -165,7 +165,7 @@ fn http_failed(sub: &LocalAdvisorySubmission, status: u16, bytes: &[u8]) -> Loca
         )}),
     )
 }
-fn empty_result(sub: &LocalAdvisorySubmission) -> LocalAdvisoryResult {
+pub(super) fn empty_result(sub: &LocalAdvisorySubmission) -> LocalAdvisoryResult {
     LocalAdvisoryResult {
         submission_id: sub.submission_id.clone(),
         authority: sub.authority.clone(),
@@ -205,6 +205,7 @@ fn clarify_request_body(sub: &LocalAdvisorySubmission) -> Result<Value, Failure>
 }
 
 pub fn request_body(sub: &LocalAdvisorySubmission) -> Result<Value, Failure> {
+    if sub.expected_result_schema == super::precondition_review::RESULT_SCHEMA { return super::precondition_review::request_body(sub); }
     if sub.expected_result_schema == super::precondition_advisor::RESULT_SCHEMA { return precondition_request_body(sub); }
     if sub.expected_result_schema == CLARIFY_RESULT_SCHEMA {
         return clarify_request_body(sub);
@@ -237,7 +238,7 @@ pub fn append_chunk(body: &mut Vec<u8>, chunk: &[u8], limit: u64) -> Result<(), 
 
 // Allocate deterministic child identities from the submission's UUIDv7 seed.
 // Only the low 48 random bits change; version, variant and timestamp stay intact.
-fn candidate_id(sub: &LocalAdvisorySubmission, index: usize) -> Option<AdvisoryCandidateId> {
+pub(super) fn candidate_id(sub: &LocalAdvisorySubmission, index: usize) -> Option<AdvisoryCandidateId> {
     let seed = sub.submission_id.strip_prefix("advcand_")?;
     AdvisoryCandidateId::parse(&sub.submission_id).ok()?;
     let tail = u64::from_str_radix(seed.get(20..)?, 16).ok()?;
@@ -318,6 +319,10 @@ pub fn interpret(sub: &LocalAdvisorySubmission, status: u16, bytes: &[u8]) -> Lo
             return empty_response(sub, thinking_present);
         }
     }
+    if sub.expected_result_schema == super::precondition_review::RESULT_SCHEMA {
+        let result = super::precondition_review::interpret(sub, bytes).unwrap_or_else(|| diagnosed(sub, LocalAdvisoryResultStatus::MalformedResult, json!({"code":"advisory_malformed_result","message":"The model response was not a valid precondition review; no candidates were enqueued"})));
+        return if serde_json::to_vec(&result).map_or(true, |b|b.len() as u64 > sub.result_size_limit_bytes) { failed(sub, Failure::TooLarge) } else { result };
+    }
     let parse = || -> Option<Vec<AdvisoryCandidate>> {
         let wire: Value = serde_json::from_slice(bytes).ok()?;
         if wire["done"] != true {
@@ -384,7 +389,7 @@ pub fn interpret(sub: &LocalAdvisorySubmission, status: u16, bytes: &[u8]) -> Lo
     result
 }
 
-fn precondition_request_body(sub: &LocalAdvisorySubmission) -> Result<Value, Failure> {
+pub(super) fn precondition_request_body(sub: &LocalAdvisorySubmission) -> Result<Value, Failure> {
     use super::precondition_advisor::{Context, PREDICATES};
     let context: Context = serde_json::from_value(sub.payload.clone()).map_err(|_| Failure::Malformed)?;
     if context.tasks.is_empty() || context.targets.is_empty() { return Err(Failure::Malformed); }

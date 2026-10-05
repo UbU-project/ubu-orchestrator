@@ -3,7 +3,7 @@ use crate::services::advisory_wire::SelectedTask;
 use crate::{
     api::planning::DiagnosticBody,
     errors::{AppError, Result},
-    services::{advisory_service, clarify, setting_authoring, suggest_tags, precondition_advisor},
+    services::{advisory_service, clarify, setting_authoring, suggest_tags, precondition_advisor, precondition_review},
     state::AppState,
 };
 use axum::{extract::State, Json};
@@ -61,12 +61,12 @@ pub async fn run(
         }
     }
     let interview = match request.producer.as_str() {
-        "suggest_tags" | "precondition" => false,
+        "suggest_tags" | "precondition" | "precondition_review" => false,
         "clarify" => true,
         _ => {
             return Err(AppError::bad_request_diagnostic(
                 "advisory_unknown_producer",
-                "The producers are suggest_tags, clarify and precondition",
+                "The producers are suggest_tags, clarify, precondition and precondition_review",
             ))
         }
     };
@@ -142,7 +142,12 @@ pub async fn run(
         return Ok(Json(response));
     };
     let mut skipped = Vec::new();
-    let submission = if preconditions {
+    let submission = if request.producer == "precondition_review" {
+        let context = precondition_review::select(&state, limit).await?;
+        response.selected = context.tasks.iter().map(|t|SelectedTask { id:t.id.clone(),title:String::new() }).collect();
+        if context.tasks.is_empty() { response.status = "ok".into(); return Ok(Json(response)); }
+        precondition_review::submission(&state, &context, &model.unwrap()).await?
+    } else if preconditions {
         let (context, diagnostics) = precondition_advisor::select(&state, limit).await?;
         skipped = diagnostics;
         response.selected = context.tasks.iter().map(|task| SelectedTask { id: task.id.clone(), title: task.title.clone() }).collect();

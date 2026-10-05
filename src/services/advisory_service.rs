@@ -62,7 +62,9 @@ pub async fn run_advisory<T: AdvisoryTransport + ?Sized>(
         return Ok(report);
     }
 
-    super::precondition_advisor::vet_result(state, &mut result).await?;
+    if submission.expected_result_schema == super::precondition_review::RESULT_SCHEMA {
+        super::precondition_review::vet_result(state, &submission, &mut result).await?;
+    } else { super::precondition_advisor::vet_result(state, &mut result).await?; }
     report.status = result.status;
     report.diagnostics = result.diagnostics.clone();
     report.proposals = result.proposed_candidates.iter().map(|candidate| json!({"target_refs":candidate.target_refs,"normalized_proposal":candidate.normalized_proposal,"confidence":candidate.confidence})).collect();

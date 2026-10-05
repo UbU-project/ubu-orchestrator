@@ -393,3 +393,17 @@ while the candidate waited. An unchanged prior tree may be explicitly replaced.
 A second admission is refused (409), not applied twice. Reject, defer and resurface use the existing
 lifecycle, and a deferred candidate cannot be admitted until resurfaced. The
 next generated Plan evaluates the admitted precondition against current facts.
+
+## P1B-62: review an admitted precondition
+
+`producer: "precondition_review"` uses the same manual run route. Active,
+non-occurrence Tasks with a precondition are eligible, including a Task with an
+empty description. The model sees each Task's ID, description, current requirement
+in exactly the words of `PreconditionWords`, and supported target names. It sees
+no fact values, other Task fields or Log. Each Task receives one verdict:
+`sound` produces only an aggregate count diagnostic; `replace` and `remove`
+produce candidates with a nonblank model reason and the existing tree.
+Replacement also carries a strictly validated proposed tree; removal has none.
+`blocked_now` records a false evaluation at review time. No confidence is requested.
+Generated reasons are candidate content, never diagnostic text. Proposals change
+only the candidate queue and its ordinary enqueue mutation metadata.
