@@ -248,6 +248,51 @@ pub async fn submission(
     Ok(submission)
 }
 
+/// Code-authored refusal reasons. Evaluator text is taken only after strict
+/// target/predicate validation, so core can describe the required kind without
+/// echoing an expected value or arbitrary model prose.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TreeRefusal {
+    BoundExceeded,
+    InvalidGroup,
+    MissingLeafFields,
+    UnknownLeafFields,
+    ExpectedRequired,
+    ExpectedForbidden,
+    TreeDeserialization,
+    NullExpectation,
+    ModeRefusal,
+    EvaluatorRefusal(String),
+    InvalidTaskReference,
+}
+
+impl std::fmt::Display for TreeRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::BoundExceeded => "the tree exceeds 128 nodes or depth 16",
+            Self::InvalidGroup => {
+                "the tree must contain leaves or single-key boolean groups with non-empty arrays"
+            }
+            Self::MissingLeafFields => "a leaf requires string target and predicate fields",
+            Self::UnknownLeafFields => "a leaf has an unrecognised target, predicate or key",
+            Self::ExpectedRequired => "this predicate requires an expected value",
+            Self::ExpectedForbidden => "absent forbids an expected value",
+            Self::TreeDeserialization => "the tree cannot be decoded without losing fields",
+            Self::NullExpectation => {
+                "a null expected value cannot be represented by this precondition"
+            }
+            Self::ModeRefusal => "this instance mode does not permit an intrinsic-affect target",
+            Self::EvaluatorRefusal(message) => message,
+            Self::InvalidTaskReference => "the proposal must reference exactly one Task",
+        })
+    }
+}
+
+pub fn refusal_diagnostic(task_id: Option<&str>, reason: &TreeRefusal) -> Value {
+    let subject = task_id.map_or_else(|| "A proposal".to_owned(), |id| format!("Task `{id}`"));
+    json!({"code":"precondition_proposal_refused", "message":format!("{subject}: {reason}. No candidate was enqueued for this Task; the rest of the run stands.")})
+}
+
 /// Validate every branch, including ones core's boolean evaluator short-circuits.
 /// The round trip also refuses unknown/mixed fields that serde's untagged enum
 /// could otherwise silently discard. Bounded traversal precedes deserialization.
@@ -255,57 +300,64 @@ pub fn validate_tree(
     raw: &Value,
     state: &UniverseState,
     mode: InstanceMode,
-) -> std::result::Result<BTreeSet<String>, &'static str> {
-    fn shape(raw: &Value, depth: usize, nodes: &mut usize) -> bool {
+) -> std::result::Result<BTreeSet<String>, TreeRefusal> {
+    fn shape(raw: &Value, depth: usize, nodes: &mut usize) -> std::result::Result<(), TreeRefusal> {
         *nodes += 1;
         if depth > MAX_DEPTH || *nodes > MAX_NODES {
-            return false;
+            return Err(TreeRefusal::BoundExceeded);
         }
         let Some(object) = raw.as_object() else {
-            return false;
+            return Err(TreeRefusal::InvalidGroup);
         };
         for name in ["all_of", "any_of"] {
             if let Some(parts) = object.get(name) {
-                return object.len() == 1
-                    && parts.as_array().is_some_and(|parts| {
-                        !parts.is_empty() && parts.iter().all(|part| shape(part, depth + 1, nodes))
-                    });
+                let parts = parts
+                    .as_array()
+                    .filter(|parts| object.len() == 1 && !parts.is_empty())
+                    .ok_or(TreeRefusal::InvalidGroup)?;
+                for part in parts {
+                    shape(part, depth + 1, nodes)?;
+                }
+                return Ok(());
             }
         }
         let Some(target) = object.get("target").and_then(Value::as_str) else {
-            return false;
+            return Err(TreeRefusal::MissingLeafFields);
         };
         let Some(predicate) = object.get("predicate").and_then(Value::as_str) else {
-            return false;
+            return Err(TreeRefusal::MissingLeafFields);
         };
-        valid_target(target)
-            && PREDICATES.contains(&predicate)
-            && object
+        if !valid_target(target)
+            || !PREDICATES.contains(&predicate)
+            || !object
                 .keys()
                 .all(|key| matches!(key.as_str(), "target" | "predicate" | "expected"))
-            && if predicate == "absent" {
-                !object.contains_key("expected")
-            } else {
-                object.contains_key("expected")
-            }
+        {
+            return Err(TreeRefusal::UnknownLeafFields);
+        }
+        if predicate == "absent" && object.contains_key("expected") {
+            return Err(TreeRefusal::ExpectedForbidden);
+        }
+        if predicate != "absent" && !object.contains_key("expected") {
+            return Err(TreeRefusal::ExpectedRequired);
+        }
+        Ok(())
     }
-    if !shape(raw, 0, &mut 0) {
-        return Err("malformed tree");
-    }
+    shape(raw, 0, &mut 0)?;
     let tree: UniversePrecondition =
-        serde_json::from_value(raw.clone()).map_err(|_| "malformed tree")?;
+        serde_json::from_value(raw.clone()).map_err(|_| TreeRefusal::TreeDeserialization)?;
     // JSON null is a legitimate equals expectation, but the core Option field
     // cannot represent it. Refuse it rather than silently dropping it.
-    if serde_json::to_value(&tree).map_err(|_| "malformed tree")? != *raw {
-        return Err("malformed tree");
+    if serde_json::to_value(&tree).map_err(|_| TreeRefusal::TreeDeserialization)? != *raw {
+        return Err(TreeRefusal::NullExpectation);
     }
-    validate_precondition_for_mode(mode, &tree).map_err(|_| "invalid mode")?;
+    validate_precondition_for_mode(mode, &tree).map_err(|_| TreeRefusal::ModeRefusal)?;
     fn visit(
         tree: &UniversePrecondition,
         state: &UniverseState,
         known: &BTreeSet<String>,
         missing: &mut BTreeSet<String>,
-    ) -> std::result::Result<(), &'static str> {
+    ) -> std::result::Result<(), TreeRefusal> {
         match tree {
             UniversePrecondition::AllOf { all_of } => {
                 for part in all_of {
@@ -318,7 +370,7 @@ pub fn validate_tree(
                 }
             }
             UniversePrecondition::Leaf(leaf) => {
-                evaluate_universe_precondition(state, tree).map_err(|_| "malformed tree")?;
+                evaluate_universe_precondition(state, tree).map_err(evaluator_refusal)?;
                 if !known.contains(&leaf.target) {
                     missing.insert(leaf.target.clone());
                 }
@@ -328,8 +380,13 @@ pub fn validate_tree(
     }
     let mut missing = BTreeSet::new();
     visit(&tree, state, &targets(state), &mut missing)?;
-    evaluate_universe_precondition(state, &tree).map_err(|_| "malformed tree")?;
+    evaluate_universe_precondition(state, &tree).map_err(evaluator_refusal)?;
     Ok(missing)
+}
+
+fn evaluator_refusal(error: ubu_core::core::UniversePreconditionError) -> TreeRefusal {
+    let ubu_core::core::UniversePreconditionError::Malformed(message) = error;
+    TreeRefusal::EvaluatorRefusal(message)
 }
 
 pub fn missing_diagnostic(task_id: &str, missing: &BTreeSet<String>) -> Value {
@@ -349,13 +406,13 @@ pub fn missing_diagnostic(task_id: &str, missing: &BTreeSet<String>) -> Value {
 }
 
 /// Recheck against current state at the controller boundary, including injected
-/// transports. Complete validation precedes all enqueues, so malformed output
-/// cannot leave a partially stored batch.
+/// transports. Each proposal is independent: refuse one without discarding
+/// surviving proposals or diagnostics already recorded for the run.
 pub async fn vet_result(
     state: &AppState,
     result: &mut ubu_core::worker::LocalAdvisoryResult,
 ) -> Result<()> {
-    use ubu_core::{worker::LocalAdvisoryResultStatus, ObjectType};
+    use ubu_core::ObjectType;
     if !result
         .proposed_candidates
         .iter()
@@ -366,6 +423,8 @@ pub async fn vet_result(
     let universe = current(state).await?;
     let mut accepted = Vec::new();
     let mut missing_tasks = 0;
+    let mut refused_tasks = 0;
+    let mut skipped_tasks = 0;
     for mut candidate in std::mem::take(&mut result.proposed_candidates) {
         if candidate.candidate_kind != CandidateKind::Precondition {
             accepted.push(candidate);
@@ -380,13 +439,23 @@ pub async fn vet_result(
             [target] if target.object_type == ObjectType::Task => Some(target),
             _ => None,
         };
-        let (Ok(missing), Some(target)) = (missing, target) else {
-            result.status = LocalAdvisoryResultStatus::MalformedResult;
-            result.diagnostics = vec![
-                json!({"code":"advisory_malformed_result","message":"The model response was not an evaluable precondition for this instance; no candidates were enqueued"}),
-            ];
-            return Ok(());
+        let reason = if target.is_none() {
+            Some(TreeRefusal::InvalidTaskReference)
+        } else {
+            missing.as_ref().err().cloned()
         };
+        if let Some(reason) = reason {
+            refused_tasks += 1;
+            if refused_tasks <= suggest_tags::MAX_SKIPPED_NAMED {
+                result.diagnostics.push(refusal_diagnostic(
+                    target.map(|target| target.id.as_str()),
+                    &reason,
+                ));
+            }
+            continue;
+        }
+        let missing = missing.expect("a refused tree was handled above");
+        let target = target.expect("a missing Task reference was handled above");
         let row =
             ubu_store::queries::get_current_state(state.inner().store.pool(), target.id.as_str())
                 .await?;
@@ -397,7 +466,10 @@ pub async fn vet_result(
         if task.as_ref().is_none_or(|task| {
             task.status != ubu_core::core::TaskStatus::Active || task.occurrence.is_some()
         }) {
-            result.diagnostics.push(json!({"code":"precondition_task_skipped","message":format!("Task `{}` is no longer eligible: it is inactive, absent, or a routine occurrence. Nothing was changed.",target.id)}));
+            skipped_tasks += 1;
+            if skipped_tasks <= suggest_tags::MAX_SKIPPED_NAMED {
+                result.diagnostics.push(json!({"code":"precondition_task_skipped","message":format!("Task `{}` is no longer eligible: it is inactive, absent, or a routine occurrence. Nothing was changed.",target.id)}));
+            }
             continue;
         }
         if !missing.is_empty() {
@@ -425,6 +497,12 @@ pub async fn vet_result(
                 .expect("canonical JSON is UTF-8"),
         );
         accepted.push(candidate);
+    }
+    if refused_tasks > suggest_tags::MAX_SKIPPED_NAMED {
+        result.diagnostics.push(json!({"code":"precondition_proposal_refused","message":format!("{} more Tasks had unevaluable proposals; no candidates were enqueued for those Tasks. The rest of the run stands.", refused_tasks - suggest_tags::MAX_SKIPPED_NAMED)}));
+    }
+    if skipped_tasks > suggest_tags::MAX_SKIPPED_NAMED {
+        result.diagnostics.push(json!({"code":"precondition_task_skipped","message":format!("{} more Tasks are no longer eligible: they are inactive, absent, or routine occurrences. Nothing was changed.", skipped_tasks - suggest_tags::MAX_SKIPPED_NAMED)}));
     }
     if missing_tasks > suggest_tags::MAX_SKIPPED_NAMED {
         result.diagnostics.push(json!({"code":"precondition_missing_targets","message":format!("{} more Tasks need recorded targets; no candidates were enqueued for those Tasks.", missing_tasks - suggest_tags::MAX_SKIPPED_NAMED)}));

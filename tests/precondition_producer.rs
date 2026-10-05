@@ -116,8 +116,8 @@ async fn malformed_or_hidden_malformed_branches_never_reach_the_queue_or_echo_ou
         let before = canonical_rows(&state).await;
         let ledger = count(&state, "mutation_envelopes").await;
         let result = run(&state).await;
-        assert_eq!(result["status"], "malformed_result", "{result}");
-        assert!(diagnostic(&result, "advisory_malformed_result"));
+        assert_eq!(result["status"], "ok", "{result}");
+        assert!(diagnostic(&result, "precondition_proposal_refused"));
         assert_eq!(result["candidates_enqueued"], 0);
         assert_eq!(canonical_rows(&state).await, before);
         assert_eq!(count(&state, "mutation_envelopes").await, ledger);
