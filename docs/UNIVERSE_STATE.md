@@ -94,10 +94,23 @@ The order of work is fixed, and nothing is written until every check passes:
 
 1. `validate_mutations_for_mode` for this instance's mode. An intrinsic-affect
    target, one whose second segment is `affect`, is refused outside
-   `user_mode`. The MVP instance is `user_mode`, so the operator may set one.
-2. `apply_universe_mutations` on the current state, or on an empty one when the
+   `user_mode`. The MVP instance is `user_mode`; the manual route's additional
+   namespace rule below also applies in this mode.
+2. The manual route refuses a write whose first key segment is `facts`,
+   `numeric_values`, `set_memberships`, `event_markers` or `affect`.
+   This covers `set_fact`, `set_numeric`, `increment_numeric`,
+   `decrement_numeric`, `add_membership` and `append_event_marker`.
+   The four collection names repeat a collection inside the key; `affect`
+   names intrinsic affect, which core treats specially and the other modes
+   refuse. The collection comes from the panel, not the key.
+   Only the first key segment is checked: `facts.kettle.affect.note` and
+   `facts.fact.kettle` remain valid. Task effects keep their core contract.
+   Existing keys are not migrated or refused on reads, advisor vocabulary
+   enumeration or precondition evaluation. `clear_fact`, `clear_numeric`
+   and `remove_membership` remain available for legacy keys.
+3. `apply_universe_mutations` on the current state, or on an empty one when the
    store holds none. It validates the whole list before applying any of it.
-3. Only then the write.
+4. Only then the write.
 
 So a list with one bad mutation is refused whole. No earlier mutation in it is
 applied, and on a store with no state no empty row is left behind.
@@ -107,9 +120,18 @@ applied, and on a store with no state no empty row is left behind.
 | 400 | `missing_schema_version`, `unknown_schema_version` | The request names no version or another one. |
 | 400 | `universe_mutations_empty` | `mutations` is an empty list. |
 | 400 | `universe_mutation_mode_invalid` | Step 1 refused. The message is `ubu-core`'s. |
-| 400 | `universe_mutation_invalid` | Step 2 refused. The message is `ubu-core`'s, for example `mutation 1: unknown operation ...`, counting from zero. |
+| 400 | `universe_target_namespace_invalid` | Step 2 refused. The message names the reserved segment and complete target. |
+| 400 | `universe_mutation_invalid` | Step 3 refused. The message is `ubu-core`'s, for example `mutation 1: unknown operation ...`, counting from zero. |
 | 409 | none | The state changed between the read and the write. |
 | 422 | none | The body is not this shape, for example a mutation with a key the type does not have. |
+
+The namespace diagnostic has two message templates, with `segment` and
+`target` replaced by the refused first key segment and complete target:
+
+```text
+Key segment `{segment}` names a collection; the collection comes from the panel, not the key. The target would be `{target}`.
+Key segment `affect` is reserved for intrinsic affect, which organization_mode and worker_mode refuse. The target would be `{target}`; the collection comes from the panel, not the key.
+```
 
 ## Provenance
 
@@ -127,7 +149,8 @@ tell evidence from assertion, and a score would blur that.
 
 - **A mutation states the kind of what it writes, and none means `asserted`.**
   A mutation with no stated evidence is someone's word. Every request that
-  worked before P1B-59 still works and means what it meant.
+  worked before P1B-59 keeps its provenance meaning; P1B-65 adds the manual
+  route's namespace restriction above.
 - **The write records the kind and the time** under the mutation's target in
   `fact_provenance`. The time is this orchestrator's clock at the write. It is
   not `captured_at`, which does not move.

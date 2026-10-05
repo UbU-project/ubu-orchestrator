@@ -1,9 +1,9 @@
 //! The current `UniverseState`, read and edited by the operator.
 //!
 //! An edit is a list of `ubu-core` `UniverseMutation`s. They are checked and
-//! applied by the same two functions a completed Task's effects go through, so
-//! the operator's edits and a Task's effects share one vocabulary and one
-//! validation path. See `docs/UNIVERSE_STATE.md`.
+//! applied by the same two functions a completed Task's effects go through.
+//! This manual mutation route additionally checks first key segments; its
+//! target grammar must hold for clients with no screen. See `docs/UNIVERSE_STATE.md`.
 
 use serde_json::json;
 use ubu_core::core::{
@@ -52,6 +52,7 @@ pub async fn apply(
     validate_mutations_for_mode(mode, mutations).map_err(|error| {
         AppError::bad_request_diagnostic("universe_mutation_mode_invalid", error.to_string())
     })?;
+    validate_write_namespaces(mutations)?;
 
     // A completed Task's effects are written under this lock too.
     let _action = state.inner().task_action_lock.lock().await;
@@ -77,7 +78,9 @@ pub async fn apply(
             payload["provenance"] =
                 json!({"created_at": now, "authority_source": AuthoritySource::User});
             let envelope = state.envelope_for(
-                [(base.id.clone(), VersionRef::Absent)].into_iter().collect(),
+                [(base.id.clone(), VersionRef::Absent)]
+                    .into_iter()
+                    .collect(),
                 AuthoritySource::User,
                 now,
             )?;
@@ -116,12 +119,54 @@ pub async fn apply(
     Ok((next, stored.version))
 }
 
+/// Only the first key segment names the namespace. Cleanup remains available
+/// for legacy keys; Task effects retain the core mutation contract.
+fn validate_write_namespaces(mutations: &[UniverseMutation]) -> Result<()> {
+    for mutation in mutations {
+        if !matches!(
+            mutation.operation.as_str(),
+            "set_fact"
+                | "set_numeric"
+                | "increment_numeric"
+                | "decrement_numeric"
+                | "add_membership"
+                | "append_event_marker"
+        ) {
+            continue;
+        }
+        let Some((_, key)) = mutation.target.split_once('.') else {
+            continue;
+        };
+        let segment = key.split('.').next().unwrap_or_default();
+        let message = match segment {
+            "facts" | "numeric_values" | "set_memberships" | "event_markers" => format!(
+                "Key segment `{segment}` names a collection; the collection comes from the panel, not the key. The target would be `{}`.",
+                mutation.target
+            ),
+            "affect" => format!(
+                "Key segment `affect` is reserved for intrinsic affect, which organization_mode and worker_mode refuse. The target would be `{}`; the collection comes from the panel, not the key.",
+                mutation.target
+            ),
+            _ => continue,
+        };
+        return Err(AppError::bad_request_diagnostic(
+            "universe_target_namespace_invalid",
+            message,
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::ServerConfig;
 
-    fn mutation(operation: &str, target: &str, payload: Option<serde_json::Value>) -> UniverseMutation {
+    fn mutation(
+        operation: &str,
+        target: &str,
+        payload: Option<serde_json::Value>,
+    ) -> UniverseMutation {
         UniverseMutation {
             operation: operation.to_owned(),
             target: target.to_owned(),
@@ -144,7 +189,11 @@ mod tests {
             &state,
             &[
                 mutation("set_fact", "facts.kettle.descaled", Some(json!(true))),
-                mutation("increment_numeric", "numeric_values.shelf.jars", Some(json!(3))),
+                mutation(
+                    "increment_numeric",
+                    "numeric_values.shelf.jars",
+                    Some(json!(3)),
+                ),
             ],
             InstanceMode::UserMode,
         )
@@ -176,13 +225,22 @@ mod tests {
                 panic!("expected a diagnostic, got {refused:?}");
             };
             assert_eq!(code, "universe_mutation_mode_invalid");
-            assert!(message.contains("numeric_values.affect.energy"), "{message}");
+            assert!(
+                message.contains("numeric_values.affect.energy"),
+                "{message}"
+            );
         }
         assert_eq!(stored_rows(&state).await, 0);
 
-        // The same edit is the operator's to make in `user_mode`.
-        let (written, _) = apply(&state, &affect, InstanceMode::UserMode).await.unwrap();
-        assert_eq!(written.numeric_values["affect.energy"], 1.0);
+        // The manual route has a narrower namespace grammar in user_mode too.
+        let refused = apply(&state, &affect, InstanceMode::UserMode)
+            .await
+            .unwrap_err();
+        let AppError::Diagnostic { code, .. } = refused else {
+            panic!("expected a diagnostic, got {refused:?}");
+        };
+        assert_eq!(code, "universe_target_namespace_invalid");
+        assert_eq!(stored_rows(&state).await, 0);
     }
 
     #[tokio::test]

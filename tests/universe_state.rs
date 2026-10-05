@@ -352,16 +352,161 @@ async fn a_malformed_request_is_refused_before_any_mutation_is_read() {
 }
 
 #[tokio::test]
-async fn an_intrinsic_affect_target_is_the_operators_to_set_in_user_mode() {
-    // This instance runs in `user_mode`, which models intrinsic affect. The refusal
-    // in the other two modes is asserted beside the service, which takes the mode.
+async fn the_manual_route_refuses_intrinsic_affect_even_in_user_mode() {
     let state = state().await;
-    let written = edited(
+    let (status, refused) = edit(
         &state,
         json!([{"operation":"increment_numeric","target":"numeric_values.affect.energy","payload":1.5}]),
+    ).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(refused["diagnostics"][0]["code"], "universe_target_namespace_invalid");
+    assert!(rows(&state).await.is_empty());
+}
+
+#[tokio::test]
+async fn all_reserved_first_segments_refuse_every_write_without_seeding_state() {
+    let state = state().await;
+    for segment in [
+        "facts",
+        "numeric_values",
+        "set_memberships",
+        "event_markers",
+        "affect",
+    ] {
+        for (operation, collection, payload) in [
+            ("set_fact", "facts", json!(true)),
+            ("set_numeric", "numeric_values", json!(1)),
+            ("increment_numeric", "numeric_values", json!(1)),
+            ("decrement_numeric", "numeric_values", json!(1)),
+            (
+                "add_membership",
+                "set_memberships",
+                json!("invented-spanner"),
+            ),
+            (
+                "append_event_marker",
+                "event_markers",
+                json!({"invented_boil": true}),
+            ),
+        ] {
+            let target = format!("{collection}.{segment}.invented_kettle");
+            let (status, body) = edit(
+                &state,
+                json!([{"operation":operation,"target":target,"payload":payload}]),
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+            assert_eq!(
+                body["diagnostics"][0]["code"],
+                "universe_target_namespace_invalid"
+            );
+            let expected = if segment == "affect" {
+                format!("Key segment `affect` is reserved for intrinsic affect, which organization_mode and worker_mode refuse. The target would be `{target}`; the collection comes from the panel, not the key.")
+            } else {
+                format!("Key segment `{segment}` names a collection; the collection comes from the panel, not the key. The target would be `{target}`.")
+            };
+            assert_eq!(body["diagnostics"][0]["message"], expected);
+        }
+    }
+    assert!(rows(&state).await.is_empty());
+}
+
+#[tokio::test]
+async fn reserved_words_in_later_segments_and_other_subjects_remain_writable() {
+    let state = state().await;
+    for key in ["kettle.facts.note", "kettle.affect.note", "fact.kettle"] {
+        let after = edited(&state, json!([
+            {"operation":"set_fact","target":format!("facts.{key}"),"payload":true},
+            {"operation":"set_numeric","target":format!("numeric_values.{key}"),"payload":3},
+            {"operation":"add_membership","target":format!("set_memberships.{key}"),"payload":"invented-spanner"},
+            {"operation":"append_event_marker","target":format!("event_markers.{key}"),"payload":{"invented_boil":true}}
+        ])).await;
+        for collection in COLLECTIONS {
+            assert!(after[collection].get(key).is_some(), "{after}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_reserved_write_in_a_batch_leaves_the_existing_state_unchanged() {
+    let state = state().await;
+    admit_state(&state, json!({"kettle.descaled": true})).await;
+    let before = rows(&state).await;
+    let (status, _) = edit(
+        &state,
+        json!([
+            {"operation":"set_fact","target":"facts.kettle.label","payload":"invented-copper"},
+            {"operation":"set_numeric","target":"numeric_values.numeric_values.jars","payload":3}
+        ]),
     )
     .await;
-    assert_eq!(written["numeric_values"], json!({"affect.energy": 1.5}));
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(rows(&state).await, before);
+}
+
+#[tokio::test]
+async fn legacy_keys_remain_readable_offered_evaluable_and_removable() {
+    use ubu_core::core::{evaluate_universe_precondition, UniversePrecondition};
+    use ubu_orchestrator::services::{precondition_advisor, universe_state};
+    let state = state().await;
+    // Task effects deliberately keep core semantics and can stage legacy keys.
+    let task = admit_task(&state, "Synthetic: stage an invented legacy kettle", json!({"effects":{"mutations":[
+        {"operation":"set_fact","target":"facts.facts.kettle","payload":true},
+        {"operation":"set_fact","target":"facts.affect.energy","payload":true},
+        {"operation":"set_numeric","target":"numeric_values.numeric_values.jars","payload":3},
+        {"operation":"add_membership","target":"set_memberships.set_memberships.toolbox","payload":"invented-spanner"},
+        {"operation":"append_event_marker","target":"event_markers.event_markers.boil","payload":{"invented_boil":true}}
+    ]}})).await;
+    let (status, body) = request(
+        &state,
+        "POST",
+        &format!("/task/{task}/action"),
+        json!({"schema_version":"ubu.orchestrator.task_action.v1","action":"complete"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["diagnostics"], json!([]));
+    let before = rows(&state).await;
+    assert_eq!(read(&state).await["facts"]["facts.kettle"], true);
+    let (current, _) = universe_state::read(&state).await.unwrap();
+    let targets = precondition_advisor::targets(&current);
+    for (target, predicate, expected) in [
+        ("facts.facts.kettle", "equals", json!(true)),
+        ("facts.affect.energy", "equals", json!(true)),
+        ("numeric_values.numeric_values.jars", "at_least", json!(3)),
+        (
+            "set_memberships.set_memberships.toolbox",
+            "member_of",
+            json!("invented-spanner"),
+        ),
+        (
+            "event_markers.event_markers.boil",
+            "equals",
+            json!([{"invented_boil": true}]),
+        ),
+    ] {
+        assert!(targets.contains(target), "{target}");
+        let mut leaf = json!({"target":target,"predicate":predicate});
+        if !expected.is_null() {
+            leaf["expected"] = expected;
+        }
+        let condition: UniversePrecondition = serde_json::from_value(leaf).unwrap();
+        assert!(evaluate_universe_precondition(&current, &condition).unwrap());
+    }
+    assert_eq!(rows(&state).await, before);
+    let cleared = edited(&state, json!([
+        {"operation":"clear_fact","target":"facts.facts.kettle"},
+        {"operation":"clear_fact","target":"facts.affect.energy"},
+        {"operation":"clear_numeric","target":"numeric_values.numeric_values.jars"},
+        {"operation":"remove_membership","target":"set_memberships.set_memberships.toolbox","payload":"invented-spanner"}
+    ])).await;
+    assert_eq!(cleared["facts"], json!({}));
+    assert_eq!(cleared["numeric_values"], json!({}));
+    assert!(cleared["set_memberships"].get("set_memberships.toolbox").is_none());
+    assert_eq!(
+        cleared["event_markers"],
+        read(&state).await["event_markers"]
+    );
 }
 
 #[tokio::test]
@@ -616,4 +761,3 @@ async fn a_task_route_refuses_a_note_on_a_mutation() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 }
-
