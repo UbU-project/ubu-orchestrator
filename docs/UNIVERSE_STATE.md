@@ -254,6 +254,35 @@ guard would not have fired.
 doubled keys, and nothing reads them by name. The operator's store held no
 `UniverseState` when this changed.
 
+## Keys and the open vocabulary gap (P1B-65)
+
+The screen now shows the complete target in `<code>` under each Facts,
+Numbers and Sets key field, using the same trimmed key as the submitted
+mutation. Event markers have no editing field. For example, `kettle.descaled`
+under Facts shows `facts.kettle.descaled`; `fact.kettle` shows
+`facts.fact.kettle`. The singular `fact` is deliberately not a reserved
+segment. `affect.energy` previews the full target before the route refuses it.
+
+The manual route's five reserved first key segments are a narrow grammar
+restriction. A later segment named `facts` or `affect` remains permitted:
+core reads the segment immediately after the collection as the namespace.
+No migration runs, and existing doubled or reserved keys remain readable,
+offered by the precondition advisor's `targets()` and evaluable by core.
+Only the six write operations are restricted; legacy clear/remove remains
+available. Task effects and core mutation semantics are unchanged.
+
+UBU-D0243 in `ubu-design/DECISIONS.md` requires the first segment after the
+collection to belong to its controlled subject vocabulary. That broader
+rule is knowingly unenforced. Enforcing it here would refuse reasonable
+fresh-store keys before the operator can use this phase. The five reserved
+segments address collection repetition and intrinsic-affect semantics;
+they do not implement a subject vocabulary advisor or a predicate naming
+rule. The controlled-vocabulary gap remains open.
+
+The route contract was documented with section A's implementation because
+this document requires a contract change in the same commit. This section
+adds the UI and design context in section D; it changes no route behavior.
+
 ## What it does not do
 
 - **`captured_at` and `source_summary` are not rewritten by an edit**, as they
