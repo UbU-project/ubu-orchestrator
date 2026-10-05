@@ -185,12 +185,12 @@ async fn prepare(
                 id: target_ref.id.to_string(),
             })?;
     let mut universe_observation = None;
-    if candidate.candidate_kind == ubu_core::CandidateKind::Precondition {
+    if candidate.candidate_kind == ubu_core::CandidateKind::Precondition && candidate.normalized_proposal["operation"] != "clear_precondition" {
         let current = super::planning_service::read_current_universe_state(state.inner().store.pool()).await?;
         let Some((universe, version)) = current else {
             return Err(AppError::conflict_diagnostic("advisory_precondition_stale", "The proposal no longer has recorded facts; nothing was admitted"));
         };
-        let (proposed, _) = super::precondition_advisor::proposal_trees(&candidate.normalized_proposal)?;
+        let proposed = if candidate.normalized_proposal["operation"] == "replace_precondition" { &candidate.normalized_proposal["proposed_precondition"] } else { super::precondition_advisor::proposal_trees(&candidate.normalized_proposal)?.0 };
         let missing = super::precondition_advisor::validate_tree(proposed, &universe, crate::instance_mode::MVP_INSTANCE_MODE)
             .map_err(|_| AppError::bad_request_diagnostic("advisory_precondition_invalid", "The proposed precondition cannot be evaluated in this instance"))?;
         if !missing.is_empty() {

@@ -18,6 +18,8 @@ pub(crate) fn proposal_target(candidate: &AdvisoryCandidate) -> Result<&ObjectRe
         (Some("add_tag" | "set_category"), CandidateKind::Tag)
         | (Some("answer_questions"), CandidateKind::ClarificationQuestion)
         | (None, CandidateKind::Precondition) => {}
+        (Some("replace_precondition"), CandidateKind::Precondition) => {}
+        (Some("clear_precondition"), CandidateKind::Precondition) => {}
         _ => {
             return Err(AppError::UnsupportedProposal {
                 operation: operation.unwrap_or("<missing or non-string>").to_owned(),
@@ -191,6 +193,11 @@ pub fn apply_proposal(
             "A clarification proposal is admitted by answering its questions, not by Admit",
         ));
     }
+    match (candidate.candidate_kind, candidate.normalized_proposal["operation"].as_str()) {
+        (CandidateKind::Precondition, Some("replace_precondition")) => return apply_review(candidate, target, Some(&candidate.normalized_proposal["proposed_precondition"])),
+        (CandidateKind::Precondition, Some("clear_precondition")) => return apply_review(candidate, target, None),
+        _ => {}
+    }
     // The kind identifies set-preconditions. Replacement review context must
     // still match canonical state; never discard a later operator edit.
     if candidate.candidate_kind == CandidateKind::Precondition {
@@ -235,5 +242,24 @@ pub fn apply_proposal(
         .map_err(|e| AppError::BadRequest(e.to_string()))?;
     // Preserve unrelated payload fields and their existing wire representation.
     payload["tags"] = serde_json::json!(task.tags);
+    Ok(rewritten(target, payload))
+}
+
+/// Both explicit review operations compare the reviewed value before writing.
+fn apply_review(candidate: &AdvisoryCandidate, target: &ObjectRecord, proposed: Option<&serde_json::Value>) -> Result<NewObjectRecord> {
+    if !super::precondition_review::valid_envelope(&candidate.normalized_proposal) {
+        return Err(refuse("advisory_precondition_invalid", "The precondition review payload is malformed"));
+    }
+    let (mut payload, mut task) = target_task(candidate, target)?;
+    if task.status != ubu_core::core::TaskStatus::Active || task.occurrence.is_some() {
+        return Err(refuse("advisory_target_inactive", "Only an active non-occurrence Task can receive a reviewed precondition"));
+    }
+    if serde_json::to_value(&task.preconditions).map_err(|e|AppError::Internal(e.to_string()))? != candidate.normalized_proposal["existing_precondition"] {
+        return Err(AppError::conflict_diagnostic("advisory_precondition_changed", "The Task's precondition changed since this review; ask for a fresh review"));
+    }
+    task.preconditions = proposed.map(|p|serde_json::from_value(p.clone())).transpose().map_err(|_|refuse("advisory_precondition_invalid", "The proposed precondition is malformed"))?;
+    task.validate().map_err(|e|AppError::BadRequest(e.to_string()))?;
+    if let Some(tree) = proposed { payload["preconditions"] = tree.clone(); }
+    else { payload.as_object_mut().expect("Task object").remove("preconditions"); }
     Ok(rewritten(target, payload))
 }

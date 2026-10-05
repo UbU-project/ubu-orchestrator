@@ -407,3 +407,12 @@ Replacement also carries a strictly validated proposed tree; removal has none.
 `blocked_now` records a false evaluation at review time. No confidence is requested.
 Generated reasons are candidate content, never diagnostic text. Proposals change
 only the candidate queue and its ordinary enqueue mutation metadata.
+
+Review admission dispatches `replace_precondition` and `clear_precondition`
+explicitly. Both use the ordinary atomic candidate admission writer and compare
+the Task's current condition with the reviewed tree. A stale tree or a second
+admission is refused with 409. A deferred review must resurface first.
+Replacement revalidates every proposed leaf against current facts and observes
+Task and UniverseState versions. Removal clears the field, observes the Task
+version, and needs no fact or proposed-tree validation: no guard remains.
+Neither operation changes any other Task field or authors a fact.
