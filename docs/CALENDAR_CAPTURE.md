@@ -114,6 +114,7 @@ Capture appends the origin event, paired with its admitted Task ID, to a new app
 | Calendar input | Captured Task | Projection back to Calendar |
 |---|---|---|
 | `summary` | `title` | `summary` |
+| Event `description`, trimmed and at most 16,384 bytes | `description`, only if the Task has no non-blank description | Never exported; insert and PATCH omit it |
 | `start.dateTime`, `end.dateTime` | `static_window.start`, `.end` | Scheduled static start/end as UTC RFC3339 |
 | `transparency: "transparent"` | `occupies_capacity: false` | `transparency: "transparent"` |
 | `transparency: "opaque"` or absent | `occupies_capacity: true` | `transparency: "opaque"` |
@@ -171,8 +172,7 @@ The ticket mentions `/task/:id/reject`. That existing legacy endpoint records a 
 1. **Capture only; the calendar is not yet an input device.** Colouring an event does not complete its Task, dragging does not move it, resizing does not change its estimate. That is P1B-33.
 2. **On demand.** Nothing polls, so a meeting accepted on the phone is invisible until the operator captures.
 3. **No recurrence.** `singleEvents=true` expands a recurring meeting into instances, so each occurrence captures as its own Task with no link between them and no notion of the series.
-4. **No attendees, location, description or conferencing data.** A captured Task carries a title, a window, a capacity flag and possibly a category. Everything else on the event is dropped.
+4. ~~No attendees, location, description or conferencing data.~~ Revised 2026-10-04, P1B-63: **No attendees, location or conferencing data.** Capture may also take the event's own `description`, only when the Task's existing description is absent or whitespace-only. A non-blank description, including Clarify's accumulated answers or text edited on Tasks, is never overwritten. Later changes to Google's notes do not update a Task that already has notes; read and edit its notes on Tasks. Leading and trailing whitespace is trimmed, with interior text and markup preserved literally. The shared `clarify::MAX_DESCRIPTION_BYTES` bound is 16,384 UTF-8 bytes after trimming. Longer notes are refused whole, never truncated: `capture_description_too_large` names only the event id and bound, while the Task still captures with its title and does not count as skipped. Missing or blank notes add no description key to a new Task. A non-string wire description is invalid. Notes never go back to Google: insert and PATCH bodies omit description, so a PATCH preserves the operator's calendar notes. Notes alone do not cause projection drift or an updated capture count.
 5. **All-day events are skipped.** They have no `dateTime`, and UbU plans concrete spans.
 6. ~~A captured Task is Static forever.~~ No longer true, from P1B-55: an uncoloured event is captured as Dynamic, and removing an event's colour demotes its Task to Dynamic at the next capture.
 7. **Deleting a captured Task does not delete its event.** The Task leaves the plan; the meeting stays on the calendar, which is almost certainly right for a real appointment but is worth knowing.
-

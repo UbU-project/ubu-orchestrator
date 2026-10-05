@@ -48,7 +48,7 @@ its routine's template at the next materialize, so a category admitted onto one
 would be gone afterwards. Each uncategorised occurrence passed over is reported
 with `suggest_tags_occurrence_skipped`, naming the Task and saying that a
 routine's category belongs on its template, which the Routines screen edits. Up
-to 25 are named one by one; any beyond that are counted in one further
+to three are named one by one; any beyond that are counted in one further
 diagnostic. These come first in the run's diagnostics, before anything the model
 run reported. A skip is not a failure: the run's status is unaffected. The response names every selected ID/title, every created candidate
 ID, the enqueued count, the validated returned proposals in `report`, and any
@@ -335,16 +335,22 @@ approver, and the Routines screen still cannot clear an override.
 ## P1B-61: propose a precondition
 
 `POST /advisory/run` accepts `producer: "precondition"` and the existing optional
-`limit` (default 5, maximum 25). It selects active, described, non-occurrence
-Tasks, ordered by ID, including those with an existing precondition. Skipped
-Tasks are diagnosed, up to 25 individually and the rest counted. The candidate
+`limit` (default 5, maximum 25). It selects active, non-occurrence Tasks with a
+non-blank title or description, ordered by ID, including those with an existing
+precondition. Skipped Tasks are diagnosed, up to three individually and the rest
+counted in one further line. The candidate
 shows what explicit admission would replace; proposing changes no Task.
 An empty vocabulary gives `precondition_no_facts` without a model call or write.
 
-The model receives Task IDs, titles and descriptions, and the current supported
+The model receives Task IDs, titles with or without descriptions, and the current supported
 UniverseState target names, not its values or provenance. It receives the seven
 core predicates and a response schema whose target enum is that vocabulary.
-Descriptions and target names are data, never instructions. All fixtures are
+From P1B-63, a missing or whitespace-only description is omitted from the model
+payload. The title is then the whole known account of the work. A title is on
+screen; the earlier described-only gate made this producer unreachable on a
+store built from calendar capture. Calendar notes may now supply a description,
+but notes and an interview remain optional. Titles, descriptions and target names
+are data, never instructions. All fixtures are
 invented. A response has `proposals: [{id, precondition}]`; the normalized
 candidate proposal is the tree itself for a Task with no prior precondition.
 For a replacement it is `{existing_precondition, proposed_precondition}`, both
@@ -358,8 +364,9 @@ checks the instance mode, strict tree shape, every leaf with core's evaluator,
 and the whole tree. Every branch is checked despite boolean short-circuiting.
 Trees are bounded to 128 nodes and depth 16. Malformed output gives
 `advisory_malformed_result` and no candidate from the batch. Valid trees with
-missing targets give one information diagnostic per Task and no candidate for
-that Task. Repeated identical proposals do not duplicate the durable queue.
+missing targets give one information diagnostic per Task for the first three,
+then one count of further Tasks without ids or targets. No candidate is enqueued
+for those Tasks. Repeated identical proposals do not duplicate the durable queue.
 
 Only target identifiers of at most 128 ASCII bytes, with a recognized collection
 and nonempty dot-separated alphanumeric/underscore/hyphen segments, may appear

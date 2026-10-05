@@ -42,6 +42,14 @@ A routine occurrence is never selected, named or not. It is rebuilt from its
 routine's template at the next materialize, so answers admitted onto it would
 be lost. SuggestTags excludes occurrences for the same reason.
 
+From P1B-63, calendar capture may supply a Task's first description from the
+event's own notes. Round one is therefore not always a blank Task. If captured
+notes describe every active non-occurrence Task, the default selection finds
+nothing (`NoTask::AllDescribed`); choose a Task in the selector to interview it
+again. The selector still lists all active non-occurrence Tasks, and explicit
+selection and answer accumulation are unchanged. Capture never overwrites
+existing interview answers or notes edited on Tasks.
+
 `limit` is refused with `advisory_limit_unsupported`: an interview is about
 one Task. On `suggest_tags`, `task_id` is refused with
 `advisory_task_id_unsupported`. A field that belongs to the other producer is
@@ -75,8 +83,9 @@ That object, serialized, is the `prompt`. The Task's id, title, category and
 tags, its `description`, and the round. `category_tag`, `tags` and
 `description` are omitted when the Task has none.
 
-**The description is the operator's own accumulated answers.** Later rounds
-are meaningless without them. This is a real widening of what leaves the
+**The description is the operator's own notes and accumulated answers.** Notes
+may come from calendar capture or the Tasks screen. Later rounds are meaningless
+without the accumulated answers. This is a real widening of what leaves the
 process compared with SuggestTags. It goes to the configured loopback
 endpoint and nowhere else. The Clarify panel in the app says so.
 
