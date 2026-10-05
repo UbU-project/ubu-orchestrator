@@ -117,7 +117,7 @@ pub async fn select(state: &AppState, limit: usize) -> Result<(Context, Vec<Diag
         };
         if let Some(reason) = reason {
             skipped += 1;
-            if skipped <= suggest_tags::MAX_LIMIT {
+            if skipped <= suggest_tags::MAX_SKIPPED_NAMED {
                 diagnostics.push(DiagnosticBody {
                     code: "precondition_task_skipped".into(),
                     message: format!("Task `{}` {reason}", task.id),
@@ -131,12 +131,12 @@ pub async fn select(state: &AppState, limit: usize) -> Result<(Context, Vec<Diag
             });
         }
     }
-    if skipped > suggest_tags::MAX_LIMIT {
+    if skipped > suggest_tags::MAX_SKIPPED_NAMED {
         diagnostics.push(DiagnosticBody {
             code: "precondition_task_skipped".into(),
             message: format!(
                 "{} more Tasks were skipped: they are routine occurrences or have neither a title nor a description",
-                skipped - suggest_tags::MAX_LIMIT
+                skipped - suggest_tags::MAX_SKIPPED_NAMED
             ),
         });
     }
@@ -291,6 +291,7 @@ pub async fn vet_result(
     }
     let universe = current(state).await?;
     let mut accepted = Vec::new();
+    let mut missing_tasks = 0;
     for mut candidate in std::mem::take(&mut result.proposed_candidates) {
         if candidate.candidate_kind != CandidateKind::Precondition {
             accepted.push(candidate);
@@ -326,9 +327,12 @@ pub async fn vet_result(
             continue;
         }
         if !missing.is_empty() {
-            result
-                .diagnostics
-                .push(missing_diagnostic(target.id.as_str(), &missing));
+            missing_tasks += 1;
+            if missing_tasks <= suggest_tags::MAX_SKIPPED_NAMED {
+                result
+                    .diagnostics
+                    .push(missing_diagnostic(target.id.as_str(), &missing));
+            }
             continue;
         }
         // The prior tree comes from canonical state, never model output. It is
@@ -347,6 +351,9 @@ pub async fn vet_result(
                 .expect("canonical JSON is UTF-8"),
         );
         accepted.push(candidate);
+    }
+    if missing_tasks > suggest_tags::MAX_SKIPPED_NAMED {
+        result.diagnostics.push(json!({"code":"precondition_missing_targets","message":format!("{} more Tasks need recorded targets; no candidates were enqueued for those Tasks.", missing_tasks - suggest_tags::MAX_SKIPPED_NAMED)}));
     }
     result.proposed_candidates = accepted;
     Ok(())

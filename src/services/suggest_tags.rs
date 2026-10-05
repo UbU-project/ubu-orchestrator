@@ -35,7 +35,7 @@ pub async fn select(state: &AppState, limit: usize) -> Result<Vec<SelectedTask>>
 }
 
 /// How many skipped occurrences are named one by one before the rest are counted.
-pub const MAX_SKIPPED_NAMED: usize = MAX_LIMIT;
+pub const MAX_SKIPPED_NAMED: usize = 3;
 
 /// The uncategorised routine occurrences selection passed over, each named.
 pub async fn skipped_occurrences(
