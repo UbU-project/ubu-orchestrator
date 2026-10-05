@@ -415,7 +415,10 @@ fn precondition_candidates(sub: &LocalAdvisorySubmission, bytes: &[u8]) -> Optio
     if proposals.proposals.len() > context.tasks.len() { return None; }
     let mut seen = std::collections::BTreeSet::new();
     proposals.proposals.into_iter().enumerate().map(|(index, proposal)| {
-        if !context.tasks.iter().any(|task| task.id == proposal.id) || !seen.insert(proposal.id.clone()) { return None; }
+        let task = context.tasks.iter().find(|task| task.id == proposal.id)?;
+        if !seen.insert(proposal.id.clone()) { return None; }
+        let mut evidence_refs = vec![format!("{}:title", proposal.id)];
+        if task.description.is_some() { evidence_refs.push(format!("{}:description", proposal.id)); }
         let targets = json!([{"id":proposal.id,"object_type":"Task"}]);
         let normalized = proposal.precondition;
         let identity = json!({"candidate_kind":"precondition","normalized_proposal":normalized,"target_refs":targets});
@@ -423,7 +426,7 @@ fn precondition_candidates(sub: &LocalAdvisorySubmission, bytes: &[u8]) -> Optio
         serde_json::from_value(json!({
             "advisory_candidate_id":candidate_id(sub,index)?,"schema_version":"1.0","candidate_kind":"precondition","lifecycle_state":"proposed","version":1,
             "target_refs":targets,"normalized_proposal":normalized,"payload":{"kind":"inline","value":normalized},
-            "evidence_refs":[format!("{}:description",proposal.id)],"field_provenance":{"preconditions":sub.provider_config.model_name},
+            "evidence_refs":evidence_refs,"field_provenance":{"preconditions":sub.provider_config.model_name},
             "proposed_at":sub.submitted_at,"effective_time":sub.submitted_at,
             "proposing_actor":{"model_or_tool_name":sub.provider_config.model_name,"version":sub.provider_config.model_version},
             "origin_device_id":sub.origin_device_id,"idempotency_key":format!("{}:{index}",sub.submission_id),
