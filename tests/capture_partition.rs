@@ -39,6 +39,7 @@ fn event(id: &str, title: &str, start: &str, end: &str, colour: Option<&str>) ->
         external_id: id.into(),
         task_id: format!("task_{id}"),
         summary: title.into(),
+        description: None,
         start_at: format!("2026-09-25T{start}:00Z"),
         end_at: format!("2026-09-25T{end}:00Z"),
         color_id: colour.map(str::to_owned),

@@ -26,6 +26,7 @@ fn event() -> DesiredEvent {
         external_id: "0123456789abcdef0123456789abcdef".into(),
         task_id: "task_0123456789abcdef0123456789abcdef".into(),
         summary: "Synthetic focus".into(),
+        description: None,
         start_at: "2026-09-25T09:00:00Z".into(),
         end_at: "2026-09-25T09:30:00Z".into(),
         color_id: Some("5".into()),

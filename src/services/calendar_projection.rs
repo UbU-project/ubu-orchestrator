@@ -9,11 +9,28 @@ pub struct DesiredEvent {
     pub external_id: String,
     pub task_id: String,
     pub summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     pub start_at: String,
     pub end_at: String,
     pub color_id: Option<String>,
     pub transparent: bool,
     pub reminders_minutes: Vec<i64>,
+}
+
+impl DesiredEvent {
+    /// Only fields UbU writes can drift or need projection. Calendar notes are
+    /// capture input; an edit to those notes is never an export operation.
+    pub fn same_managed_fields(&self, other: &Self) -> bool {
+        self.external_id == other.external_id
+            && self.task_id == other.task_id
+            && self.summary == other.summary
+            && self.start_at == other.start_at
+            && self.end_at == other.end_at
+            && self.color_id == other.color_id
+            && self.transparent == other.transparent
+            && self.reminders_minutes == other.reminders_minutes
+    }
 }
 
 /// Google client-supplied event ids use lowercase a-v and 0-9, 5–1024 characters.
@@ -47,6 +64,7 @@ pub fn desired_events(
                 external_id: external_id_for(&step.task_id, captured_origins.get(&step.task_id).map(String::as_str))?,
                 task_id: step.task_id.clone(),
                 summary: step.summary.clone(),
+                description: None,
                 start_at: step.start_at.clone(),
                 end_at: step.end_at.clone(),
                 color_id: step.gcal_color_id.clone(),
@@ -97,7 +115,7 @@ pub fn diff(
         }
         match existing.get(id) {
             None => creates.push(CalendarOperation::Create((*event).clone())),
-            Some(old) if old != event => updates.push(CalendarOperation::Update((*event).clone())),
+            Some(old) if !old.same_managed_fields(event) => updates.push(CalendarOperation::Update((*event).clone())),
             Some(_) => {}
         }
     }

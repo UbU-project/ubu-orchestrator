@@ -159,6 +159,7 @@ fn a_stale_echo_is_never_also_reported_as_invalid_and_a_task_the_store_holds_is_
     use ubu_orchestrator::services::calendar_projection::DesiredEvent;
     // An echo with no length: the stale check comes before the window is parsed.
     let instant = DesiredEvent {
+        description: None,
         external_id: ECHO.into(), task_id: format!("task_{ECHO}"), summary: "Synthetic instant".into(),
         start_at: "2026-09-25T09:00:00Z".into(), end_at: "2026-09-25T09:00:00Z".into(),
         color_id: None, transparent: false, reminders_minutes: vec![],

@@ -37,7 +37,7 @@ pub fn classify(
                 "missing",
                 "UbU applied this event and the calendar no longer has it",
             )),
-            Some(current) if current != event => conflicts.push(conflict(
+            Some(current) if !current.same_managed_fields(event) => conflicts.push(conflict(
                 event,
                 "drifted",
                 "the calendar's copy of this event differs from what UbU applied",
@@ -101,6 +101,7 @@ mod tests {
             external_id: id.into(),
             task_id: format!("task_{id}"),
             summary: title.into(),
+            description: None,
             start_at: "2026-09-25T09:00:00Z".into(),
             end_at: "2026-09-25T09:30:00Z".into(),
             color_id: Some("5".into()),

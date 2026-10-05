@@ -190,7 +190,7 @@ pub async fn repair(state: &AppState, reconciliation_id: &str) -> Result<Calenda
             observation
                 .applied_events
                 .iter()
-                .any(|old| old.external_id == current.external_id && old != *current)
+                .any(|old| old.external_id == current.external_id && !old.same_managed_fields(current))
         })
         .count();
     let response = CalendarRepairResponse {

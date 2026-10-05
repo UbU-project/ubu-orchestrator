@@ -60,6 +60,7 @@ pub struct CapturedTask {
     pub task_id: Option<String>,
     pub origin_event_id: String,
     pub title: String,
+    pub description: Option<String>,
     /// The event's own window. A Static Task is pinned to it. For a Dynamic Task
     /// it is only what the applied record remembers of the event.
     pub start_at: String,
@@ -229,10 +230,13 @@ pub fn plan_capture(
             CapturedPlacement::Static => !event.transparent,
             CapturedPlacement::Dynamic { .. } => true,
         };
+        let (description, diagnostic) = super::calendar_wire::capture_description(&event.external_id, event.description.as_deref());
+        diagnostics.extend(diagnostic.map(super::calendar_wire::list_diagnostic));
         tasks.push(CapturedTask {
             task_id: existing_by_source.get(&event.external_id).cloned(),
             origin_event_id: event.external_id.clone(),
             title: event.summary.clone(),
+            description,
             start_at,
             end_at,
             placement,
@@ -298,7 +302,12 @@ pub async fn capture(
     normalize_observed(&mut observed, &applied);
     observed.retain(|event| range.overlaps(event) || applied.iter().any(|old| old.external_id == event.external_id));
     let mut diagnostics = client.take_diagnostics().await;
-    let wire_skipped = diagnostics.len();
+    for event in &mut observed {
+        let (description, diagnostic) = super::calendar_wire::capture_description(&event.external_id, event.description.as_deref());
+        event.description = description;
+        diagnostics.extend(diagnostic.map(super::calendar_wire::list_diagnostic));
+    }
+    let wire_skipped = diagnostics.iter().filter(|d| d.code != super::calendar_wire::DESCRIPTION_TOO_LARGE_CODE).count();
     // Which of the listed events UbU minted, by the stamp an insert writes. Drained
     // after the list, as the diagnostics are.
     let ubu_created_ids = client.take_ubu_created_ids().await;
@@ -371,7 +380,7 @@ pub async fn capture(
     for event in observed.iter().filter(|event| !foreign_ids.contains(event.external_id.as_str())) {
         if interaction.changed_external_ids.contains(&event.external_id) || replaced.contains(event.external_id.as_str()) { continue; }
         match applied.iter().find(|old| old.external_id == event.external_id) {
-            Some(old) if old == event => response.unchanged += 1,
+            Some(old) if old.same_managed_fields(event) => response.unchanged += 1,
             Some(old) => diagnostics.push(DiagnosticBody {
                 code: "capture_owned_drift".into(),
                 message: format!("Owned Task `{}` event `{}` differs from the applied record; no Task update was made", old.task_id, event.external_id),
@@ -401,6 +410,12 @@ pub async fn capture(
             "id":id, "status":"active", "provenance":{"created_at":now,"authority_source":"user","source":{"source_kind":"google_calendar","source_id":task.origin_event_id}}
         }));
         payload["title"] = task.title.clone().into();
+        // Calendar notes may fill a blank, never replace authored or interviewed text.
+        if payload.get("description").and_then(serde_json::Value::as_str).is_none_or(|text| text.trim().is_empty()) {
+            if let Some(description) = &task.description {
+                payload["description"] = description.clone().into();
+            }
+        }
         // One scheduling form, never both. A Task that changes placement loses
         // the other form's field rather than keeping a stale one.
         let fields = payload.as_object_mut().unwrap();

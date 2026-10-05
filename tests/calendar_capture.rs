@@ -26,6 +26,7 @@ fn event() -> DesiredEvent {
         external_id: ORIGIN.into(),
         task_id: format!("task_{ORIGIN}"),
         summary: "Dentist".into(),
+        description: None,
         start_at: "2026-09-25T09:00:00Z".into(),
         end_at: "2026-09-25T09:30:00Z".into(),
         color_id: Some("3".into()),

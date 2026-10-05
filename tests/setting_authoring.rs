@@ -329,6 +329,7 @@ async fn inverse_uses_changed_palette_for_capture_and_dynamic_completion_still_w
         external_id: "bbbbb".into(),
         task_id: "task_bbbbb".into(),
         summary: "Synthetic foreign appointment".into(),
+        description: None,
         start_at: "2026-09-28T09:00:00Z".into(),
         end_at: "2026-09-28T09:30:00Z".into(),
         color_id: Some("1".into()),

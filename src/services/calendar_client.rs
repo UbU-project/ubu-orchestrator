@@ -140,8 +140,11 @@ pub fn load_mock_events(
             seed.ubu_created_ids.extend(super::calendar_wire::ubu_created_ids(
                 &serde_json::json!({"items": [entry.clone()]}),
             ));
-            match super::calendar_wire::parse_event(&entry) {
-                Ok(event) => event,
+            match super::calendar_wire::parse_event_with_diagnostic(&entry) {
+                Ok((event, diagnostic)) => {
+                    seed.skipped.extend(diagnostic);
+                    event
+                },
                 Err(message) => {
                     seed.skipped.push(format!("list event `{id}` entry {index}: {message}"));
                     continue;
@@ -156,8 +159,11 @@ pub fn load_mock_events(
                     }
                 }
             }
-            let event: DesiredEvent =
+            let mut event: DesiredEvent =
                 serde_json::from_value(entry).map_err(|e| error(&name, e.to_string()))?;
+            let (description, diagnostic) = super::calendar_wire::capture_description(&event.external_id, event.description.as_deref());
+            event.description = description;
+            seed.skipped.extend(diagnostic);
             // No length is something a calendar can hold, and capture refuses it.
             // Backwards is a mistake in the fixture.
             if event.start_at != event.end_at {
@@ -323,6 +329,9 @@ impl CalendarApi for RecordingCalendarApi {
     }
     fn insert_event<'a>(&'a self, event: &'a DesiredEvent) -> CalendarApiFuture<'a, ()> {
         Box::pin(async move {
+            // Model Google's writable body: description is never exported.
+            let mut event = event.clone();
+            event.description = None;
             let mut state = self.state.lock().unwrap();
             state.calls.push(RecordedCalendarCall::InsertEvent {
                 event: event.clone(),
@@ -341,6 +350,8 @@ impl CalendarApi for RecordingCalendarApi {
     }
     fn patch_event<'a>(&'a self, event: &'a DesiredEvent) -> CalendarApiFuture<'a, ()> {
         Box::pin(async move {
+            let mut event = event.clone();
+            event.description = None;
             let mut state = self.state.lock().unwrap();
             state.calls.push(RecordedCalendarCall::PatchEvent {
                 event: event.clone(),
@@ -350,7 +361,10 @@ impl CalendarApi for RecordingCalendarApi {
                 .events
                 .get_mut(&event.external_id)
                 .ok_or_else(|| format!("event `{}` does not exist", event.external_id))?;
+            // A real PATCH omits notes, which leaves the operator's notes intact.
+            let description = existing.description.clone();
             *existing = event.clone();
+            existing.description = description;
             Ok(())
         })
     }
@@ -379,6 +393,7 @@ mod tests {
             external_id: id.into(),
             task_id: format!("task_{id}"),
             summary: "Synthetic event".into(),
+            description: None,
             start_at: "2026-09-25T09:00:00Z".into(),
             end_at: "2026-09-25T09:30:00Z".into(),
             color_id: None,

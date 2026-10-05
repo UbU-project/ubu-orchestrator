@@ -18,6 +18,26 @@ const NOW: &str = "2026-09-25T08:00:00Z";
 const END: &str = "2026-09-25T20:00:00Z";
 const FOREIGN: &str = "5n0q8c9h7g4k2m1p3r6t8v0a2c";
 
+#[tokio::test]
+async fn oversized_notes_in_either_seed_shape_leave_the_event_capturable_without_echoing_text() {
+    use ubu_orchestrator::services::{clarify::MAX_DESCRIPTION_BYTES, calendar_wire::DESCRIPTION_TOO_LARGE_CODE};
+    let description = "synthetic-notes-marker".repeat(MAX_DESCRIPTION_BYTES);
+    for entry in [
+        json!({"id":FOREIGN,"summary":"Synthetic notes bound","description":description,"start":{"dateTime":"2026-09-25T09:00:00Z"},"end":{"dateTime":"2026-09-25T09:30:00Z"},"colorId":"3"}),
+        json!({"external_id":FOREIGN,"summary":"Synthetic notes bound","description":description,"start_at":"2026-09-25T09:00:00Z","end_at":"2026-09-25T09:30:00Z","color_id":"3","transparent":false,"reminders_minutes":[]}),
+    ] {
+        let fixture = Fixture::events("notes-bound", &json!([entry]));
+        let state = empty(Some(&fixture)).await;
+        let result = ok(&state, "POST", "/projection/calendar/capture", json!({"schema_version":"ubu.orchestrator.calendar_capture.v1","export_mode":"mock"})).await;
+        assert_eq!(result["captured"], 1);
+        assert_eq!(result["skipped"], 0);
+        assert_eq!(result["diagnostics"].as_array().unwrap().iter().filter(|d|d["code"]==DESCRIPTION_TOO_LARGE_CODE).count(),1);
+        assert!(!result.to_string().contains("synthetic-notes-marker"));
+        let raw: String = sqlx::query_scalar("SELECT payload_json FROM objects WHERE object_type='Task'").fetch_one(state.inner().store.pool()).await.unwrap();
+        assert!(serde_json::from_str::<Value>(&raw).unwrap().get("description").is_none());
+    }
+}
+
 async fn request(state: &AppState, method: &str, uri: &str, body: Value) -> (StatusCode, Value) {
     let response = build_router(state.clone())
         .oneshot(

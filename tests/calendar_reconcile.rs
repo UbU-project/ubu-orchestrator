@@ -326,6 +326,7 @@ async fn unrecorded_id_of_an_active_unscheduled_task_is_not_foreign() {
         external_id: external_id(task_id).unwrap(),
         task_id: task_id.into(),
         summary: "Unscheduled synthetic Task".into(),
+        description: None,
         start_at: "2026-09-25T11:00:00Z".into(),
         end_at: "2026-09-25T11:30:00Z".into(),
         color_id: None,

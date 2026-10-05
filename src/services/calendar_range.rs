@@ -60,6 +60,7 @@ mod tests {
             external_id: id.into(),
             task_id: format!("task_{id}"),
             summary: "Synthetic".into(),
+            description: None,
             start_at: format!("2026-09-25T{start}"),
             end_at: format!("2026-09-25T{end}"),
             color_id: None,

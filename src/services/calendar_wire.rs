@@ -85,12 +85,40 @@ fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str, String>
 pub const ALL_DAY_MESSAGE: &str = "all-day event has no dateTime; it carries no duration, so it cannot be scheduled and is skipped";
 
 pub fn parse_event(value: &Value) -> Result<DesiredEvent, String> {
+    parse_event_with_diagnostic(value).map(|(event, _)| event)
+}
+
+pub const DESCRIPTION_TOO_LARGE_CODE: &str = "capture_description_too_large";
+
+fn description_limit_message() -> String {
+    format!("description exceeds {} bytes; notes were not imported, but the event remains available for capture", super::clarify::MAX_DESCRIPTION_BYTES)
+}
+
+/// The same policy for Google input, normalized mock input and capture planning.
+/// Whitespace is trimmed; markup and interior text are otherwise untouched.
+pub fn capture_description(id: &str, raw: Option<&str>) -> (Option<String>, Option<String>) {
+    let Some(text) = raw.map(str::trim).filter(|text| !text.is_empty()) else {
+        return (None, None);
+    };
+    if text.len() > super::clarify::MAX_DESCRIPTION_BYTES {
+        return (None, Some(format!("Calendar event `{id}`: {}", description_limit_message())));
+    }
+    (Some(text.to_owned()), None)
+}
+
+pub fn parse_event_with_diagnostic(value: &Value) -> Result<(DesiredEvent, Option<String>), String> {
     if value.get("status").and_then(Value::as_str) == Some("cancelled") {
         return Err("cancelled event".into());
     }
     let id = required_string(value, "id")?;
     let task_id = format!("task_{id}");
     let summary = required_string(value, "summary")?;
+    let raw_description = match value.get("description") {
+        None => None,
+        Some(Value::String(text)) => Some(text.as_str()),
+        _ => return Err("invalid description".into()),
+    };
+    let (description, description_diagnostic) = capture_description(id, raw_description);
     if value["start"].get("date").is_some() && value["start"].get("dateTime").is_none() {
         return Err(ALL_DAY_MESSAGE.into());
     }
@@ -139,16 +167,17 @@ pub fn parse_event(value: &Value) -> Result<DesiredEvent, String> {
                 .ok_or_else(|| "invalid reminder minutes".into())
         })
         .collect::<Result<Vec<_>, String>>()?;
-    Ok(DesiredEvent {
+    Ok((DesiredEvent {
         external_id: id.into(),
         task_id,
         summary: summary.into(),
+        description,
         start_at: start_at.into(),
         end_at: end_at.into(),
         color_id,
         transparent,
         reminders_minutes,
-    })
+    }, description_diagnostic))
 }
 
 pub fn parse_event_list(value: &Value) -> (Vec<DesiredEvent>, Vec<String>) {
@@ -161,8 +190,11 @@ pub fn parse_event_list(value: &Value) -> (Vec<DesiredEvent>, Vec<String>) {
     let mut events = Vec::new();
     let mut messages = Vec::new();
     for (index, item) in items.iter().enumerate() {
-        match parse_event(item) {
-            Ok(event) => events.push(event),
+        match parse_event_with_diagnostic(item) {
+            Ok((event, diagnostic)) => {
+                events.push(event);
+                messages.extend(diagnostic);
+            }
             // Identify the entry by index and readable handle, never by its title or content.
             Err(message) => {
                 let id = item.get("id").and_then(Value::as_str).unwrap_or("*");
@@ -201,7 +233,7 @@ pub fn ubu_created_ids(value: &Value) -> BTreeSet<String> {
 
 pub fn list_diagnostic(message: String) -> crate::api::planning::DiagnosticBody {
     crate::api::planning::DiagnosticBody {
-        code: if message.ends_with(ALL_DAY_MESSAGE) { "capture_all_day_unsupported" } else { "calendar_event_skipped" }.into(),
+        code: if message.ends_with(ALL_DAY_MESSAGE) { "capture_all_day_unsupported" } else if message.ends_with(&description_limit_message()) { DESCRIPTION_TOO_LARGE_CODE } else { "calendar_event_skipped" }.into(),
         message,
     }
 }
