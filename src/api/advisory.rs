@@ -23,6 +23,7 @@ pub struct AdvisoryQueueResponse {
     pub state_category: String,
     pub candidates: Vec<AdvisoryCandidateResponse>,
     pub deferred_candidates: Vec<AdvisoryCandidateResponse>,
+    pub review_intervals: std::collections::BTreeMap<String, crate::services::review_policy::Interval>,
     pub target_titles: std::collections::BTreeMap<String,String>,
 }
 
@@ -64,7 +65,15 @@ pub async fn queue(State(state): State<AppState>) -> Result<Json<AdvisoryQueueRe
             }
         }
     }
+    let mut review_intervals = std::collections::BTreeMap::new();
+    for entry in candidates.iter().chain(&deferred_candidates) {
+        let candidate: ubu_core::AdvisoryCandidate = serde_json::from_value(entry.candidate.clone()).map_err(|e|AppError::Internal(e.to_string()))?;
+        if crate::services::precondition_review::is_review(&candidate) {
+            review_intervals.insert(candidate.advisory_candidate_id.as_str().to_owned(), crate::services::review_policy::interval(&state, &candidate).await?);
+        }
+    }
     Ok(Json(AdvisoryQueueResponse {
+        review_intervals,
         state_category: "candidate_state".to_owned(),
         candidates,
         deferred_candidates,
@@ -100,9 +109,17 @@ pub struct ReviewRequest {
 #[serde(deny_unknown_fields)]
 pub struct RejectRequest {
     pub observed_version: u64,
+    pub snooze_days: Option<u64>,
     pub reason: String,
     #[schema(schema_with = retention_policy_schema)]
     pub retention_policy: ubu_core::RetentionPolicy,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DeferRequest {
+    pub observed_version: u64,
+    pub snooze_days: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -227,12 +244,13 @@ pub async fn reject(
     Path(id): Path<String>,
     Json(request): Json<RejectRequest>,
 ) -> Result<Json<AdvisoryCandidateResponse>> {
-    let candidate = advisory_service::reject_candidate(
+    let candidate = advisory_service::reject_candidate_for(
         &state,
         &parse_id(&id)?,
         request.observed_version,
         request.reason,
         request.retention_policy,
+        request.snooze_days,
     )
     .await
     .map_err(review_error)?;
@@ -240,15 +258,15 @@ pub async fn reject(
 }
 
 #[utoipa::path(post, path = "/advisory/candidate/{candidate_id}/defer",
-    params(("candidate_id" = String, Path)), request_body = ReviewRequest,
+    params(("candidate_id" = String, Path)), request_body = DeferRequest,
     responses((status = 200, body = AdvisoryCandidateResponse), (status = 400), (status = 404), (status = 409)))]
 pub async fn defer(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Json(request): Json<ReviewRequest>,
+    Json(request): Json<DeferRequest>,
 ) -> Result<Json<AdvisoryCandidateResponse>> {
     let candidate =
-        advisory_service::defer_candidate(&state, &parse_id(&id)?, request.observed_version)
+        advisory_service::defer_candidate_for(&state, &parse_id(&id)?, request.observed_version, request.snooze_days)
             .await
             .map_err(review_error)?;
     Ok(Json(candidate_response(candidate.payload_json)?))

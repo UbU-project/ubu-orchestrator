@@ -1,6 +1,4 @@
 #![allow(dead_code)]
-#[path = "clarify_fixture.rs"]
-mod base;
 #[path = "precondition_fixture.rs"]
 mod precondition;
 #[allow(unused_imports)]
@@ -49,10 +47,21 @@ pub async fn ready(answer: Value) -> (AppState, Arc<StubTransport>) {
         submissions: Mutex::new(vec![]),
     });
     let transport = stub.clone();
-    let state = base::bare()
+    let state = AppState::in_memory(ubu_orchestrator::config::ServerConfig::from_env())
         .await
+        .unwrap()
+        .with_clock(ubu_orchestrator::planning_time::FixedClock(
+            ubu_core::UbuTimestamp::parse(NOW).unwrap(),
+        ))
         .with_advisory_transport_factory(Arc::new(move |_| transport.clone()));
-    base::configure(&state).await;
+    for (name, value) in [
+        ("advisory.model", "synthetic-review-model"),
+        ("advisory.endpoint", "http://127.0.0.1:11434"),
+    ] {
+        ubu_orchestrator::services::setting_authoring::put(&state, name, json!(value))
+            .await
+            .unwrap();
+    }
     seed(&state,A,"active",json!({"description":"Synthetic orbital teapot inspection needs no charge.","preconditions":tree(),"duration_estimate":{"type":"fixed","seconds":600}})).await;
     fact(&state, 0.0).await;
     (state, stub)

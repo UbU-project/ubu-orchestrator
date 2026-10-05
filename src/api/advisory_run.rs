@@ -16,12 +16,14 @@ pub const ADVISORY_RUN_SCHEMA_VERSION: &str = "ubu.orchestrator.advisory_run.v1"
 #[serde(deny_unknown_fields)]
 pub struct AdvisoryRunRequest {
     pub schema_version: Option<String>,
-    /// `suggest_tags`, `clarify` or `precondition`.
+    /// `suggest_tags`, `clarify`, `precondition` or `precondition_review`.
     pub producer: String,
     /// `suggest_tags` or `precondition`: how many Tasks to select.
     pub limit: Option<usize>,
     /// `clarify` only: the Task to interview. Omitted, the first Task with no description.
     pub task_id: Option<String>,
+    /// Explicit immediate reconsideration, for precondition_review only.
+    pub force: Option<bool>,
 }
 #[derive(Debug, Serialize, ToSchema)]
 pub struct AdvisoryRunResponse {
@@ -59,6 +61,9 @@ pub async fn run(
                 "Unsupported advisory run schema_version",
             ))
         }
+    }
+    if request.force.is_some() && request.producer != "precondition_review" {
+        return Err(AppError::bad_request_diagnostic("advisory_force_unsupported", "force applies only to precondition_review"));
     }
     let interview = match request.producer.as_str() {
         "suggest_tags" | "precondition" | "precondition_review" => false,
@@ -143,7 +148,8 @@ pub async fn run(
     };
     let mut skipped = Vec::new();
     let submission = if request.producer == "precondition_review" {
-        let context = precondition_review::select(&state, limit).await?;
+        let mut context = precondition_review::select(&state, limit).await?;
+        context.force = request.force.unwrap_or(false);
         response.selected = context.tasks.iter().map(|t|SelectedTask { id:t.id.clone(),title:String::new() }).collect();
         if context.tasks.is_empty() { response.status = "ok".into(); return Ok(Json(response)); }
         precondition_review::submission(&state, &context, &model.unwrap()).await?

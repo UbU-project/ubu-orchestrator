@@ -22,6 +22,9 @@ pub async fn settings(pool: &sqlx::SqlitePool) -> Result<Vec<ObjectRecord>> {
         .map_err(internal)
 }
 
+pub const REVIEW_SEED: &str = "advisory.review_seed_days";
+pub const REVIEW_CEILING: &str = "advisory.review_ceiling_days";
+
 pub const ADVISORY_TIMEOUT: &str = "advisory.timeout_ms";
 pub const DEFAULT_ADVISORY_TIMEOUT_MS: u64 = 120_000;
 /// A zero would fail every run at once; no ceiling would let one run hold the advisory path.
@@ -36,14 +39,14 @@ fn valid_advisory_timeout(value: &Value) -> Option<u64> {
 }
 
 fn validate_name(name: &str) -> Result<()> {
-    if matches!(name, "advisory.model" | "advisory.endpoint" | ADVISORY_TIMEOUT) { return Ok(()); }
+    if matches!(name, "advisory.model" | "advisory.endpoint" | ADVISORY_TIMEOUT | REVIEW_SEED | REVIEW_CEILING) { return Ok(()); }
     if !name
         .strip_prefix("calendar.color.")
         .is_some_and(|category| !category.trim().is_empty())
     {
         return Err(AppError::bad_request_diagnostic(
             "setting_unknown_name",
-            "Only calendar.color.<category>, advisory.model, advisory.endpoint and advisory.timeout_ms Settings can be authored",
+            "Only calendar.color.<category> and supported advisory model, endpoint, timeout and review interval Settings can be authored",
         ));
     }
     Ok(())
@@ -98,6 +101,10 @@ pub async fn put(state: &AppState, name: &str, value: Value) -> Result<(String, 
                 format!("advisory.timeout_ms must be an integer number of milliseconds from {MIN_ADVISORY_TIMEOUT_MS} to {MAX_ADVISORY_TIMEOUT_MS}"),
             ));
         }
+    } else if matches!(name, REVIEW_SEED | REVIEW_CEILING) {
+        if value.as_u64().is_none_or(|days| !(1..=365).contains(&days)) {
+            return Err(AppError::bad_request_diagnostic("setting_invalid_review_interval", "Review intervals must be whole days from 1 to 365"));
+        }
     } else if name.starts_with("advisory.") {
         if !value.as_str().is_some_and(|value| !value.trim().is_empty()) {
             return Err(AppError::bad_request_diagnostic("setting_invalid_advisory", "Advisory Settings must be non-empty strings"));
@@ -116,6 +123,7 @@ pub async fn put(state: &AppState, name: &str, value: Value) -> Result<(String, 
     }
     let _import = state.inner().quick_ubu_import_lock.lock().await;
     let _action = state.inner().task_action_lock.lock().await;
+    check_review_pair(state, name, value.as_u64()).await?;
     let old = current(state, name).await?;
     let now = state.planning_now();
     let id = match &old {
@@ -155,6 +163,7 @@ pub async fn delete(state: &AppState, name: &str) -> Result<()> {
     validate_name(name)?;
     let _import = state.inner().quick_ubu_import_lock.lock().await;
     let _action = state.inner().task_action_lock.lock().await;
+    check_review_pair(state, name, None).await?;
     let row = current(state, name)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Setting `{name}` does not exist")))?;
@@ -201,6 +210,10 @@ pub async fn list(state: &AppState) -> Result<crate::api::setting::SettingsRespo
         value: Some(timeout_ms.to_string()),
         origin: if configured { "setting" } else { "default" }.into(),
     });
+    for name in [REVIEW_SEED, REVIEW_CEILING] {
+        let (days, configured) = review_days(state, name).await?;
+        advisory.push(crate::api::setting::AdvisorySettingEntry { name:name.into(),value:Some(days.to_string()),origin:if configured {"setting"} else {"default"}.into() });
+    }
     Ok(crate::api::setting::SettingsResponse {
         schema_version: crate::api::setting::SETTING_SCHEMA_VERSION.into(),
         settings,
@@ -208,4 +221,19 @@ pub async fn list(state: &AppState) -> Result<crate::api::setting::SettingsRespo
         inverse: palette.inverse_entries(),
         advisory,
     })
+}
+
+/// The ceiling cannot exceed a year: configuration cannot turn a snooze into silence.
+pub async fn review_days(state: &AppState, name: &str) -> Result<(u64, bool)> {
+    let default = if name == REVIEW_SEED {7} else {365};
+    let Some(row) = current(state,name).await? else { return Ok((default,false)); };
+    let payload:Value=serde_json::from_str(&row.payload_json).map_err(internal)?;
+    Ok(payload["value"].as_u64().filter(|n|(1..=365).contains(n)).map_or((default,false),|n|(n,true)))
+}
+async fn check_review_pair(state: &AppState, name: &str, proposed: Option<u64>) -> Result<()> {
+    if !matches!(name, REVIEW_SEED|REVIEW_CEILING) {return Ok(());}
+    let seed = if name == REVIEW_SEED {proposed.unwrap_or(7)} else {review_days(state,REVIEW_SEED).await?.0};
+    let ceiling = if name == REVIEW_CEILING {proposed.unwrap_or(365)} else {review_days(state,REVIEW_CEILING).await?.0};
+    if seed > ceiling {return Err(AppError::bad_request_diagnostic("setting_invalid_review_interval", "The review seed must not exceed its ceiling"));}
+    Ok(())
 }

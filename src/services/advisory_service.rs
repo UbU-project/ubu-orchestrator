@@ -7,7 +7,7 @@ use ubu_core::{
     ResurfaceTrigger, RetentionPolicy, UbuTimestamp, VersionRef,
 };
 use ubu_store::api::admission::{
-    admit_advisory_candidate, reject_advisory_candidate, transition_advisory_candidate,
+    admit_advisory_candidate, transition_advisory_candidate,
     RejectionInput,
 };
 use ubu_store::api::review::{get_advisory_candidate, CandidateRecord};
@@ -36,12 +36,21 @@ pub struct AdvisoryRunReport {
 /// store handle. Candidate storage uses the candidate's deterministic key.
 pub async fn run_advisory<T: AdvisoryTransport + ?Sized>(
     state: &AppState,
-    submission: LocalAdvisorySubmission,
+    mut submission: LocalAdvisorySubmission,
     transport: &T,
 ) -> Result<AdvisoryRunReport> {
     submission.validate()?;
     let _guard = state.inner().advisory_run_lock.lock().await;
-    let mut result = transport.submit(&submission).unwrap_or_else(|_| super::advisory_wire::failed(&submission, super::advisory_wire::Failure::Connection));
+    let mut policy_diagnostics = Vec::new();
+    let mut ask = true;
+    if submission.expected_result_schema == super::precondition_review::RESULT_SCHEMA {
+        let mut context: super::precondition_review::Context = serde_json::from_value(submission.payload.clone()).map_err(|e|AppError::Internal(e.to_string()))?;
+        (context.tasks, policy_diagnostics) = super::review_policy::eligible(state, context.tasks, context.force).await?;
+        ask = !context.tasks.is_empty();
+        submission.payload = serde_json::to_value(context).expect("context serializes");
+    }
+    let mut result = if submission.expected_result_schema == super::precondition_review::RESULT_SCHEMA { super::precondition_review::submit_reviews(&submission, transport) } else if ask { transport.submit(&submission).unwrap_or_else(|_| super::advisory_wire::failed(&submission, super::advisory_wire::Failure::Connection)) } else { super::advisory_wire::empty_result(&submission) };
+    result.diagnostics.splice(0..0, policy_diagnostics);
     let mut report = AdvisoryRunReport {
         submission_id: submission.submission_id.clone(),
         status: result.status,
@@ -81,12 +90,12 @@ pub async fn run_advisory<T: AdvisoryTransport + ?Sized>(
         let identity = json!({"candidate_kind":candidate.candidate_kind,"normalized_proposal":candidate.normalized_proposal,"target_refs":candidate.target_refs});
         let derived = String::from_utf8(ubu_core::canonical_payload_bytes(&identity)).expect("canonical JSON is UTF-8");
         let key = candidate.suppression_key.as_deref().unwrap_or(&derived);
-        if ubu_store::api::review::find_suppression_record(state.inner().store.pool(),key).await?.is_some() {
+        if !super::precondition_review::is_review(candidate) && ubu_store::api::review::find_suppression_record(state.inner().store.pool(),key).await?.is_some() {
             report.candidates_suppressed += 1;
             report.diagnostics.push(json!({"code":"advisory_proposal_suppressed","message":"A previously rejected proposal was suppressed; it was not re-enqueued"}));
             continue;
         }
-        if candidate.normalized_proposal["operation"] == "set_category" || candidate.candidate_kind == ubu_core::CandidateKind::Precondition {
+        if !super::precondition_review::is_review(candidate) && (candidate.normalized_proposal["operation"] == "set_category" || candidate.candidate_kind == ubu_core::CandidateKind::Precondition) {
             let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM advisory_candidates WHERE suppression_key=?)")
                 .bind(key).fetch_one(state.inner().store.pool()).await.map_err(|e|AppError::Internal(e.to_string()))?;
             if exists {
@@ -235,6 +244,7 @@ pub async fn admit_candidate(
     id: &AdvisoryCandidateId,
     observed_version: u64,
 ) -> Result<(CandidateRecord, ObjectRecord)> {
+    let _guard = state.inner().advisory_run_lock.lock().await;
     prepare_admission(state, id, observed_version)
         .await?
         .commit(state, id, observed_version)
@@ -260,13 +270,31 @@ pub async fn reject_candidate(
     reason: String,
     retention_policy: RetentionPolicy,
 ) -> Result<CandidateRecord> {
+    reject_candidate_for(state, id, observed_version, reason, retention_policy, None).await
+}
+
+pub async fn reject_candidate_for(
+    state: &AppState,
+    id: &AdvisoryCandidateId,
+    observed_version: u64,
+    reason: String,
+    retention_policy: RetentionPolicy,
+    snooze_days: Option<u64>,
+) -> Result<CandidateRecord> {
     let _guard = state.inner().advisory_run_lock.lock().await;
+    let candidate = reviewed_candidate(state, id, observed_version).await?;
+    let review = super::precondition_review::is_review(&candidate);
+    let context = if review { Some(super::review_policy::decision_context(state, &candidate, snooze_days).await?) } else {
+        if snooze_days.is_some() { return Err(AppError::bad_request_diagnostic("advisory_invalid_snooze", "Only admission reviews take a snooze span")); }
+        None
+    };
+    let reason = if review && reason.trim().is_empty() { "No reason provided".into() } else { reason };
     let envelope = state.envelope_for(
         Default::default(),
         AuthoritySource::User,
-        UbuTimestamp::now_utc(),
+        state.planning_now(),
     )?;
-    Ok(reject_advisory_candidate(
+    Ok(ubu_store::api::admission::reject_advisory_candidate_with_context(
         state.inner().store.pool(),
         &envelope,
         id,
@@ -277,23 +305,24 @@ pub async fn reject_candidate(
             evidence_hashes_or_source_fingerprints: Vec::new(),
             suppression_key: None,
         },
+        context,
     )
     .await?)
 }
 
-pub async fn defer_candidate(
-    state: &AppState,
-    id: &AdvisoryCandidateId,
-    observed_version: u64,
-) -> Result<CandidateRecord> {
-    review_transition(
-        state,
-        id,
-        observed_version,
-        CandidateLifecycleState::Deferred,
-        None,
-    )
-    .await
+pub async fn defer_candidate(state: &AppState, id: &AdvisoryCandidateId, observed_version: u64) -> Result<CandidateRecord> {
+    defer_candidate_for(state, id, observed_version, None).await
+}
+pub async fn defer_candidate_for(state: &AppState, id: &AdvisoryCandidateId, observed_version: u64, snooze_days: Option<u64>) -> Result<CandidateRecord> {
+    let _guard = state.inner().advisory_run_lock.lock().await;
+    let candidate = reviewed_candidate(state, id, observed_version).await?;
+    if !super::precondition_review::is_review(&candidate) {
+        if snooze_days.is_some() { return Err(AppError::bad_request_diagnostic("advisory_invalid_snooze", "Only admission reviews take a snooze span")); }
+        return review_transition(state,id,observed_version,CandidateLifecycleState::Deferred,None).await;
+    }
+    let context = super::review_policy::decision_context(state, &candidate, snooze_days).await?;
+    let envelope = state.envelope_for(Default::default(), AuthoritySource::User, state.planning_now())?;
+    Ok(ubu_store::api::admission::transition_advisory_candidate_with_context(state.inner().store.pool(), &envelope, id, observed_version, CandidateLifecycleState::Deferred, None, Some(context)).await?)
 }
 
 pub async fn resurface_candidate(

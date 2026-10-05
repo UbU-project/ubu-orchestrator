@@ -416,3 +416,14 @@ Replacement revalidates every proposed leaf against current facts and observes
 Task and UniverseState versions. Removal clears the field, observes the Task
 version, and needs no fact or proposed-tree validation: no guard remains.
 Neither operation changes any other Task field or authors a fact.
+
+Review dismissal policy is specified by [Admission review](ADMISSION_REVIEW.md).
+The queue includes `review_intervals` keyed by candidate ID: suggested days,
+seed, ceiling, blocking cap, evaluation time, return date and saved hold date.
+Review defer/reject accept optional `snooze_days`. Settings
+`advisory.review_seed_days` (default 7) and `advisory.review_ceiling_days`
+(default 365) are whole days with `1 <= seed <= ceiling <= 365`, beside model,
+endpoint and timeout. Generic proposal suppression retains its behavior.
+Review operations use subject keys, event-based escalation and finite holds.
+`force: true` on a `precondition_review` run explicitly reconsiders holds;
+other producers refuse the field. Ordinary review runs honour holds.

@@ -135,3 +135,25 @@ fn canonical_review_fixtures_roundtrip_through_existing_core_candidate() {
         assert_eq!(c, again);
     }
 }
+
+#[tokio::test]
+async fn each_review_call_sees_one_task_and_no_other_tasks_description() {
+    let (state,stub)=ready(removal()).await;
+    seed(&state,B,"active",json!({"description":"Synthetic separate moon-dial calibration.","preconditions":tree()})).await;
+    let r=run(&state).await;assert_eq!(r["candidates_enqueued"],2,"{r}");
+    let subs=stub.submissions.lock().unwrap();assert_eq!(subs.len(),2);
+    for sub in subs.iter() {
+        let body=advisory_wire::request_body(sub).unwrap();let prompt:Value=serde_json::from_str(body["prompt"].as_str().unwrap()).unwrap();
+        assert_eq!(prompt["tasks"].as_array().unwrap().len(),1);
+        let text=prompt.to_string();assert_ne!(text.contains("inspection"),text.contains("moon-dial"));
+    }
+    assert_eq!(r["diagnostics"].as_array().unwrap().iter().filter(|d|d["code"]=="precondition_review_sound").count(),1);
+}
+
+#[test]
+fn review_numeric_words_match_browser_json_number_spelling() {
+    for (raw,expected) in [("25.0","25"),("-0.0","0"),("1e-7","1e-7"),("1e21","1e+21"),("0.000001","0.000001"),("9007199254740993","9007199254740992")] {
+        let value:Value=serde_json::from_str(raw).unwrap();
+        assert_eq!(precondition_review::words(&json!({"target":TARGET,"predicate":"at_least","expected":value})),format!("{TARGET} is at least {expected}"));
+    }
+}

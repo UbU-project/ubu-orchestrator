@@ -121,6 +121,8 @@ use utoipa::OpenApi;
         crate::api::advisory::AdvisoryQueueResponse,
         crate::api::advisory::AdvisoryAdmitResponse,
         crate::api::advisory::ReviewRequest,
+        crate::api::advisory::DeferRequest,
+        crate::services::review_policy::Interval,
         crate::api::advisory::AnswerRequest,
         crate::api::advisory::RejectRequest,
         crate::api::advisory::ResurfaceRequest,

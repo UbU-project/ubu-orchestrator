@@ -168,7 +168,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ReviewRequest"
+                "$ref": "#/components/schemas/DeferRequest"
               }
             }
           },
@@ -2216,6 +2216,7 @@
           "state_category",
           "candidates",
           "deferred_candidates",
+          "review_intervals",
           "target_titles"
         ],
         "properties": {
@@ -2229,6 +2230,15 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/AdvisoryCandidateResponse"
+            }
+          },
+          "review_intervals": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Interval"
+            },
+            "propertyNames": {
+              "type": "string"
             }
           },
           "state_category": {
@@ -2251,6 +2261,13 @@
           "producer"
         ],
         "properties": {
+          "force": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Explicit immediate reconsideration, for precondition_review only."
+          },
           "limit": {
             "type": [
               "integer",
@@ -2261,7 +2278,7 @@
           },
           "producer": {
             "type": "string",
-            "description": "`suggest_tags`, `clarify` or `precondition`."
+            "description": "`suggest_tags`, `clarify`, `precondition` or `precondition_review`."
           },
           "schema_version": {
             "type": [
@@ -3628,6 +3645,28 @@
           }
         }
       },
+      "DeferRequest": {
+        "type": "object",
+        "required": [
+          "observed_version"
+        ],
+        "properties": {
+          "observed_version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "snooze_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
       "DiagnosticBody": {
         "type": "object",
         "required": [
@@ -4132,6 +4171,49 @@
           },
           "title": {
             "type": "string"
+          }
+        }
+      },
+      "Interval": {
+        "type": "object",
+        "required": [
+          "suggested_days",
+          "seed_days",
+          "ceiling_days",
+          "capped",
+          "evaluated_at",
+          "return_at"
+        ],
+        "properties": {
+          "capped": {
+            "type": "boolean"
+          },
+          "ceiling_days": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "evaluated_at": {
+            "type": "string"
+          },
+          "held_until": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "return_at": {
+            "type": "string"
+          },
+          "seed_days": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "suggested_days": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -5991,6 +6073,14 @@
               "retain",
               "purge_payload"
             ]
+          },
+          "snooze_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
           }
         },
         "additionalProperties": false

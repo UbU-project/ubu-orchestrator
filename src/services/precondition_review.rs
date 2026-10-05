@@ -25,6 +25,8 @@ pub struct ReviewTask {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Context {
+    #[serde(default)]
+    pub force: bool,
     pub tasks: Vec<ReviewTask>,
     pub targets: Vec<String>,
 }
@@ -37,7 +39,7 @@ pub fn words(raw: &Value) -> String {
         }
     }
     let Some(target) = raw["target"].as_str() else {
-        return raw.to_string();
+        return browser_json(raw);
     };
     let predicate = raw["predicate"].as_str().unwrap_or("");
     let phrase = match predicate {
@@ -48,16 +50,16 @@ pub fn words(raw: &Value) -> String {
         "at_most" => "is at most",
         "greater_than" => "is greater than",
         "less_than" => "is less than",
-        _ => return raw.to_string(),
+        _ => return browser_json(raw),
     };
     if matches!(
         predicate,
         "at_least" | "at_most" | "greater_than" | "less_than"
     ) && (!target.starts_with("numeric_values.") || !raw["expected"].is_number())
     {
-        return raw.to_string();
+        return browser_json(raw);
     }
-    format!("{target} {phrase} {}", raw["expected"])
+    format!("{target} {phrase} {}", browser_json(&raw["expected"]))
 }
 
 pub async fn select(state: &AppState, limit: usize) -> Result<Context> {
@@ -89,6 +91,7 @@ pub async fn select(state: &AppState, limit: usize) -> Result<Context> {
         }
     }
     Ok(Context {
+        force: false,
         tasks,
         targets: advisor::targets(&advisor::current(state).await?)
             .into_iter()
@@ -297,9 +300,110 @@ pub async fn vet_result(
         c.normalized_proposal["blocked_now"] =
             json!(evaluate_universe_precondition(&universe, &tree).is_ok_and(|v| !v));
         c.payload = CandidatePayload::Inline(c.normalized_proposal.clone());
-        c.suppression_key = Some(String::from_utf8(ubu_core::canonical_payload_bytes(&json!({"task":task.id,"field":"preconditions","existing_value":task.existing_precondition}))).expect("JSON is UTF-8"));
+        c.suppression_key = Some(super::review_policy::subject_key(
+            &task.id,
+            &task.existing_precondition,
+        ));
         accepted.push(c);
     }
     result.proposed_candidates = accepted;
     Ok(())
+}
+
+/// Each model call sees exactly one Task. The run's timeout and size budget
+/// still cover the whole selection; validate every result before any enqueue.
+pub fn submit_reviews<T: ubu_core::worker::AdvisoryTransport + ?Sized>(
+    sub: &LocalAdvisorySubmission,
+    transport: &T,
+) -> LocalAdvisoryResult {
+    let context: Context = match serde_json::from_value(sub.payload.clone()) {
+        Ok(c) => c,
+        Err(_) => return malformed(sub),
+    };
+    let start = std::time::Instant::now();
+    let mut result = advisory_wire::empty_result(sub);
+    let mut sound = 0;
+    for (index, task) in context.tasks.iter().enumerate() {
+        let remaining = sub
+            .timeout_ms
+            .saturating_sub(start.elapsed().as_millis().try_into().unwrap_or(u64::MAX));
+        if remaining == 0 {
+            return advisory_wire::failed(sub, advisory_wire::Failure::Timeout);
+        }
+        let mut child = sub.clone();
+        child.submission_id = advisory_wire::candidate_id(sub, index)
+            .expect("validated seed")
+            .as_str()
+            .into();
+        child.timeout_ms = remaining;
+        child.compute_budget.max_cpu_ms = remaining;
+        child.payload = serde_json::to_value(Context {
+            force: false,
+            tasks: vec![task.clone()],
+            targets: context.targets.clone(),
+        })
+        .expect("context serializes");
+        let mut answer = transport
+            .submit(&child)
+            .unwrap_or_else(|_| advisory_wire::failed(&child, advisory_wire::Failure::Connection));
+        if answer.validate_against(&child).is_err()
+            || answer.proposed_candidates.len() > 1
+            || answer
+                .proposed_candidates
+                .iter()
+                .any(|c| c.target_refs.len() != 1 || c.target_refs[0].id.as_str() != task.id)
+        {
+            return malformed(sub);
+        }
+        if answer.status != LocalAdvisoryResultStatus::Ok {
+            answer.submission_id = sub.submission_id.clone();
+            answer.proposed_candidates.clear();
+            return answer;
+        }
+        sound += usize::from(answer.proposed_candidates.is_empty());
+        result
+            .proposed_candidates
+            .extend(answer.proposed_candidates);
+        result.diagnostics.extend(
+            answer
+                .diagnostics
+                .into_iter()
+                .filter(|d| d["code"] != "precondition_review_sound"),
+        );
+    }
+    if !context.tasks.is_empty() {
+        result.diagnostics.push(json!({"code":"precondition_review_sound","message":format!("{} preconditions examined; {sound} judged sound.",context.tasks.len())}));
+    }
+    result
+}
+
+fn malformed(sub: &LocalAdvisorySubmission) -> LocalAdvisoryResult {
+    let mut result = advisory_wire::empty_result(sub);
+    result.status = LocalAdvisoryResultStatus::MalformedResult;
+    result.diagnostics.push(json!({"code":"advisory_malformed_result","message":"The model response was not a valid precondition review; no candidates were enqueued"}));
+    result
+}
+
+/// JSON.stringify's visible numeric spelling (including integer-looking floats,
+/// exponent thresholds and IEEE-754 rounding) is the screen's representation.
+fn browser_json(value: &Value) -> String {
+    match value {
+        Value::Number(number) => {
+            let n = number.as_f64().expect("finite JSON number");
+            if n == 0.0 { return "0".into(); }
+            if (1e-6..1e21).contains(&n.abs()) { return n.to_string(); }
+            let text = format!("{n:e}");
+            let (mantissa, exponent) = text.split_once('e').expect("exponential format");
+            let exponent: i32 = exponent.parse().expect("exponent");
+            format!("{mantissa}e{exponent:+}")
+        }
+        Value::Array(parts) => format!("[{}]", parts.iter().map(browser_json).collect::<Vec<_>>().join(",")),
+        Value::Object(object) => {
+            let mut keys = object.keys().collect::<Vec<_>>();
+            // ECMAScript enumerates array-index property names before other keys.
+            keys.sort_by_key(|key| key.parse::<u32>().ok().filter(|n|*n<u32::MAX && n.to_string()==key.as_str()).map_or((1,0),|n| (0,n)));
+            format!("{{{}}}",keys.into_iter().map(|key|format!("{}:{}",serde_json::to_string(key).expect("key"),browser_json(&object[key]))).collect::<Vec<_>>().join(","))
+        }
+        _ => value.to_string(),
+    }
 }
