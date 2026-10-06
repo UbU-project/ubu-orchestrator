@@ -450,6 +450,39 @@ expectation. No model prose, expected value or description is copied into a
 refusal diagnostic. No core predicate, admission rule or vocabulary advisor
 is added.
 
+
+### Bounded proposal labour (P1B-66)
+
+A run still considers up to 25 Tasks; `MAX_LIMIT` is unchanged. The model's
+`proposals` array is bounded to three (or the number selected if smaller).
+The system text states that total bound, and the wire rejects four or more
+proposals whole through the existing `advisory_malformed_result` path, even
+when their trees are valid. Tree grammar and per-proposal validation are unchanged.
+
+Before settings, selection or any `advisory_transport_factory` access, a
+precondition run counts only `precondition` candidates in `proposed` and
+`resurfaced` states. Ten or more produces HTTP 200, status `ok`, no selection,
+no report and no enqueue, with `precondition_queue_full`:
+
+```text
+{count} precondition candidates are waiting in Review; review, defer or reject them before asking for more. No model was asked.
+```
+
+The count is the current number waiting, not a fixed ten. Deferred candidates
+are excluded because setting work aside must free capacity for another run.
+Other candidate kinds are excluded. Nine awaiting permits a run. This is a
+refusal threshold, not a strict queue-size ceiling: a permitted run can add
+three to nine and leave twelve for review. It changes no candidate lifecycle
+and does not automate admission, rejection, deferral or resurfacing.
+
+Ten is a judgment about the operator's attention, not a measured optimum;
+the operator may want it lower. The model chooses which three Tasks to propose
+for, and a weak model may choose the first three. Neither cap improves any
+proposal's relevance. The small hand-authored vocabulary leaves the model
+using the same few facts for unrelated work; P1B-67 addresses that vocabulary
+cold start. This ticket makes the queue reviewable while that gap remains.
+The existing diagnostic sentences and finite review snoozes are unchanged.
+
 ### Admission of a precondition
 
 Admit uses the existing candidate route and atomic ordinary admission writer.
