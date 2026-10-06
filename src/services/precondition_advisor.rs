@@ -31,6 +31,16 @@ pub const MAX_TARGET_BYTES: usize = 128;
 pub const MAX_NODES: usize = 128;
 pub const MAX_DEPTH: usize = 16;
 pub const MAX_MISSING_NAMED: usize = 3;
+pub const MAX_PROPOSALS: usize = 3;
+pub const MAX_AWAITING_REVIEW: i64 = 10;
+
+/// Deferred proposals were explicitly set aside and do not occupy this backlog.
+pub async fn awaiting_review(state: &AppState) -> Result<i64> {
+    sqlx::query_scalar("SELECT COUNT(*) FROM advisory_candidates WHERE candidate_kind='precondition' AND lifecycle_state IN ('proposed','resurfaced')")
+        .fetch_one(state.inner().store.pool())
+        .await
+        .map_err(|error| AppError::Internal(error.to_string()))
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -148,7 +158,7 @@ pub fn response_schema(context: &Context) -> Option<Value> {
     let ids: Vec<_> = context.tasks.iter().map(|task| &task.id).collect();
     Some(
         json!({"type":"object","additionalProperties":false,"required":["proposals"],
-        "properties":{"proposals":{"type":"array","maxItems":context.tasks.len(),"items":{
+        "properties":{"proposals":{"type":"array","maxItems":context.tasks.len().min(MAX_PROPOSALS),"items":{
             "type":"object","additionalProperties":false,"required":["id","precondition"],
             "properties":{"id":{"type":"string","enum":ids},"precondition":{"$ref":"#/$defs/tree"}}}}},
         "$defs":definitions}),

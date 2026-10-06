@@ -131,3 +131,22 @@ pub async fn action(
     )
     .await
 }
+
+// Aggregation is a controller invariant, independent of a single wire response's
+// proposal cap. Build its inputs from separately valid, capped stub responses.
+pub async fn candidate_batches(state: &AppState, transport: &dyn AdvisoryTransport) -> LocalAdvisoryResult {
+    use ubu_orchestrator::services::precondition_advisor as advisor;
+    let (context, _) = advisor::select(state, 25).await.unwrap();
+    let mut combined: Option<LocalAdvisoryResult> = None;
+    for tasks in context.tasks.chunks(advisor::MAX_PROPOSALS) {
+        let part = advisor::Context { tasks: tasks.to_vec(), targets: context.targets.clone() };
+        let sub = advisor::submission(state, &part, "synthetic-model").await.unwrap();
+        let mut result = transport.submit(&sub).unwrap();
+        if let Some(combined) = &mut combined {
+            combined.proposed_candidates.append(&mut result.proposed_candidates);
+        } else {
+            combined = Some(result);
+        }
+    }
+    combined.unwrap()
+}

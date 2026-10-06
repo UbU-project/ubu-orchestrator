@@ -107,6 +107,17 @@ pub async fn run(
         diagnostics: vec![],
         round: None,
     };
+    if preconditions {
+        let awaiting = precondition_advisor::awaiting_review(&state).await?;
+        if awaiting >= precondition_advisor::MAX_AWAITING_REVIEW {
+            response.status = "ok".into();
+            response.diagnostics.push(DiagnosticBody {
+                code: "precondition_queue_full".into(),
+                message: format!("{awaiting} precondition candidates are waiting in Review; review, defer or reject them before asking for more. No model was asked."),
+            });
+            return Ok(Json(response));
+        }
+    }
     let model = setting_authoring::advisory_value(&state, "advisory.model").await?;
     let endpoint = setting_authoring::advisory_value(&state, "advisory.endpoint").await?;
     for (name, missing) in [

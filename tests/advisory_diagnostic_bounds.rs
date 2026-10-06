@@ -57,17 +57,23 @@ async fn tag_occurrence_skips_name_three_then_count_twenty_seven_without_identif
 }
 
 #[tokio::test]
-async fn ten_missing_target_tasks_yield_three_named_and_one_count_only_diagnostic() {
-    let (state, _) =
+async fn controller_missing_targets_yield_three_names_and_one_count_only_diagnostic() {
+    let (state, stub) =
         ready(json!({"target":"facts.synthetic.missing","predicate":"equals","expected":true}))
             .await;
     fact(&state, 0.0).await;
     for n in 0..9 {
         seed(&state, &id(n), "active", json!({})).await;
     }
-    let result = run(&state).await;
-    assert_eq!(result["candidates_enqueued"], 0);
-    let diagnostics = result["diagnostics"].as_array().unwrap();
+    let before = canonical_rows(&state).await;
+    let ledger = count(&state, "mutation_envelopes").await;
+    let mut result = candidate_batches(&state, stub.as_ref()).await;
+    precondition_advisor::vet_result(&state, &mut result).await.unwrap();
+    assert!(result.proposed_candidates.is_empty());
+    assert_eq!(count(&state, "advisory_candidates").await, 0);
+    assert_eq!(count(&state, "mutation_envelopes").await, ledger);
+    assert_eq!(canonical_rows(&state).await, before);
+    let diagnostics = &result.diagnostics;
     assert_eq!(diagnostics.len(), 4);
     for (n, diagnostic) in diagnostics.iter().take(3).enumerate() {
         let message = diagnostic["message"].as_str().unwrap();

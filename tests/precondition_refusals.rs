@@ -128,7 +128,7 @@ async fn diagnostics_before_a_refusal_survive_including_missing_target_and_trans
 }
 
 #[tokio::test]
-async fn all_refused_proposals_keep_ok_status_and_name_three_then_count_seven() {
+async fn controller_aggregation_keeps_ok_status_and_names_three_then_counts_seven() {
     let state = batch(
         vec![
             json!({"target":TARGET,"predicate":"at_least","expected":"synthetic-private-expected"});
@@ -140,11 +140,13 @@ async fn all_refused_proposals_keep_ok_status_and_name_three_then_count_seven() 
     .await;
     let before = canonical_rows(&state).await;
     let ledger = count(&state, "mutation_envelopes").await;
-    let result = run(&state).await;
-    assert_eq!(result["status"], "ok");
-    assert_eq!(result["candidates_enqueued"], 0);
-    assert_eq!(result["report"]["proposals"], json!([]));
-    let diagnostics = result["diagnostics"].as_array().unwrap();
+    let factory = state.advisory_transport_factory().unwrap();
+    let transport = factory("http://127.0.0.1:11434");
+    let mut result = candidate_batches(&state, transport.as_ref()).await;
+    advisor::vet_result(&state, &mut result).await.unwrap();
+    assert_eq!(result.status, ubu_core::worker::LocalAdvisoryResultStatus::Ok);
+    assert!(result.proposed_candidates.is_empty());
+    let diagnostics = &result.diagnostics;
     assert_eq!(diagnostics.len(), 4);
     for (n, diagnostic) in diagnostics.iter().take(3).enumerate() {
         assert_eq!(diagnostic["code"], "precondition_proposal_refused");
@@ -158,7 +160,7 @@ async fn all_refused_proposals_keep_ok_status_and_name_three_then_count_seven() 
         !diagnostics[3].to_string().contains("task_")
             && !diagnostics[3].to_string().contains(TARGET)
     );
-    assert!(!result.to_string().contains("synthetic-private-expected"));
+    assert!(!serde_json::to_string(&result).unwrap().contains("synthetic-private-expected"));
     assert_eq!(canonical_rows(&state).await, before);
     assert_eq!(count(&state, "mutation_envelopes").await, ledger);
 }
@@ -301,11 +303,7 @@ async fn rechecked_ineligible_tasks_are_bounded_to_three_names_and_one_count() {
     for n in 1..10 {
         seed(&state, &id(n), "active", json!({})).await;
     }
-    let (context, _) = advisor::select(&state, 25).await.unwrap();
-    let sub = advisor::submission(&state, &context, "synthetic-model")
-        .await
-        .unwrap();
-    let mut result = stub.submit(&sub).unwrap();
+    let mut result = candidate_batches(&state, stub.as_ref()).await;
     for n in 0..10 {
         sqlx::query("UPDATE objects SET status='completed', payload_json=json_set(payload_json, '$.status', 'completed') WHERE id=?").bind(id(n)).execute(state.inner().store.pool()).await.unwrap();
     }
