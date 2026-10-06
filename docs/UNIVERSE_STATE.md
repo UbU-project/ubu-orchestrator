@@ -44,8 +44,9 @@ state is stored. A read never creates a row.
 
 All four collections and `fact_provenance` are always present, empty or not. A
 key is the part of a target after its collection: the fact a precondition
-names as `facts.kettle.descaled` is stored under `kettle.descaled` in `facts`.
-`fact_provenance` is keyed by the whole target, `facts.kettle.descaled`.
+names as `facts.operator.work_style` is stored under `operator.work_style` in
+`facts`. A target is a collection, subject, optional entity path and final
+predicate. `fact_provenance` is keyed by the complete target.
 
 ## Edit
 
@@ -55,7 +56,7 @@ names as `facts.kettle.descaled` is stored under `kettle.descaled` in `facts`.
 {
   "schema_version": "ubu.orchestrator.universe_state.v1",
   "mutations": [
-    {"operation": "set_fact", "target": "facts.kettle.descaled", "payload": true}
+    {"operation": "set_fact", "target": "facts.operator.synthetic_ready", "payload": true}
   ]
 }
 ```
@@ -203,8 +204,9 @@ with an `expected` that is not a number, is malformed, and the Task is in
 `invalid_tasks` with the evaluator's message.
 
 A precondition is authored over HTTP: `POST /task` and `PATCH /task/{id}`
-accept `preconditions`, per [Task capture](TASK_CAPTURE.md). The app sends
-none.
+accept `preconditions`, per [Task capture](TASK_CAPTURE.md). The Tasks screen
+reads them in words, authors one leaf and clears with null. UniverseState
+itself authors no precondition.
 
 ## The write
 
@@ -264,7 +266,7 @@ doubled keys, and nothing reads them by name. The operator's store held no
 
 ## Keys and the open vocabulary gap (P1B-65)
 
-The screen now shows the complete target in `<code>` under each Facts,
+At P1B-65 the screen began showing the complete target in `<code>` under each Facts,
 Numbers and Sets key field, using the same trimmed key as the submitted
 mutation. Event markers have no editing field. For example, `kettle.descaled`
 under Facts shows `facts.kettle.descaled`; `fact.kettle` shows
@@ -280,12 +282,14 @@ Only the six write operations are restricted; legacy clear/remove remains
 available. Task effects and core mutation semantics are unchanged.
 
 UBU-D0243 in `ubu-design/DECISIONS.md` requires the first segment after the
-collection to belong to its controlled subject vocabulary. That broader
-rule is knowingly unenforced. Enforcing it here would refuse reasonable
-fresh-store keys before the operator can use this phase. The five reserved
+collection to belong to its controlled subject vocabulary. At P1B-65 that broader
+rule remained unenforced, because reasonable fresh-store subjects had no
+explicit minting path. P1B-69 closes that authoring gap through the provisional
+Setting registry and subject selector, preserving all legacy reads/evaluation. The five reserved
 segments address collection repetition and intrinsic-affect semantics;
-they do not implement a subject vocabulary advisor or a predicate naming
-rule. The controlled-vocabulary gap remains open.
+they were not a subject vocabulary advisor or a predicate naming rule.
+P1B-69 adds the effective-vocabulary and final-predicate checks above, without
+claiming semantic noun recognition or ratifying provisional roots.
 
 The route contract was documented with section A's implementation because
 this document requires a contract change in the same commit. This section
@@ -340,8 +344,8 @@ first and admitting separately, which could leave a value or empty seed behind
 if the candidate decision fails. It uses the existing writer, with shared
 UniverseState service validation, and introduces no store logic or migration.
 The fact_provenance entry is asserted because every value is the operator's
-assertion, even when UbU suggested its name. Controlled subject vocabulary
-remains unenforced; Plan predicates and Task effects are unchanged.
+assertion, even when UbU suggested its name. P1B-69 adds effective-subject and predicate checks to new authoring, shared
+with suggested-name admission. Plan predicates and Task effects are unchanged.
 
 
 ## P1B-69 C: new-write grammar
@@ -370,3 +374,36 @@ in targets(), readable and evaluable. clear_fact, clear_numeric and
 remove_membership still work on them. A subsequent write must meet today's
 grammar; retiring a root does not rewrite old targets. Essential route contract
 ships with this implementation; section F supplies the broader screen context.
+
+
+## P1B-69 F: names the operator can author
+
+A fact is a subject and a predicate, both the operator's words. Facts, Numbers
+and Sets choose the subject from the effective vocabulary and type the final
+predicate. An optional entity path is folded into that field before the
+predicate, so a simple fact needs only two fields. Event markers stay read-only
+in the app. The preview assembles the complete target; it has existed since
+P1B-65, while P1B-68 added the assertion/reading choice.
+
+The effective vocabulary is operator, project, github, affect, relationship
+plus the provisional registry at Setting names universe.subject.<root>, with
+boolean true. UniverseState's one Subjects list marks governed roots and
+provisional roots awaiting ratification. Minting is a separate explicit act;
+writing a value and every advisory producer lack minting authority. Affect
+is visible but disabled for these manual forms, preserving P1B-65's refusal.
+
+Minting mechanically checks lowercase ASCII snake_case beginning with a letter,
+no dots, at most 64 bytes, no reserved or governed name and no duplicate.
+The semantic half is stated at minting and judged by the operator: a singular
+noun naming an entity or domain, never an instance, attribute, provenance/source
+or reverse-DNS authority prefix. No plural or part-of-speech detector runs.
+UBU-D0291 explains why every provisional root must be ratified or retired
+before the switch, when the store stops being disposable. This ticket ratifies
+none, promotes none and changes no design record.
+
+An ungrammatical target authored before P1B-69 is kept, not rewritten. Reads,
+targets(), the precondition enum and evaluation continue to include it. New
+writes meet today's grammar; clear/remove works on old names. Even after
+retirement, old targets stay readable/evaluable until explicitly cleared.
+The precondition producer inherits new authoring's grammar through recorded
+targets, while retaining legacy names; it changes no schema or validator.

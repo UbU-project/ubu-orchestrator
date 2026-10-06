@@ -592,7 +592,7 @@ If no selected Task can be named, the subject is A proposal. Reasons are:
 At most three Tasks are named, then one count of further refused Tasks. Existing
 result diagnostics are pushed to, never replaced. One bad proposal costs one
 candidate; survivors and ok status remain. Four wire proposals or an undecodable
-response give advisory_malformed_result with no candidates. vocabulary_task_skipped
+response give advisory_malformed_result with no candidates. advisory_task_skipped
 explains the reused selection gate. vocabulary_no_task means no eligible Task,
 no model asked. Transport diagnostics retain their existing behavior.
 
@@ -670,3 +670,21 @@ additional checks; the request cannot guarantee future state. P1B-64's
 conservative precondition grammar and validator remain unchanged. That producer
 still enumerates recorded targets, including legacy ungrammatical targets; it
 does not claim all stored names were authored under this ticket's grammar.
+
+
+## P1B-69 F: subject governance is an authoring boundary
+
+The provisional registry is operator-owned Setting data, not advisory output.
+Vocabulary sees only effective names and its schema excludes affect because
+that reserved subject carries intrinsic-affect mode consequences under D0242.
+Neither relevance prose nor a proposal can mint a subject. A refused name
+retains its per-proposal remedy and does not discard independent survivors.
+
+Precondition's request remains byte-identical for the same recorded-target
+context; it already enumerates targets rather than allowing invented names.
+Names newly recorded through the manual/admission routes meet the subject-and-
+predicate grammar, and legacy names remain in that enumeration by contract.
+Registry retirement does not retroactively remove a stored target from advice
+or evaluation. No observation values, provenance, root-Setting booleans or
+additional Task fields enter the model context. No new kind, route, predicate,
+interval or model transport is introduced.
