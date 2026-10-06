@@ -39,6 +39,7 @@ fn valid_advisory_timeout(value: &Value) -> Option<u64> {
 }
 
 fn validate_name(name: &str) -> Result<()> {
+    if let Some(root) = name.strip_prefix(super::subject_vocabulary::PREFIX) { return super::subject_vocabulary::validate_root(root); }
     if matches!(name, "advisory.model" | "advisory.endpoint" | ADVISORY_TIMEOUT | REVIEW_SEED | REVIEW_CEILING) { return Ok(()); }
     if !name
         .strip_prefix("calendar.color.")
@@ -46,7 +47,7 @@ fn validate_name(name: &str) -> Result<()> {
     {
         return Err(AppError::bad_request_diagnostic(
             "setting_unknown_name",
-            "Only calendar.color.<category> and supported advisory model, endpoint, timeout and review interval Settings can be authored",
+            "Only calendar.color.<category>, universe.subject.<root> and supported advisory model, endpoint, timeout and review interval Settings can be authored",
         ));
     }
     Ok(())
@@ -94,7 +95,11 @@ pub async fn advisory_timeout_ms(state: &AppState) -> Result<(u64, bool)> {
 
 pub async fn put(state: &AppState, name: &str, value: Value) -> Result<(String, i64)> {
     validate_name(name)?;
-    if name == ADVISORY_TIMEOUT {
+    if name.starts_with(super::subject_vocabulary::PREFIX) {
+        if value != true {
+            return Err(AppError::bad_request_diagnostic("subject_invalid_value", "A provisional subject Setting must have the boolean value true; retire it with DELETE."));
+        }
+    } else if name == ADVISORY_TIMEOUT {
         if valid_advisory_timeout(&value).is_none() {
             return Err(AppError::bad_request_diagnostic(
                 "setting_invalid_advisory_timeout",
@@ -125,6 +130,9 @@ pub async fn put(state: &AppState, name: &str, value: Value) -> Result<(String, 
     let _action = state.inner().task_action_lock.lock().await;
     check_review_pair(state, name, value.as_u64()).await?;
     let old = current(state, name).await?;
+    if let Some(root) = name.strip_prefix(super::subject_vocabulary::PREFIX) {
+        if old.is_some() { return Err(AppError::bad_request_diagnostic("subject_already_registered", format!("Subject `{root}` is already provisional; choose it from the subject list."))); }
+    }
     let now = state.planning_now();
     let id = match &old {
         Some(row) => UbuId::parse(&row.id)?,
