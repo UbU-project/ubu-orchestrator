@@ -51,6 +51,10 @@ pub async fn ready(proposal: Value) -> (AppState, Arc<StubTransport>) {
     (state, stub)
 }
 pub async fn fact(state: &AppState, value: f64) {
+    // Explicit invented fixture registry; never inferred or minted by a producer.
+    if ubu_orchestrator::services::setting_authoring::current(state,"universe.subject.synthetic").await.unwrap().is_none() {
+        ubu_orchestrator::services::setting_authoring::put(state,"universe.subject.synthetic",json!(true)).await.unwrap();
+    }
     let (status, body) = request(state,"PATCH","/universe-state",json!({"schema_version":"ubu.orchestrator.universe_state.v1","mutations":[{"operation":"set_numeric","target":TARGET,"payload":value}]})).await;
     assert_eq!(status, 200, "{body}");
 }

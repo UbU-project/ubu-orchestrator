@@ -49,6 +49,7 @@ async fn bare() -> AppState {
         ))
 }
 async fn configure(state: &AppState) {
+    ubu_orchestrator::services::setting_authoring::put(state, "universe.subject.synthetic", json!(true)).await.unwrap();
     for (name, value) in [
         ("advisory.model", "synthetic-model:1"),
         ("advisory.endpoint", "http://127.0.0.1:11434"),

@@ -108,9 +108,15 @@ The order of work is fixed, and nothing is written until every check passes:
    Existing keys are not migrated or refused on reads, advisor vocabulary
    enumeration or precondition evaluation. `clear_fact`, `clear_numeric`
    and `remove_membership` remain available for legacy keys.
-3. `apply_universe_mutations` on the current state, or on an empty one when the
+3. P1B-69 checks each new write for a subject and a predicate, a subject in
+   the effective vocabulary, a lowercase snake_case final predicate, ASCII
+   entity-path segments and a complete target of at most 128 bytes. This
+   applies to the same six write operations; clear/remove retains legacy
+   semantics. The registry is read under the same Task-action lock that
+   serializes its minting/retirement. No failed list leaves a seed or partial edit.
+4. `apply_universe_mutations` on the current state, or on an empty one when the
    store holds none. It validates the whole list before applying any of it.
-4. Only then the write.
+5. Only then the write.
 
 So a list with one bad mutation is refused whole. No earlier mutation in it is
 applied, and on a store with no state no empty row is left behind.
@@ -121,7 +127,9 @@ applied, and on a store with no state no empty row is left behind.
 | 400 | `universe_mutations_empty` | `mutations` is an empty list. |
 | 400 | `universe_mutation_mode_invalid` | Step 1 refused. The message is `ubu-core`'s. |
 | 400 | `universe_target_namespace_invalid` | Step 2 refused. The message names the reserved segment and complete target. |
-| 400 | `universe_mutation_invalid` | Step 3 refused. The message is `ubu-core`'s, for example `mutation 1: unknown operation ...`, counting from zero. |
+| 400 | `universe_target_subject_unknown` | The subject is outside the effective vocabulary; the message names explicit minting. |
+| 400 | `universe_target_grammar_invalid` | The new write lacks a subject/predicate or violates their mechanical grammar. |
+| 400 | `universe_mutation_invalid` | Step 4 refused. The message is `ubu-core`'s, for example `mutation 1: unknown operation ...`, counting from zero. |
 | 409 | none | The state changed between the read and the write. |
 | 422 | none | The body is not this shape, for example a mutation with a key the type does not have. |
 
@@ -334,3 +342,31 @@ UniverseState service validation, and introduces no store logic or migration.
 The fact_provenance entry is asserted because every value is the operator's
 assertion, even when UbU suggested its name. Controlled subject vocabulary
 remains unenforced; Plan predicates and Task effects are unchanged.
+
+
+## P1B-69 C: new-write grammar
+
+A target is <collection>.<subject>[.<entity-path>].<predicate>. New manual
+writes require at least a subject and final predicate; the predicate is
+lowercase ASCII snake_case starting with a letter. Optional middle segments
+are nonempty ASCII letters, digits, underscores or hyphens. The full target
+is at most 128 bytes. The effective subject set is the five governed roots
+union true-valued provisional Settings named universe.subject.<root>, per
+SETTINGS.md and UBU-D0291. The five reserved-first-segment refusals and their
+existing reasons are checked before this additional grammar, including affect
+in user_mode. Task effects and core's mode/evaluator semantics are unchanged.
+
+Unknown subjects produce universe_target_subject_unknown. Malformed new targets
+produce universe_target_grammar_invalid. Their exact templates are:
+
+```text
+Subject `{subject}` is not in the effective vocabulary. Mint it explicitly in UniverseState's Subjects list before writing `{target}`.
+Target `{target}` needs a subject and a predicate: <collection>.<subject>[.<entity-path>].<predicate>, with a lowercase snake_case predicate, ASCII entity segments and at most 128 characters.
+```
+
+No migration or retroactive read/evaluation check runs. Previously authored
+single-part, unknown-root, doubled or reserved targets remain stored, listed
+in targets(), readable and evaluable. clear_fact, clear_numeric and
+remove_membership still work on them. A subsequent write must meet today's
+grammar; retiring a root does not rewrite old targets. Essential route contract
+ships with this implementation; section F supplies the broader screen context.

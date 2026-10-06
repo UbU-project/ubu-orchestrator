@@ -48,6 +48,8 @@ pub async fn apply(
     // A completed Task's effects are written under this lock too.
     let _action = state.inner().task_action_lock.lock().await;
     let pool = state.inner().store.pool();
+    let subjects = super::subject_vocabulary::effective(state).await?;
+    validate_write_targets(mutations, &subjects)?;
     let now = state.planning_now();
     let current = planning_service::read_current_universe_state(pool).await?;
     let base = match &current {
@@ -123,6 +125,28 @@ fn validate_edit(mutations: &[UniverseMutation], mode: InstanceMode) -> Result<(
     Ok(())
 }
 
+fn validate_write_targets(mutations: &[UniverseMutation], subjects: &std::collections::BTreeSet<String>) -> Result<()> {
+    use super::subject_vocabulary::{validate_target, TargetRefusal};
+    for mutation in mutations {
+        if !matches!(mutation.operation.as_str(), "set_fact" | "set_numeric" | "increment_numeric" | "decrement_numeric" | "add_membership" | "append_event_marker") { continue; }
+        validate_write_namespaces(std::slice::from_ref(mutation))?;
+        // Preserve core's established malformed-target diagnostics. The new
+        // authoring checks govern targets core can already parse.
+        if mutation.target.split('.').any(str::is_empty) || !matches!(mutation.target.split('.').next(), Some("facts" | "numeric_values" | "set_memberships" | "event_markers")) { continue; }
+        if let Err(reason) = validate_target(&mutation.target, subjects) {
+            let (code, message) = match reason {
+                TargetRefusal::Subject => {
+                    let subject = mutation.target.split('.').nth(1).unwrap_or_default();
+                    ("universe_target_subject_unknown", format!("Subject `{subject}` is not in the effective vocabulary. Mint it explicitly in UniverseState's Subjects list before writing `{}`.", mutation.target))
+                }
+                _ => ("universe_target_grammar_invalid", format!("Target `{}` needs a subject and a predicate: <collection>.<subject>[.<entity-path>].<predicate>, with a lowercase snake_case predicate, ASCII entity segments and at most 128 characters.", mutation.target)),
+            };
+            return Err(AppError::bad_request_diagnostic(code, message));
+        }
+    }
+    Ok(())
+}
+
 /// Shared operator mutation preparation: the screen and target admission use
 /// identical mode, namespace and core mutation checks before either writer runs.
 fn prepare_edit(
@@ -152,6 +176,8 @@ pub(crate) async fn prepare_target_admission(
         .unwrap_or_else(|| {
             UniverseState::new(now, "empty UniverseState seeded by an operator edit")
         });
+    let subjects = super::subject_vocabulary::effective(state).await?;
+    validate_write_targets(std::slice::from_ref(&mutation), &subjects)?;
     let known = super::precondition_advisor::targets(&base);
     super::vocabulary::validate_name(&mutation.target, &known).map_err(|reason| {
         AppError::bad_request_diagnostic("vocabulary_admission_refused", reason.to_string())
@@ -276,6 +302,7 @@ mod tests {
     #[tokio::test]
     async fn the_planner_reads_the_state_a_write_returned() {
         let state = AppState::in_memory(ServerConfig::from_env()).await.unwrap();
+        for root in ["kettle", "shelf"] { super::super::setting_authoring::put(&state, &format!("universe.subject.{root}"), json!(true)).await.unwrap(); }
         let (returned, version) = apply(
             &state,
             &[
@@ -305,6 +332,7 @@ mod tests {
     #[tokio::test]
     async fn an_intrinsic_affect_target_is_refused_outside_user_mode_and_nothing_is_written() {
         let state = AppState::in_memory(ServerConfig::from_env()).await.unwrap();
+        for root in ["kettle", "shelf"] { super::super::setting_authoring::put(&state, &format!("universe.subject.{root}"), json!(true)).await.unwrap(); }
         let affect = [mutation(
             "increment_numeric",
             "numeric_values.affect.energy",
@@ -337,6 +365,7 @@ mod tests {
     #[tokio::test]
     async fn a_first_edit_seeds_a_user_capture_row_and_later_edits_keep_its_label() {
         let state = AppState::in_memory(ServerConfig::from_env()).await.unwrap();
+        for root in ["kettle", "shelf"] { super::super::setting_authoring::put(&state, &format!("universe.subject.{root}"), json!(true)).await.unwrap(); }
         for value in [json!("first"), json!("second")] {
             apply(
                 &state,

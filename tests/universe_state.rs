@@ -17,10 +17,12 @@ const SCHEMA: &str = "ubu.orchestrator.universe_state.v1";
 const COLLECTIONS: [&str; 4] = ["facts", "numeric_values", "set_memberships", "event_markers"];
 
 async fn state() -> AppState {
-    AppState::in_memory(ServerConfig::from_env())
-        .await
-        .unwrap()
-        .with_clock(FixedClock(UbuTimestamp::parse(NOW).unwrap()))
+    let state = AppState::in_memory(ServerConfig::from_env())
+        .await.unwrap().with_clock(FixedClock(UbuTimestamp::parse(NOW).unwrap()));
+    for root in ["kettle", "shelf", "tank", "toolbox", "fact", "lamp"] {
+        ubu_orchestrator::services::setting_authoring::put(&state, &format!("universe.subject.{root}"), json!(true)).await.unwrap();
+    }
+    state
 }
 async fn request(state: &AppState, method: &str, path: &str, body: Value) -> (StatusCode, Value) {
     let response = build_router(state.clone())
@@ -208,12 +210,12 @@ async fn each_of_the_nine_operations_round_trips() {
             json!({"shelf.jars": 3.0}),
         ),
         (
-            json!({"operation":"add_membership","target":"set_memberships.toolbox","payload":"spanner"}),
+            json!({"operation":"add_membership","target":"set_memberships.toolbox.tools","payload":"spanner"}),
             "set_memberships",
-            json!({"toolbox": ["spanner"]}),
+            json!({"toolbox.tools": ["spanner"]}),
         ),
         (
-            json!({"operation":"remove_membership","target":"set_memberships.toolbox","payload":"spanner"}),
+            json!({"operation":"remove_membership","target":"set_memberships.toolbox.tools","payload":"spanner"}),
             "set_memberships",
             json!({}),
         ),
@@ -288,7 +290,7 @@ async fn a_refused_edit_writes_nothing_and_applies_no_part_of_itself() {
         (json!({"operation":"set_fact","target":"numeric_values.shelf.jars","payload":true}), "operation target must be in the facts collection"),
         (json!({"operation":"set_fact","target":"facts.kettle.descaled"}), "operation requires a payload"),
         (json!({"operation":"increment_numeric","target":"numeric_values.shelf.jars","payload":"three"}), "payload must be a JSON number"),
-        (json!({"operation":"add_membership","target":"set_memberships.toolbox","payload":["spanner"]}), "payload must be a JSON scalar"),
+        (json!({"operation":"add_membership","target":"set_memberships.toolbox.tools","payload":["spanner"]}), "payload must be a JSON scalar"),
         (json!({"operation":"append_event_marker","target":"event_markers.kettle.boiled","payload":2}), "append_event_marker payload must be a JSON object"),
         (json!({"operation":"set_numeric","target":"numeric_values.shelf.jars","payload":"three"}), "payload must be a JSON number"),
         (json!({"operation":"set_numeric","target":"numeric_values.shelf.jars"}), "operation requires a payload"),
@@ -454,7 +456,7 @@ async fn legacy_keys_remain_readable_offered_evaluable_and_removable() {
         {"operation":"set_fact","target":"facts.facts.kettle","payload":true},
         {"operation":"set_fact","target":"facts.affect.energy","payload":true},
         {"operation":"set_numeric","target":"numeric_values.numeric_values.jars","payload":3},
-        {"operation":"add_membership","target":"set_memberships.set_memberships.toolbox","payload":"invented-spanner"},
+        {"operation":"add_membership","target":"set_memberships.set_memberships.toolbox.tools","payload":"invented-spanner"},
         {"operation":"append_event_marker","target":"event_markers.event_markers.boil","payload":{"invented_boil":true}}
     ]}})).await;
     let (status, body) = request(
@@ -475,7 +477,7 @@ async fn legacy_keys_remain_readable_offered_evaluable_and_removable() {
         ("facts.affect.energy", "equals", json!(true)),
         ("numeric_values.numeric_values.jars", "at_least", json!(3)),
         (
-            "set_memberships.set_memberships.toolbox",
+            "set_memberships.set_memberships.toolbox.tools",
             "member_of",
             json!("invented-spanner"),
         ),
@@ -498,11 +500,11 @@ async fn legacy_keys_remain_readable_offered_evaluable_and_removable() {
         {"operation":"clear_fact","target":"facts.facts.kettle"},
         {"operation":"clear_fact","target":"facts.affect.energy"},
         {"operation":"clear_numeric","target":"numeric_values.numeric_values.jars"},
-        {"operation":"remove_membership","target":"set_memberships.set_memberships.toolbox","payload":"invented-spanner"}
+        {"operation":"remove_membership","target":"set_memberships.set_memberships.toolbox.tools","payload":"invented-spanner"}
     ])).await;
     assert_eq!(cleared["facts"], json!({}));
     assert_eq!(cleared["numeric_values"], json!({}));
-    assert!(cleared["set_memberships"].get("set_memberships.toolbox").is_none());
+    assert!(cleared["set_memberships"].get("set_memberships.toolbox.tools").is_none());
     assert_eq!(
         cleared["event_markers"],
         read(&state).await["event_markers"]
@@ -599,7 +601,7 @@ async fn a_write_records_how_the_fact_was_established_and_a_clear_removes_the_re
         json!([
             {"operation":"set_numeric","target":"numeric_values.tank.level","payload":25,"provenance_kind":"measured"},
             {"operation":"set_fact","target":"facts.kettle.descaled","payload":true},
-            {"operation":"add_membership","target":"set_memberships.toolbox","payload":"spanner","provenance_kind":"proposed"},
+            {"operation":"add_membership","target":"set_memberships.toolbox.tools","payload":"spanner","provenance_kind":"proposed"},
             {"operation":"increment_numeric","target":"numeric_values.shelf.jars","payload":2,"provenance_kind":"derived"}
         ]),
     )
@@ -611,7 +613,7 @@ async fn a_write_records_how_the_fact_was_established_and_a_clear_removes_the_re
         json!({
             "numeric_values.tank.level": entry("measured"),
             "facts.kettle.descaled": entry("asserted"),
-            "set_memberships.toolbox": entry("proposed"),
+            "set_memberships.toolbox.tools": entry("proposed"),
             "numeric_values.shelf.jars": entry("derived")
         })
     );
@@ -631,7 +633,7 @@ async fn a_write_records_how_the_fact_was_established_and_a_clear_removes_the_re
         json!([
             {"operation":"clear_numeric","target":"numeric_values.tank.level"},
             {"operation":"clear_fact","target":"facts.kettle.descaled"},
-            {"operation":"remove_membership","target":"set_memberships.toolbox","payload":"spanner"}
+            {"operation":"remove_membership","target":"set_memberships.toolbox.tools","payload":"spanner"}
         ]),
     )
     .await;
