@@ -18,6 +18,7 @@ use ubu_core::{
 };
 
 pub const RESULT_SCHEMA: &str = "ubu.advisory.precondition.v1";
+pub const SELECTION_SKIP_CODE: &str = "advisory_task_skipped";
 pub const PREDICATES: [&str; 7] = [
     "equals",
     "member_of",
@@ -203,7 +204,7 @@ pub async fn select(state: &AppState, limit: usize) -> Result<(Context, Vec<Diag
             skipped += 1;
             if skipped <= suggest_tags::MAX_SKIPPED_NAMED {
                 diagnostics.push(DiagnosticBody {
-                    code: "precondition_task_skipped".into(),
+                    code: SELECTION_SKIP_CODE.into(),
                     message: format!("Task `{}` {reason}", task.id),
                 });
             }
@@ -217,7 +218,7 @@ pub async fn select(state: &AppState, limit: usize) -> Result<(Context, Vec<Diag
     }
     if skipped > suggest_tags::MAX_SKIPPED_NAMED {
         diagnostics.push(DiagnosticBody {
-            code: "precondition_task_skipped".into(),
+            code: SELECTION_SKIP_CODE.into(),
             message: format!(
                 "{} more Tasks were skipped: they are routine occurrences or have neither a title nor a description",
                 skipped - suggest_tags::MAX_SKIPPED_NAMED

@@ -617,3 +617,27 @@ names and supply every value during admission, then run Precondition against the
 larger vocabulary. Neither promises candidates. Vocabulary itself authors no
 precondition. The existing precondition prompt, schema and bounds are unchanged,
 as are finite review snoozes, Plan, capture, colours and collision diagnostics.
+
+
+## P1B-68 C: shared selection notes
+
+The active, non-occurrence, title-or-notes gate belongs to selection, not to
+a producer. Vocabulary and Precondition each report its decision once under
+advisory_task_skipped. Both remain separate explicit requests: no combined run
+or cross-request suppression state is added. Review presents the latest shared
+selection notes once instead of repeating them under both result panels.
+
+The first three skipped Tasks use one of these exact messages:
+
+```text
+Task `{id}` is a routine occurrence; edit its template instead
+Task `{id}` has neither a title nor a description to reason over
+{N} more Tasks were skipped: they are routine occurrences or have neither a title nor a description
+```
+
+The final count names no Task. A store with eight ineligible Tasks produces
+three named selection notes and one five-more note, not one copy per producer
+in the rendered Review results. Each independent API response retains its own
+gate decision. Missing-target, malformed-proposal, queue-full and late controller
+refusals retain their producer-specific codes and behavior. No model input,
+producer grammar, advisory authority, canonical mutation or queue bound changes.

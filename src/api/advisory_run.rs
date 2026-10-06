@@ -175,7 +175,7 @@ pub async fn run(
         precondition_review::submission(&state, &context, &model.unwrap()).await?
     } else if vocabulary_run {
         let (context, diagnostics) = precondition_advisor::select(&state, limit).await?;
-        skipped = diagnostics.into_iter().filter(|d|d.code != "precondition_no_facts").map(|mut d| { d.code = "vocabulary_task_skipped".into(); d }).collect();
+        skipped = diagnostics.into_iter().filter(|d|d.code != "precondition_no_facts").collect();
         response.selected = context.tasks.iter().map(|t|SelectedTask {id:t.id.clone(),title:t.title.clone()}).collect();
         if context.tasks.is_empty() { response.status="ok".into(); response.diagnostics=skipped; response.diagnostics.push(DiagnosticBody {code:"vocabulary_no_task".into(),message:"No active non-occurrence Task has a title or description to reason over; no model was asked.".into()}); return Ok(Json(response)); }
         vocabulary::submission(&state,&context,&model.unwrap()).await?

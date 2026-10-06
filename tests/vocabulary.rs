@@ -522,7 +522,7 @@ async fn selection_reuses_title_or_notes_gate_and_does_not_ask_for_empty_or_occu
     let body = run(&state).await;
     assert_eq!(body["status"], "ok");
     assert_eq!(body["selected"], json!([]));
-    assert!(fixture::diagnostic(&body, "vocabulary_task_skipped"));
+    assert!(fixture::diagnostic(&body, "advisory_task_skipped"));
     assert!(fixture::diagnostic(&body, "vocabulary_no_task"));
     assert!(stub.submissions.lock().unwrap().is_empty());
 }

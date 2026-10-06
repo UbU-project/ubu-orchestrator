@@ -19,7 +19,7 @@ async fn precondition_skips_name_three_then_count_twenty_seven_without_identifie
         let (_, diagnostics) = precondition_advisor::select(&state, 25).await.unwrap();
         assert_eq!(diagnostics.len(), if total == 3 { 3 } else { 4 });
         for (n, diagnostic) in diagnostics.iter().take(3).enumerate() {
-            assert_eq!(diagnostic.code, "precondition_task_skipped");
+            assert_eq!(diagnostic.code, "advisory_task_skipped");
             assert!(diagnostic.message.contains(&id(n)));
         }
         if total > 3 {
