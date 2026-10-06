@@ -20,6 +20,7 @@ pub fn classify(
     applied: &[DesiredEvent],
     observed: &[DesiredEvent],
     known_external_ids: &BTreeSet<String>,
+    ubu_created_ids: &BTreeSet<String>,
 ) -> Vec<CalendarConflict> {
     let applied: BTreeMap<_, _> = applied
         .iter()
@@ -51,6 +52,12 @@ pub fn classify(
         }
         if known_external_ids.contains(*id) {
             conflicts.push(conflict(event, "unrecorded", "this event matches a known Task but UbU has no applied record; it will not be adopted"));
+        } else if ubu_created_ids.contains(*id) {
+            // Creation is evidence of origin, never applied ownership. Use the
+            // capture sentence so a reset store does not tell the opposite story.
+            let diagnostic = super::calendar_capture::stale_export_diagnostic(std::slice::from_ref(&event.external_id))
+                .expect("one stale event has a diagnostic");
+            conflicts.push(conflict(event, "foreign", &diagnostic.message));
         } else {
             conflicts.push(conflict(
                 event,
@@ -113,7 +120,7 @@ mod tests {
     #[test]
     fn wiped_calendar_produces_only_missing_sorted_by_id() {
         let applied = [event("bbbbb", "Standup"), event("aaaaa", "Breakfast")];
-        let conflicts = classify(&applied, &[], &BTreeSet::new());
+        let conflicts = classify(&applied, &[], &BTreeSet::new(), &Default::default());
         assert_eq!(
             conflicts
                 .iter()
@@ -158,7 +165,7 @@ mod tests {
                 std::slice::from_ref(&original),
                 std::slice::from_ref(&changed),
                 &BTreeSet::new(),
-            );
+             &Default::default());
             assert_eq!(conflicts.len(), 1);
             assert_eq!(conflicts[0].conflict_type, "drifted");
             let repaired = repair(
@@ -179,7 +186,7 @@ mod tests {
         let foreign = event("ddddd", "Dentist"); // Same alphabet as a Task-derived id.
         let observed = vec![foreign.clone(), owned.clone()];
         let before = observed.clone();
-        let conflicts = classify(std::slice::from_ref(&owned), &observed, &BTreeSet::new());
+        let conflicts = classify(std::slice::from_ref(&owned), &observed, &BTreeSet::new(), &Default::default());
         assert_eq!(conflicts.len(), 1);
         assert_eq!(conflicts[0].conflict_type, "foreign");
         let repaired = repair(std::slice::from_ref(&owned), &observed);
@@ -196,7 +203,7 @@ mod tests {
         let foreign = event("ccccc", "Dentist");
         let known_ids = BTreeSet::from([known.external_id.clone()]);
         let observed = [known.clone(), foreign.clone()];
-        let conflicts = classify(std::slice::from_ref(&owned), &observed, &known_ids);
+        let conflicts = classify(std::slice::from_ref(&owned), &observed, &known_ids, &Default::default());
         assert_eq!(
             conflicts
                 .iter()
@@ -206,7 +213,7 @@ mod tests {
         );
         assert_eq!(
             conflicts,
-            classify(std::slice::from_ref(&owned), &[foreign, known], &known_ids)
+            classify(std::slice::from_ref(&owned), &[foreign, known], &known_ids, &Default::default())
         );
         assert!(repair(&[owned], &observed).is_empty());
     }
@@ -215,8 +222,8 @@ mod tests {
     fn unchanged_owned_events_have_no_conflicts_even_without_known_tasks() {
         let applied = [event("bbbbb", "Standup"), event("aaaaa", "Breakfast")];
         let observed = [applied[1].clone(), applied[0].clone()];
-        assert!(classify(&applied, &observed, &BTreeSet::new()).is_empty());
-        assert!(classify(&[], &[], &BTreeSet::new()).is_empty());
+        assert!(classify(&applied, &observed, &BTreeSet::new(), &Default::default()).is_empty());
+        assert!(classify(&[], &[], &BTreeSet::new(), &Default::default()).is_empty());
         assert_eq!(repair(&applied, &observed), observed);
     }
 
@@ -233,4 +240,29 @@ mod tests {
                 .collect::<Vec<_>>()
         );
     }
+    #[test]
+    fn stamped_unknown_task_keeps_foreign_group_but_uses_captures_truthful_origin_sentence() {
+        let stale = event("synthetic-stale", "Synthetic old teapot export");
+        let created = BTreeSet::from([stale.external_id.clone()]);
+        let conflicts = classify(&[], std::slice::from_ref(&stale), &Default::default(), &created);
+        assert_eq!(conflicts[0].conflict_type, "foreign");
+        assert_eq!(conflicts[0].message, crate::services::calendar_capture::stale_export_diagnostic(std::slice::from_ref(&stale.external_id)).unwrap().message);
+        assert_eq!(conflicts[0].message,"Calendar event `synthetic-stale` was created by UbU for a Task this store does not have, so it is left alone and becomes no Task");
+        assert!(repair(&[], &[stale]).is_empty());
+    }
+    #[test]
+    fn stamps_do_not_change_known_task_or_applied_ownership_and_conflict_sorting() {
+        let stale = event("bbbbb", "Synthetic stamped teapot");
+        let foreign = event("aaaaa", "Synthetic foreign teapot");
+        let known = event("ccccc", "Synthetic unrecorded teapot");
+        let created = BTreeSet::from([stale.external_id.clone(),known.external_id.clone()]);
+        let ids = BTreeSet::from([known.external_id.clone()]);
+        let conflicts = classify(&[], &[known.clone(),stale.clone(),foreign.clone()], &ids, &created);
+        assert_eq!(conflicts.iter().map(|c|(c.conflict_type.as_str(),c.external_id.as_str())).collect::<Vec<_>>(),vec![("foreign","aaaaa"),("foreign","bbbbb"),("unrecorded","ccccc")]);
+        assert_eq!(conflicts[0].message,"this event was not created by UbU and will not be touched");
+        assert_eq!(conflicts[2].message,"this event matches a known Task but UbU has no applied record; it will not be adopted");
+        assert_eq!(conflicts,classify(&[], &[foreign,stale.clone(),known], &ids, &created));
+        assert!(classify(std::slice::from_ref(&stale),std::slice::from_ref(&stale),&Default::default(),&created).is_empty());
+    }
+
 }

@@ -39,9 +39,11 @@ applied ownership remains ownership even when its Task is no longer active.
 
 From P1B-57 UbU stamps the events it creates, and capture reads the stamp; see
 [CAPTURE_PROVENANCE.md](CAPTURE_PROVENANCE.md). The rule above is unchanged: a
-stamp does not establish ownership. Reconciliation does not read it, so an
-event UbU created for a store it no longer has is still classified `foreign`
-here.
+stamp does not establish ownership. From P1B-68 reconciliation reads the same
+validated minted-id set as capture. An event UbU created for a Task this store
+does not have remains classified foreign, but its message uses capture's exact
+stale-export sentence instead of claiming UbU did not create it. Applied and
+known-Task precedence, conflict ordering and repair effects are unchanged.
 
 Foreign events are never touched or adopted by reconciliation or repair and are
 never added to the applied side of a later diff. Their presence alone generates
@@ -196,3 +198,19 @@ network opt-in, not a replacement for endpoint authentication or the export gate
 4. **Repair trusts the observation completely.** If a read returns a partial or stale list, repair will drop events that do exist, and the next apply will recreate them. Recreation is safe because the ids are derived, but the calendar will churn.
 5. **No history.** Each reconciliation is stored, but there is no view of how a calendar drifted over time.
 
+
+
+## P1B-68: origin without ownership
+
+The classifier takes ubu_created_ids from the same Calendar list read, after
+wire validation of the stamp. A stamp neither adopts an event nor authorizes
+a write. With no applied record or known active Task, the message is exactly:
+
+```text
+Calendar event `{id}` was created by UbU for a Task this store does not have, so it is left alone and becomes no Task
+```
+
+The sentence is reused from stale_export_diagnostic. Its foreign conflict_type
+is retained because the UI groups on the four existing types. No fifth type,
+new diagnostic family, ordering change, capture-contract change or repair
+authority is introduced. Truly foreign events retain their existing message.

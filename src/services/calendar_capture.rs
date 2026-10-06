@@ -321,7 +321,7 @@ pub async fn capture(
     let interaction = super::calendar_interaction::apply(state, &observed, &mut applied).await?;
     diagnostics.extend(interaction.diagnostics);
     let conflicts =
-        calendar_reconcile::classify(&applied, &observed, &known_external_ids(pool).await?);
+        calendar_reconcile::classify(&applied, &observed, &known_external_ids(pool).await?, &ubu_created_ids);
     let foreign_ids: BTreeSet<_> = conflicts
         .iter()
         .filter(|c| c.conflict_type == "foreign")

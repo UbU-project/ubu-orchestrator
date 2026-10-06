@@ -90,6 +90,7 @@ pub async fn reconcile(
     let (applied, out_of_range_events): (Vec<_>, Vec<_>) = applied.into_iter().partition(|event| range.overlaps(event));
     let mut observed = client.list_events(&range).await.map_err(AppError::Upstream)?;
     super::calendar_capture::normalize_observed(&mut observed, &applied);
+    let ubu_created_ids = client.take_ubu_created_ids().await;
     let mut diagnostics = client.take_diagnostics().await;
     for (source, (row, payload)) in super::calendar_sources::by_source(pool).await? {
         if row.status != "active" || observed.iter().any(|event| event.external_id == source) { continue; }
@@ -105,7 +106,7 @@ pub async fn reconcile(
         }
     }
     let known = known_external_ids(pool).await?;
-    let conflicts = calendar_reconcile::classify(&applied, &observed, &known);
+    let conflicts = calendar_reconcile::classify(&applied, &observed, &known, &ubu_created_ids);
     // Carry the capture refusal through the existing diagnostic contract. The UI
     // groups by this backend reason rather than duplicating the ownership rule.
     diagnostics.extend(conflicts.iter()

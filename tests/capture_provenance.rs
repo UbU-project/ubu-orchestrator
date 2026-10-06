@@ -264,3 +264,16 @@ async fn an_event_one_store_exports_is_recognised_by_the_next_store_and_the_oper
     // event carries no stamp, and is his in every store.
     assert_eq!(recorder.events().len(), 2);
 }
+
+#[tokio::test]
+async fn reconciliation_uses_capture_origin_for_a_wire_stamped_unknown_task_without_adoption() {
+    let recorder = Arc::new(RecordingCalendarApi::with_wire_events(&three_events()));
+    let state = state_with(recorder.clone()).await;
+    let body = ok(&state,"POST","/projection/calendar/reconcile",json!({"schema_version":"ubu.orchestrator.calendar_reconciliation.v1","export_mode":"mock"})).await;
+    let conflicts = body["conflicts"].as_array().unwrap();
+    let stale = conflicts.iter().find(|c|c["external_id"]==ECHO).unwrap();
+    assert_eq!(stale["conflict_type"],"foreign");assert_eq!(stale["message"],stale_one(ECHO)["message"]);
+    for id in [OPERATORS,MISNAMED] { assert_eq!(conflicts.iter().find(|c|c["external_id"]==id).unwrap()["message"],"this event was not created by UbU and will not be touched"); }
+    assert!(titles(&state).await.is_empty());
+    assert!(ubu_orchestrator::services::calendar_apply::last_applied_events(state.inner().store.pool()).await.unwrap().is_empty());
+}

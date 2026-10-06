@@ -111,7 +111,7 @@ fn insert_and_patch_omit_notes_and_notes_alone_are_never_projection_drift() {
     desired.description = None;
     assert!(diff(&[desired.clone()], &[old.clone()], &Default::default()).is_empty());
     old.description = Some("Different synthetic notes".into());
-    assert!(calendar_reconcile::classify(&[desired], &[old], &Default::default()).is_empty());
+    assert!(calendar_reconcile::classify(&[desired], &[old], &Default::default(), &Default::default()).is_empty());
 }
 
 #[tokio::test]
