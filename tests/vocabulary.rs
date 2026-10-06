@@ -111,7 +111,7 @@ async fn title_only_cold_start_proposes_without_writing_canonical_state_or_sendi
     assert_eq!(wire["format"]["properties"]["proposals"]["maxItems"], 3);
     assert_eq!(
         wire["format"]["properties"]["proposals"]["items"]["properties"]["target"]["pattern"],
-        vocabulary::TARGET_PATTERN
+        ubu_orchestrator::services::subject_vocabulary::target_pattern(&vocabulary::subjects(&state).await.unwrap())
     );
     assert_eq!(
         wire["format"]["properties"]["proposals"]["items"]["properties"]["target"]["maxLength"],
@@ -162,13 +162,14 @@ async fn distinct_refusals_preserve_prior_diagnostics_and_never_echo_model_value
 #[test]
 fn name_validator_has_separate_length_grammar_collection_and_all_five_reserved_reasons() {
     let empty = Default::default();
+    let subjects = ["fact", "synthetic", "operator"].map(str::to_owned).into_iter().collect();
     assert_eq!(
-        vocabulary::validate_name(&format!("facts.{}", "a".repeat(123)), &empty),
+        vocabulary::validate_name(&format!("facts.{}", "a".repeat(123)), &empty, &subjects),
         Err(vocabulary::Refusal::Length)
     );
     for name in ["facts.", "facts.a..b", "facts.a b", "facts.é"] {
         assert_eq!(
-            vocabulary::validate_name(name, &empty),
+            vocabulary::validate_name(name, &empty, &subjects),
             Err(vocabulary::Refusal::Grammar)
         );
     }
@@ -180,16 +181,16 @@ fn name_validator_has_separate_length_grammar_collection_and_all_five_reserved_r
         "affect",
     ] {
         assert_eq!(
-            vocabulary::validate_name(&format!("facts.{name}.x"), &empty),
+            vocabulary::validate_name(&format!("facts.{name}.x"), &empty, &subjects),
             Err(vocabulary::Refusal::Reserved)
         );
     }
     for name in [
         "facts.fact.teapot",
         "facts.synthetic.affect.x",
-        "numeric_values.synthetic-charge",
+        "numeric_values.synthetic.charge",
     ] {
-        assert!(vocabulary::validate_name(name, &empty).is_ok());
+        assert!(vocabulary::validate_name(name, &empty, &subjects).is_ok());
     }
 }
 #[tokio::test]

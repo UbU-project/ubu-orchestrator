@@ -177,9 +177,8 @@ pub(crate) async fn prepare_target_admission(
             UniverseState::new(now, "empty UniverseState seeded by an operator edit")
         });
     let subjects = super::subject_vocabulary::effective(state).await?;
-    validate_write_targets(std::slice::from_ref(&mutation), &subjects)?;
     let known = super::precondition_advisor::targets(&base);
-    super::vocabulary::validate_name(&mutation.target, &known).map_err(|reason| {
+    super::vocabulary::validate_name(&mutation.target, &known, &subjects).map_err(|reason| {
         AppError::bad_request_diagnostic("vocabulary_admission_refused", reason.to_string())
     })?;
     let next = prepare_edit(

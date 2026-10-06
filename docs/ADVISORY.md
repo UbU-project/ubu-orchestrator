@@ -564,10 +564,12 @@ that name and Task; another name or another Task remains a different subject.
 
 The controller rechecks injected transports too. Target names are at most 128
 ASCII bytes, with facts or numeric_values prefix and nonempty dot-separated
-letter/digit/underscore/hyphen key segments. Existing names and first key
+letter/digit/underscore/hyphen entity segments and a lowercase snake_case
+final predicate. The subject is from the current effective vocabulary minus
+affect; the request schema constrains that same grammar. Existing names and first key
 segments facts, numeric_values, set_memberships, event_markers and affect are
-refused by code. The request schema's positive pattern does not replace this
-validator. The five-reserved-segment helper is shared with the manual editor.
+refused by code. The request schema's positive pattern does not replace state, envelope or
+selected-evidence checks in this validator. The five-reserved-segment helper is shared with the manual editor.
 
 vocabulary_proposal_refused uses this exact diagnostic template:
 
@@ -580,7 +582,8 @@ If no selected Task can be named, the subject is A proposal. Reasons are:
 - a proposal must contain only a target name; values belong to the operator
 - the proposal must reference exactly one selected Task
 - the target name exceeds 128 bytes
-- the target requires a collection and non-empty ASCII letter, digit, underscore or hyphen key segments
+- the target requires a collection, subject, optional ASCII entity path and lowercase snake_case predicate
+- the subject is outside the effective vocabulary; mint it explicitly in UniverseState's Subjects list
 - only facts and numeric_values target names are in scope
 - the first key segment names a reserved collection or intrinsic-affect namespace
 - the target name is already recorded; an existing value must not be overwritten
@@ -641,3 +644,29 @@ in the rendered Review results. Each independent API response retains its own
 gate decision. Missing-target, malformed-proposal, queue-full and late controller
 refusals retain their producer-specific codes and behavior. No model input,
 producer grammar, advisory authority, canonical mutation or queue bound changes.
+
+
+## P1B-69 D: a model can never mint a subject
+
+Vocabulary's request includes only effective subject names (governed plus
+provisional), excluding affect. Its target pattern permits facts/numeric_values,
+then exactly one of those subjects, optional ASCII entity segments, and a
+lowercase snake_case final predicate, at most 128 bytes. The controller checks
+the same name grammar and the intersection of the request's subject snapshot
+with the current registry, so retirement or an injected result cannot bypass it.
+Admission rechecks the current vocabulary. No fact observation or Setting value
+is sent to a model; true is registry storage, not model context.
+
+Affect remains governed but reserved for intrinsic affect and has mode
+consequences under D0242. It is absent from Vocabulary's subject pattern; the
+manual route preserves its existing reserved refusal. The system text drops
+the collection instruction now enforced by the schema; it retains relevance,
+name-only, existing-name and value prohibitions. One bad proposal still loses
+one candidate, with vocabulary_proposal_refused, three named then a count.
+
+Schema/validator equivalence here means the static new-name grammar. Existing
+names, selected/active evidence, envelope shape and later admission state keep
+additional checks; the request cannot guarantee future state. P1B-64's
+conservative precondition grammar and validator remain unchanged. That producer
+still enumerates recorded targets, including legacy ungrammatical targets; it
+does not claim all stored names were authored under this ticket's grammar.

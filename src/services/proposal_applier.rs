@@ -287,7 +287,7 @@ pub(crate) async fn apply_universe_target(
             super::vocabulary::Refusal::NameOnly.to_string(),
         )
     })?;
-    super::vocabulary::validate_name(name, &Default::default())
+    super::vocabulary::validate_name(name, &Default::default(), &super::vocabulary::subjects(state).await?)
         .map_err(|reason| refuse("vocabulary_admission_refused", reason.to_string()))?;
     let value = value.ok_or_else(|| {
         refuse(
