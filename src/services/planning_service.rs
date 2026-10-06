@@ -29,7 +29,7 @@ use crate::api::planning::{
     ComputeBudgetBody, CorrelationGroupBody, CoverageBody, CoverageBoundaryBody, DiagnosticBody,
     DurationEstimateBody, GeneratePlanningRequest, HorizonPolicyBody, InvalidTaskBody,
     LegitimizationReportBody, PlanBody, PlanCandidateBody, PlanningHorizonBody, PlanningModeBody,
-    PlanningRequestBody, PlanningResponseBody, ProbabilityQualityBody, RepairContextBody,
+    PlanningRequestBody, PlanningResponseBody, PlanningReplayBody, ProbabilityQualityBody, RepairContextBody,
     RepairScopeBody, ScheduledTaskBody, ScoringPolicyBody, StaticAnchorBody, TaskGraphBody,
     TaskGraphEdgeBody, TaskPriorityBody, TaskSpecBody, TimeWindowBody, UnplacedTaskBody,
 };
@@ -108,6 +108,9 @@ pub async fn generate(
         strategy: state.inner().planner_strategy,
     };
     add_empty_capacity_diagnostic(&planning_request, &mut diagnostics);
+    let mut engine_provenance = ubu_planning_core::response::cpu_provenance();
+    let mut replay = replay_metadata(&state, &planning_request);
+    worker_policy_diagnostics(&state, &mut diagnostics).await?;
     let mut kernel_unplaced = Vec::new();
     // A Static collision does not cancel the Plan. It used to: one collision and
     // the kernel was never called. The colliding Tasks are now one busy span in
@@ -117,6 +120,10 @@ pub async fn generate(
         Vec::new()
     } else {
         let response = adapter.plan(kernel_request.clone());
+        engine_provenance = response.engine_provenance;
+        replay.planner_version = response.planner_version;
+        replay.rng_seed_echo = response.rng_seed_echo;
+        replay.effective_time = response.effective_time;
         kernel_unplaced = response.unplaced_tasks;
         diagnostics.extend(diagnostics_from_kernel(response.diagnostics));
         response.plan_candidates
@@ -170,6 +177,8 @@ pub async fn generate(
                     &selected.schedule,
                     &planning_request,
                     PersistPlanMetadata {
+                        engine_provenance: engine_provenance.clone(),
+                        replay_metadata: replay.clone(),
                         legitimization: legitimization.clone(),
                         selected_candidate: Some(selected_candidate.clone()),
                         alternatives: alternatives.clone(),
@@ -234,6 +243,11 @@ pub async fn generate(
         diagnostics.extend(scatter_guard(&plan.steps, &containers));
     }
     Ok(PlanningResponseBody {
+        engine_provenance,
+        planner_version: replay.planner_version,
+        rng_seed_echo: replay.rng_seed_echo,
+        effective_time: replay.effective_time,
+        generated_at: replay.generated_at,
         status: if plan.is_none() {
             "rejected"
         } else if unplaced_tasks.is_empty() {
@@ -390,6 +404,8 @@ pub async fn persist_repair_plan(
         repaired_plan,
         request,
         PersistPlanMetadata {
+            engine_provenance: ubu_planning_core::response::cpu_provenance(),
+            replay_metadata: replay_metadata(state, request),
             legitimization: None,
             selected_candidate: None,
             alternatives: Vec::new(),
@@ -449,6 +465,8 @@ pub fn frozen_steps_for_plan(
 pub fn kernel_plan_body(plan: KernelPlan) -> Result<PlanBody> {
     let created_at = UbuTimestamp::now_utc().to_string();
     Ok(PlanBody {
+        engine_provenance: None,
+        replay_metadata: None,
         id: plan.plan_id,
         status: format!("{:?}", plan.status).to_ascii_lowercase(),
         steps: plan
@@ -1036,6 +1054,8 @@ async fn persist_kernel_plan(
     );
 
     let plan = PlanBody {
+        engine_provenance: Some(metadata.engine_provenance),
+        replay_metadata: Some(metadata.replay_metadata),
         id: plan_id.to_owned(),
         status: "admitted".to_owned(),
         steps,
@@ -1067,6 +1087,8 @@ async fn persist_kernel_plan(
 }
 
 struct PersistPlanMetadata {
+    engine_provenance: ubu_core::worker::EngineProvenance,
+    replay_metadata: PlanningReplayBody,
     legitimization: Option<LegitimizationReportBody>,
     selected_candidate: Option<PlanCandidateBody>,
     alternatives: Vec<PlanCandidateBody>,
@@ -1332,6 +1354,9 @@ fn canonical_plan_from_payload(payload_json: &str) -> Result<PlanBody> {
 }
 
 fn validate_canonical_plan(plan: &PlanBody) -> Result<()> {
+    if let Some(provenance) = &plan.engine_provenance {
+        provenance.validate().map_err(|error| AppError::Internal(error.into()))?;
+    }
     if plan.id.trim().is_empty() {
         return Err(AppError::Internal("plan id is required".to_owned()));
     }
@@ -3183,4 +3208,29 @@ fn scatter_guard(
         }
     }
     diagnostics
+}
+
+fn replay_metadata(state: &AppState, request: &PlanningRequestBody) -> PlanningReplayBody {
+    PlanningReplayBody {
+        planner_version: env!("CARGO_PKG_VERSION").into(),
+        rng_seed_echo: request.rng_seed.unwrap_or_default(),
+        effective_time: ubu_planning_core::response::utc_timestamp(request.time_window.as_ref().map_or(0, |window| window.start))
+            .unwrap_or_else(|_| "1970-01-01T00:00:00Z".into()),
+        generated_at: state.planning_now().to_string(),
+    }
+}
+
+async fn worker_policy_diagnostics(state: &AppState, diagnostics: &mut Vec<DiagnosticBody>) -> Result<()> {
+    if !super::setting_authoring::planning_gpu_enabled(state).await? { return Ok(()); }
+    // No child, import, install or environment mutation. Actual device compute
+    // and its budget justification do not exist in this boundary-only ticket.
+    let environment = ubu_planning_worker::LocalEnvironment::detect();
+    debug_assert!(!ubu_planning_worker::gpu_eligible(true, &environment, false));
+    let mut missing = environment.missing();
+    missing.push("GPU compute-budget justification unavailable");
+    diagnostics.push(DiagnosticBody {
+        code: "planning_gpu_unavailable".into(),
+        message: format!("CPU reference used: {}", missing.join("; ")),
+    });
+    Ok(())
 }

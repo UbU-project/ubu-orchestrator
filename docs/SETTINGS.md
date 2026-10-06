@@ -10,7 +10,7 @@ category such as `work` distinct from future configuration with another meaning.
 Category names are case-sensitive. Any nonblank category suffix is allowed; the
 current authoring routes reject other namespaces with `setting_unknown_name`,
 except the supported `advisory.` names described in [Advisory](ADVISORY.md)
-and the provisional subject Settings below.
+the provisional subject Settings below, and planning.gpu_enabled.
 Existing admitted Settings from other mechanisms remain readable in the list.
 
 ## HTTP contract
@@ -106,3 +106,32 @@ Diagnostics are subject_reserved, subject_governed, subject_invalid (root
 shape), subject_invalid_value and subject_already_registered. Existing
 duplicate-Setting refusal and authoring locks apply. The registry and world
 writes share the Task-action lock, so an admitted write cannot race retirement.
+
+
+## P1B-70: CPU-owned planning backend policy
+
+planning.gpu_enabled is an ordinary boolean Setting, authored through the
+existing PUT /setting/{name} route and listed by GET /settings. Its absent
+or invalid imported value defaults to false; DELETE restores that default.
+Only booleans are accepted, with setting_invalid_planning_gpu for other values.
+It uses ordinary user attribution, locks and admission, with no Preference,
+HTTP route, provisional subject or UI control added.
+
+Policy permission, compatible environment and a justified compute budget are
+all required. This boundary-only implementation can locate Python without
+running it; it explicitly reports that suitability and PyTorch/CUDA are
+unverified, no GPU compute stage exists and GPU budget justification is
+unavailable. Enabling policy therefore still uses CPU and adds the bounded
+planning_gpu_unavailable diagnostic. Nothing probes a framework by importing
+it, starts a child, installs a package or silently enables a GPU. Later stage
+work must establish environment compatibility and budget justification before
+selecting a device backend. Default-off generation retains every previous
+planning result.
+
+Every planning response carries actual CPU engine_provenance, planner_version,
+rng_seed_echo, effective_time and generated_at. Newly admitted Plans carry
+that provenance and replay_metadata; repairs record CPU provenance too.
+Generation time is supplied by the injectable orchestration clock; placement
+and scoring inputs are unchanged. Older persisted Plans read with absent
+metadata, without inventing past certification. Worker transport outcomes
+never provide authority for canonical admission, and streaming is not exposed.

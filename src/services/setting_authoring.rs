@@ -22,6 +22,8 @@ pub async fn settings(pool: &sqlx::SqlitePool) -> Result<Vec<ObjectRecord>> {
         .map_err(internal)
 }
 
+pub const PLANNING_GPU_ENABLED: &str = "planning.gpu_enabled";
+
 pub const REVIEW_SEED: &str = "advisory.review_seed_days";
 pub const REVIEW_CEILING: &str = "advisory.review_ceiling_days";
 
@@ -40,14 +42,14 @@ fn valid_advisory_timeout(value: &Value) -> Option<u64> {
 
 fn validate_name(name: &str) -> Result<()> {
     if let Some(root) = name.strip_prefix(super::subject_vocabulary::PREFIX) { return super::subject_vocabulary::validate_root(root); }
-    if matches!(name, "advisory.model" | "advisory.endpoint" | ADVISORY_TIMEOUT | REVIEW_SEED | REVIEW_CEILING) { return Ok(()); }
+    if matches!(name, "advisory.model" | "advisory.endpoint" | ADVISORY_TIMEOUT | REVIEW_SEED | REVIEW_CEILING | PLANNING_GPU_ENABLED) { return Ok(()); }
     if !name
         .strip_prefix("calendar.color.")
         .is_some_and(|category| !category.trim().is_empty())
     {
         return Err(AppError::bad_request_diagnostic(
             "setting_unknown_name",
-            "Only calendar.color.<category>, universe.subject.<root> and supported advisory model, endpoint, timeout and review interval Settings can be authored",
+            "Only calendar.color.<category>, universe.subject.<root> and supported advisory and planning.gpu_enabled Settings can be authored",
         ));
     }
     Ok(())
@@ -98,6 +100,10 @@ pub async fn put(state: &AppState, name: &str, value: Value) -> Result<(String, 
     if name.starts_with(super::subject_vocabulary::PREFIX) {
         if value != true {
             return Err(AppError::bad_request_diagnostic("subject_invalid_value", "A provisional subject Setting must have the boolean value true; retire it with DELETE."));
+        }
+    } else if name == PLANNING_GPU_ENABLED {
+        if !value.is_boolean() {
+            return Err(AppError::bad_request_diagnostic("setting_invalid_planning_gpu", "planning.gpu_enabled must be a boolean"));
         }
     } else if name == ADVISORY_TIMEOUT {
         if valid_advisory_timeout(&value).is_none() {
@@ -244,4 +250,11 @@ async fn check_review_pair(state: &AppState, name: &str, proposed: Option<u64>) 
     let ceiling = if name == REVIEW_CEILING {proposed.unwrap_or(365)} else {review_days(state,REVIEW_CEILING).await?.0};
     if seed > ceiling {return Err(AppError::bad_request_diagnostic("setting_invalid_review_interval", "The review seed must not exceed its ceiling"));}
     Ok(())
+}
+
+/// Missing/malformed imported configuration is off, never an implicit opt-in.
+pub async fn planning_gpu_enabled(state: &AppState) -> Result<bool> {
+    let Some(row) = current(state, PLANNING_GPU_ENABLED).await? else { return Ok(false); };
+    let payload: Value = serde_json::from_str(&row.payload_json).map_err(internal)?;
+    Ok(payload["value"].as_bool().unwrap_or(false))
 }

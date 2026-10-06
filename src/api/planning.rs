@@ -302,6 +302,12 @@ pub struct AffectObservationBody {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct PlanningResponseBody {
+    #[schema(value_type = Object)]
+    pub engine_provenance: ubu_core::worker::EngineProvenance,
+    pub planner_version: String,
+    pub rng_seed_echo: u64,
+    pub effective_time: String,
+    pub generated_at: String,
     pub status: String,
     pub unplaced_tasks: Vec<UnplacedTaskBody>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -344,6 +350,12 @@ pub struct InvalidTaskBody {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct PlanBody {
+    // Absent on older records; reading them must not fabricate certification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Object)]
+    pub engine_provenance: Option<ubu_core::worker::EngineProvenance>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay_metadata: Option<PlanningReplayBody>,
     pub id: String,
     pub status: String,
     pub steps: Vec<ScheduledTaskBody>,
@@ -886,4 +898,13 @@ pub struct TaskPriorityBody {
     pub bucket_count: u32,
     pub normalized_rank: Option<f64>,
     pub value: f64,
+}
+
+/// Replay envelope only; never a scoring policy or planning input.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct PlanningReplayBody {
+    pub planner_version: String,
+    pub rng_seed_echo: u64,
+    pub effective_time: String,
+    pub generated_at: String,
 }
