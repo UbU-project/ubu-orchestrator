@@ -64,7 +64,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ReviewRequest"
+                "$ref": "#/components/schemas/AdmitRequest"
               }
             }
           },
@@ -2181,6 +2181,22 @@
           }
         }
       },
+      "AdmitRequest": {
+        "type": "object",
+        "description": "Omission is refused for UniverseTarget; an explicit JSON null is a value.",
+        "required": [
+          "observed_version"
+        ],
+        "properties": {
+          "observed_version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "value": {}
+        },
+        "additionalProperties": false
+      },
       "AdvisoryAdmitResponse": {
         "type": "object",
         "required": [
@@ -2193,7 +2209,8 @@
           "state_category": {
             "type": "string"
           },
-          "task": {}
+          "task": {},
+          "universe_state": {}
         }
       },
       "AdvisoryCandidateResponse": {
@@ -2273,12 +2290,12 @@
               "integer",
               "null"
             ],
-            "description": "`suggest_tags` or `precondition`: how many Tasks to select.",
+            "description": "Non-interview producers: how many Tasks to select.",
             "minimum": 0
           },
           "producer": {
             "type": "string",
-            "description": "`suggest_tags`, `clarify`, `precondition` or `precondition_review`."
+            "description": "`suggest_tags`, `clarify`, `precondition`, `precondition_review` or `vocabulary`."
           },
           "schema_version": {
             "type": [

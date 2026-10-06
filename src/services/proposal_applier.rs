@@ -20,6 +20,7 @@ pub(crate) fn proposal_target(candidate: &AdvisoryCandidate) -> Result<&ObjectRe
         | (None, CandidateKind::Precondition) => {}
         (Some("replace_precondition"), CandidateKind::Precondition) => {}
         (Some("clear_precondition"), CandidateKind::Precondition) => {}
+        (Some("record_universe_target"), CandidateKind::UniverseTarget) => {}
         _ => {
             return Err(AppError::UnsupportedProposal {
                 operation: operation.unwrap_or("<missing or non-string>").to_owned(),
@@ -29,6 +30,10 @@ pub(crate) fn proposal_target(candidate: &AdvisoryCandidate) -> Result<&ObjectRe
     }
     match candidate.target_refs.as_slice() {
         [target] if target.object_type == ObjectType::Task => Ok(target),
+        _ if candidate.candidate_kind == CandidateKind::UniverseTarget => Err(refuse(
+            "vocabulary_admission_refused",
+            super::vocabulary::Refusal::TaskReference.to_string(),
+        )),
         _ => Err(AppError::BadRequest(
             "tag proposals require exactly one Task target".into(),
         )),
@@ -187,6 +192,9 @@ pub fn apply_proposal(
     candidate: &AdvisoryCandidate,
     target: &ObjectRecord,
 ) -> Result<NewObjectRecord> {
+    if candidate.candidate_kind == CandidateKind::UniverseTarget {
+        return Err(refuse("vocabulary_value_required", "An operator-supplied value is required; no value is defaulted, inferred or derived"));
+    }
     if candidate.candidate_kind == CandidateKind::ClarificationQuestion {
         return Err(AppError::bad_request_diagnostic(
             "advisory_answer_required",
@@ -243,6 +251,65 @@ pub fn apply_proposal(
     // Preserve unrelated payload fields and their existing wire representation.
     payload["tags"] = serde_json::json!(task.tags);
     Ok(rewritten(target, payload))
+}
+
+/// A model may name a target; only the operator supplies its value. This arm
+/// dispatches the same UniverseState mutation service the manual screen uses.
+pub(crate) async fn apply_universe_target(
+    state: &crate::state::AppState,
+    candidate: &AdvisoryCandidate,
+    target: &ObjectRecord,
+    value: Option<serde_json::Value>,
+) -> Result<(NewObjectRecord, ubu_core::VersionRef)> {
+    let (_, task) = target_task(candidate, target)?;
+    if target.status != "active"
+        || task.status != ubu_core::core::TaskStatus::Active
+        || task.occurrence.is_some()
+    {
+        return Err(refuse(
+            "vocabulary_admission_refused",
+            super::vocabulary::Refusal::Inactive.to_string(),
+        ));
+    }
+    let proposal = &candidate.normalized_proposal;
+    if proposal.as_object().is_none_or(|p| p.len() != 2)
+        || proposal["operation"] != "record_universe_target"
+        || !matches!(&candidate.payload, ubu_core::CandidatePayload::Inline(payload) if payload==proposal)
+    {
+        return Err(refuse(
+            "vocabulary_admission_refused",
+            super::vocabulary::Refusal::NameOnly.to_string(),
+        ));
+    }
+    let name = proposal["target"].as_str().ok_or_else(|| {
+        refuse(
+            "vocabulary_admission_refused",
+            super::vocabulary::Refusal::NameOnly.to_string(),
+        )
+    })?;
+    super::vocabulary::validate_name(name, &Default::default())
+        .map_err(|reason| refuse("vocabulary_admission_refused", reason.to_string()))?;
+    let value = value.ok_or_else(|| {
+        refuse(
+            "vocabulary_value_required",
+            "An operator-supplied value is required; no value is defaulted, inferred or derived",
+        )
+    })?;
+    super::universe_state::prepare_target_admission(
+        state,
+        ubu_core::core::UniverseMutation {
+            operation: if name.starts_with("facts.") {
+                "set_fact"
+            } else {
+                "set_numeric"
+            }
+            .into(),
+            target: name.into(),
+            payload: Some(value),
+            provenance_kind: Some(ubu_core::core::ProvenanceKind::Asserted),
+        },
+    )
+    .await
 }
 
 /// Both explicit review operations compare the reviewed value before writing.

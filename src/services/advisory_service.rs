@@ -58,7 +58,7 @@ pub async fn run_advisory<T: AdvisoryTransport + ?Sized>(
         candidates_rejected: 0,
         candidates_suppressed: 0,
         candidate_ids: Vec::new(),
-        proposals: result.proposed_candidates.iter().filter(|candidate| candidate.candidate_kind != ubu_core::CandidateKind::Precondition).map(|candidate| json!({"target_refs":candidate.target_refs,"normalized_proposal":candidate.normalized_proposal,"confidence":candidate.confidence})).collect(),
+        proposals: result.proposed_candidates.iter().filter(|candidate| !matches!(candidate.candidate_kind, ubu_core::CandidateKind::Precondition | ubu_core::CandidateKind::UniverseTarget)).map(|candidate| json!({"target_refs":candidate.target_refs,"normalized_proposal":candidate.normalized_proposal,"confidence":candidate.confidence})).collect(),
         diagnostics: result.diagnostics.clone(),
         validation_error: None,
     };
@@ -73,6 +73,8 @@ pub async fn run_advisory<T: AdvisoryTransport + ?Sized>(
 
     if submission.expected_result_schema == super::precondition_review::RESULT_SCHEMA {
         super::precondition_review::vet_result(state, &submission, &mut result).await?;
+    } else if submission.expected_result_schema == super::vocabulary::RESULT_SCHEMA {
+        super::vocabulary::vet_result(state, &submission, &mut result).await?;
     } else { super::precondition_advisor::vet_result(state, &mut result).await?; }
     report.status = result.status;
     report.diagnostics = result.diagnostics.clone();
@@ -244,7 +246,57 @@ pub async fn admit_candidate(
     id: &AdvisoryCandidateId,
     observed_version: u64,
 ) -> Result<(CandidateRecord, ObjectRecord)> {
+    admit_candidate_with_value(state,id,observed_version,None).await
+}
+
+pub async fn admit_candidate_with_value(
+    state: &AppState,
+    id: &AdvisoryCandidateId,
+    observed_version: u64,
+    value: Option<serde_json::Value>,
+) -> Result<(CandidateRecord, ObjectRecord)> {
     let _guard = state.inner().advisory_run_lock.lock().await;
+    let candidate = reviewed_candidate(state, id, observed_version).await?;
+    if candidate.candidate_kind == ubu_core::CandidateKind::UniverseTarget {
+        let _action = state.inner().task_action_lock.lock().await;
+        let target_ref = proposal_target(&candidate)?;
+        let target = ubu_store::queries::get_current_state(
+            state.inner().store.pool(),
+            target_ref.id.as_str(),
+        )
+        .await?
+        .ok_or_else(|| AppError::TargetNotFound {
+            id: target_ref.id.to_string(),
+        })?;
+        let (record, world_version) =
+            super::proposal_applier::apply_universe_target(state, &candidate, &target, value)
+                .await?;
+        let world_id =
+            ubu_core::UbuId::parse(&record.id).map_err(|e| AppError::Internal(e.to_string()))?;
+        let observations = [
+            (
+                target_ref.id.clone(),
+                VersionRef::Version(
+                    u64::try_from(target.version)
+                        .map_err(|_| AppError::Internal("invalid Task version".into()))?,
+                ),
+            ),
+            (world_id, world_version),
+        ]
+        .into_iter()
+        .collect();
+        let envelope =
+            state.envelope_for(observations, AuthoritySource::User, state.planning_now())?;
+        return PreparedAdmission { record, envelope }
+            .commit(state, id, observed_version)
+            .await;
+    }
+    if value.is_some() {
+        return Err(AppError::bad_request_diagnostic(
+            "advisory_value_unsupported",
+            "Only a target-name proposal takes an operator value",
+        ));
+    }
     prepare_admission(state, id, observed_version)
         .await?
         .commit(state, id, observed_version)

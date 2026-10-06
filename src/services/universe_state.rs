@@ -43,16 +43,7 @@ pub async fn apply(
     mutations: &[UniverseMutation],
     mode: InstanceMode,
 ) -> Result<(UniverseState, i64)> {
-    if mutations.is_empty() {
-        return Err(AppError::bad_request_diagnostic(
-            "universe_mutations_empty",
-            "mutations must list at least one mutation",
-        ));
-    }
-    validate_mutations_for_mode(mode, mutations).map_err(|error| {
-        AppError::bad_request_diagnostic("universe_mutation_mode_invalid", error.to_string())
-    })?;
-    validate_write_namespaces(mutations)?;
+    validate_edit(mutations, mode)?;
 
     // A completed Task's effects are written under this lock too.
     let _action = state.inner().task_action_lock.lock().await;
@@ -63,9 +54,7 @@ pub async fn apply(
         Some((current, _)) => current.clone(),
         None => UniverseState::new(now, "empty UniverseState seeded by an operator edit"),
     };
-    let next = apply_universe_mutations(&base, mutations, now).map_err(|error| {
-        AppError::bad_request_diagnostic("universe_mutation_invalid", error.to_string())
-    })?;
+    let next = prepare_edit(&base, mutations, mode, now)?;
 
     let observed = match current {
         Some((_, version)) => version,
@@ -119,6 +108,109 @@ pub async fn apply(
     Ok((next, stored.version))
 }
 
+fn validate_edit(mutations: &[UniverseMutation], mode: InstanceMode) -> Result<()> {
+    if mutations.is_empty() {
+        return Err(AppError::bad_request_diagnostic(
+            "universe_mutations_empty",
+            "mutations must list at least one mutation",
+        ));
+    }
+    validate_mutations_for_mode(mode, mutations).map_err(|error| {
+        AppError::bad_request_diagnostic("universe_mutation_mode_invalid", error.to_string())
+    })?;
+    validate_write_namespaces(mutations)?;
+
+    Ok(())
+}
+
+/// Shared operator mutation preparation: the screen and target admission use
+/// identical mode, namespace and core mutation checks before either writer runs.
+fn prepare_edit(
+    base: &UniverseState,
+    mutations: &[UniverseMutation],
+    mode: InstanceMode,
+    now: ubu_core::UbuTimestamp,
+) -> Result<UniverseState> {
+    validate_edit(mutations, mode)?;
+    apply_universe_mutations(base, mutations, now).map_err(|error| {
+        AppError::bad_request_diagnostic("universe_mutation_invalid", error.to_string())
+    })
+}
+
+/// Prepare an operator assertion for the existing atomic candidate writer.
+/// The caller holds task_action_lock through the write. Creating the complete
+/// state atomically avoids leaving an empty seed if candidate admission fails.
+pub(crate) async fn prepare_target_admission(
+    state: &AppState,
+    mutation: UniverseMutation,
+) -> Result<(NewObjectRecord, VersionRef)> {
+    let now = state.planning_now();
+    let current = planning_service::read_current_universe_state(state.inner().store.pool()).await?;
+    let base = current
+        .as_ref()
+        .map(|(world, _)| world.clone())
+        .unwrap_or_else(|| {
+            UniverseState::new(now, "empty UniverseState seeded by an operator edit")
+        });
+    let known = super::precondition_advisor::targets(&base);
+    super::vocabulary::validate_name(&mutation.target, &known).map_err(|reason| {
+        AppError::bad_request_diagnostic("vocabulary_admission_refused", reason.to_string())
+    })?;
+    let next = prepare_edit(
+        &base,
+        &[mutation],
+        crate::instance_mode::MVP_INSTANCE_MODE,
+        now,
+    )?;
+    let existing = if current.is_some() {
+        queries::get_current_state(state.inner().store.pool(), base.id.as_str()).await?
+    } else {
+        None
+    };
+    let observation = match current {
+        Some((_, v)) => VersionRef::Version(
+            u64::try_from(v)
+                .map_err(|_| AppError::Internal("invalid UniverseState version".into()))?,
+        ),
+        None => VersionRef::Absent,
+    };
+    let mut payload = serde_json::to_value(&next).map_err(|e| AppError::Internal(e.to_string()))?;
+    payload["schema_version"] = match &existing {
+        Some(row) => serde_json::from_str::<serde_json::Value>(&row.payload_json)
+            .map_err(|e| AppError::Internal(e.to_string()))?["schema_version"]
+            .clone(),
+        None => json!("core/universe-state/0.1"),
+    };
+    payload["provenance"] = json!({"created_at":now,"authority_source":AuthoritySource::User});
+    Ok((
+        NewObjectRecord {
+            id: next.id.to_string(),
+            object_type: ObjectType::UniverseState.as_str().into(),
+            version: existing.as_ref().map_or(1, |r| r.version),
+            status: existing
+                .as_ref()
+                .map_or_else(|| "active".into(), |r| r.status.clone()),
+            compartment_label: existing.as_ref().map_or_else(
+                || OPERATOR_SEED_COMPARTMENT.into(),
+                |r| r.compartment_label.clone(),
+            ),
+            payload,
+            created_at: existing.map_or_else(|| now.to_string(), |r| r.created_at),
+            updated_at: now.to_string(),
+        },
+        observation,
+    ))
+}
+
+pub(crate) fn reserved_key_segment(target: &str) -> Option<&str> {
+    let segment = target.split_once('.')?.1.split('.').next()?;
+    matches!(
+        segment,
+        "facts" | "numeric_values" | "set_memberships" | "event_markers" | "affect"
+    )
+    .then_some(segment)
+}
+
 /// Only the first key segment names the namespace. Cleanup remains available
 /// for legacy keys; Task effects retain the core mutation contract.
 fn validate_write_namespaces(mutations: &[UniverseMutation]) -> Result<()> {
@@ -134,10 +226,9 @@ fn validate_write_namespaces(mutations: &[UniverseMutation]) -> Result<()> {
         ) {
             continue;
         }
-        let Some((_, key)) = mutation.target.split_once('.') else {
+        let Some(segment) = reserved_key_segment(&mutation.target) else {
             continue;
         };
-        let segment = key.split('.').next().unwrap_or_default();
         let message = match segment {
             "facts" | "numeric_values" | "set_memberships" | "event_markers" => format!(
                 "Key segment `{segment}` names a collection; the collection comes from the panel, not the key. The target would be `{}`.",

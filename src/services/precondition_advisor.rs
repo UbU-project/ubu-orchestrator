@@ -299,8 +299,12 @@ impl std::fmt::Display for TreeRefusal {
 }
 
 pub fn refusal_diagnostic(task_id: Option<&str>, reason: &TreeRefusal) -> Value {
+    proposal_refusal_diagnostic("precondition_proposal_refused", task_id, reason)
+}
+
+pub(crate) fn proposal_refusal_diagnostic(code: &str, task_id: Option<&str>, reason: &impl std::fmt::Display) -> Value {
     let subject = task_id.map_or_else(|| "A proposal".to_owned(), |id| format!("Task `{id}`"));
-    json!({"code":"precondition_proposal_refused", "message":format!("{subject}: {reason}. No candidate was enqueued for this Task; the rest of the run stands.")})
+    json!({"code":code, "message":format!("{subject}: {reason}. No candidate was enqueued for this Task; the rest of the run stands.")})
 }
 
 /// Validate every branch, including ones core's boolean evaluator short-circuits.

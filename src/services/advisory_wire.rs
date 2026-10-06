@@ -205,6 +205,7 @@ fn clarify_request_body(sub: &LocalAdvisorySubmission) -> Result<Value, Failure>
 }
 
 pub fn request_body(sub: &LocalAdvisorySubmission) -> Result<Value, Failure> {
+    if sub.expected_result_schema == super::vocabulary::RESULT_SCHEMA { return super::vocabulary::request_body(sub); }
     if sub.expected_result_schema == super::precondition_review::RESULT_SCHEMA { return super::precondition_review::request_body(sub); }
     if sub.expected_result_schema == super::precondition_advisor::RESULT_SCHEMA { return precondition_request_body(sub); }
     if sub.expected_result_schema == CLARIFY_RESULT_SCHEMA {
@@ -318,6 +319,10 @@ pub fn interpret(sub: &LocalAdvisorySubmission, status: u16, bytes: &[u8]) -> Lo
                 .is_some_and(|thinking| !thinking.trim().is_empty());
             return empty_response(sub, thinking_present);
         }
+    }
+    if sub.expected_result_schema == super::vocabulary::RESULT_SCHEMA {
+        let result = super::vocabulary::interpret(sub, bytes).unwrap_or_else(|| diagnosed(sub, LocalAdvisoryResultStatus::MalformedResult, json!({"code":"advisory_malformed_result","message":"The model response was not a valid bounded target-name proposal; no candidates were enqueued"})));
+        return if serde_json::to_vec(&result).map_or(true, |b|b.len() as u64 > sub.result_size_limit_bytes) { failed(sub, Failure::TooLarge) } else { result };
     }
     if sub.expected_result_schema == super::precondition_review::RESULT_SCHEMA {
         let result = super::precondition_review::interpret(sub, bytes).unwrap_or_else(|| diagnosed(sub, LocalAdvisoryResultStatus::MalformedResult, json!({"code":"advisory_malformed_result","message":"The model response was not a valid precondition review; no candidates were enqueued"})));

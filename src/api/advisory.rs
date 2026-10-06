@@ -105,6 +105,19 @@ pub struct ReviewRequest {
     pub observed_version: u64,
 }
 
+/// Omission is refused for UniverseTarget; an explicit JSON null is a value.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AdmitRequest {
+    pub observed_version: u64,
+    #[serde(default, deserialize_with = "present_value")]
+    pub value: Option<Value>,
+}
+
+fn present_value<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Option<Value>, D::Error> {
+    Value::deserialize(d).map(Some)
+}
+
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RejectRequest {
@@ -143,6 +156,8 @@ pub struct AdvisoryAdmitResponse {
     pub state_category: String,
     pub candidate: Value,
     pub task: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub universe_state: Option<Value>,
 }
 
 fn retention_policy_schema() -> utoipa::openapi::schema::Object {
@@ -191,19 +206,25 @@ fn review_error(error: AppError) -> AppError {
 }
 
 #[utoipa::path(post, path = "/advisory/candidate/{candidate_id}/admit",
-    params(("candidate_id" = String, Path)), request_body = ReviewRequest,
+    params(("candidate_id" = String, Path)), request_body = AdmitRequest,
     responses((status = 200, body = AdvisoryAdmitResponse), (status = 400), (status = 404), (status = 409), (status = 422)))]
 pub async fn admit(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Json(request): Json<ReviewRequest>,
+    Json(request): Json<AdmitRequest>,
 ) -> Result<Json<AdvisoryAdmitResponse>> {
     let (candidate, task) =
-        advisory_service::admit_candidate(&state, &parse_id(&id)?, request.observed_version)
+        advisory_service::admit_candidate_with_value(&state, &parse_id(&id)?, request.observed_version, request.value)
             .await
             .map_err(review_error)?;
     let candidate = candidate_response(candidate.payload_json)?;
+    let (task, universe_state) = if task.object_type == "UniverseState" {
+        let target_id = candidate.candidate["target_refs"][0]["id"].as_str().ok_or_else(||AppError::Internal("missing candidate Task".into()))?;
+        let evidence = ubu_store::queries::get_current_state(state.inner().store.pool(),target_id).await?.ok_or_else(||AppError::Internal("missing candidate Task".into()))?;
+        (evidence,Some(serde_json::from_str(&task.payload_json).map_err(|e|AppError::Internal(e.to_string()))?))
+    } else { (task,None) };
     Ok(Json(AdvisoryAdmitResponse {
+        universe_state,
         state_category: candidate.state_category,
         candidate: candidate.candidate,
         task: serde_json::from_str(&task.payload_json)
@@ -229,6 +250,7 @@ pub async fn answer(
     .map_err(review_error)?;
     let candidate = candidate_response(candidate.payload_json)?;
     Ok(Json(AdvisoryAdmitResponse {
+        universe_state: None,
         state_category: candidate.state_category,
         candidate: candidate.candidate,
         task: serde_json::from_str(&task.payload_json)

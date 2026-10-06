@@ -234,7 +234,7 @@ async fn a_field_that_belongs_to_the_other_producer_is_refused() {
         assert_eq!(body["diagnostics"][0]["code"], code, "{fields}");
     }
     let (_, unknown) = run_with(&state, json!({"producer":"advise"})).await;
-    assert_eq!(unknown["diagnostics"][0]["message"], "The producers are suggest_tags, clarify, precondition and precondition_review");
+    assert_eq!(unknown["diagnostics"][0]["message"], "The producers are suggest_tags, clarify, precondition, precondition_review and vocabulary");
     let (status, _) = run_with(&state, json!({"producer":"clarify","round":2})).await;
     assert!(status.is_client_error(), "an unknown field is refused: {status}");
     assert_eq!(stub.asked(), 0);

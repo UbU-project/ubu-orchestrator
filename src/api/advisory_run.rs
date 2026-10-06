@@ -3,7 +3,7 @@ use crate::services::advisory_wire::SelectedTask;
 use crate::{
     api::planning::DiagnosticBody,
     errors::{AppError, Result},
-    services::{advisory_service, clarify, setting_authoring, suggest_tags, precondition_advisor, precondition_review},
+    services::{advisory_service, clarify, setting_authoring, suggest_tags, precondition_advisor, precondition_review, vocabulary},
     state::AppState,
 };
 use axum::{extract::State, Json};
@@ -16,9 +16,9 @@ pub const ADVISORY_RUN_SCHEMA_VERSION: &str = "ubu.orchestrator.advisory_run.v1"
 #[serde(deny_unknown_fields)]
 pub struct AdvisoryRunRequest {
     pub schema_version: Option<String>,
-    /// `suggest_tags`, `clarify`, `precondition` or `precondition_review`.
+    /// `suggest_tags`, `clarify`, `precondition`, `precondition_review` or `vocabulary`.
     pub producer: String,
-    /// `suggest_tags` or `precondition`: how many Tasks to select.
+    /// Non-interview producers: how many Tasks to select.
     pub limit: Option<usize>,
     /// `clarify` only: the Task to interview. Omitted, the first Task with no description.
     pub task_id: Option<String>,
@@ -66,12 +66,12 @@ pub async fn run(
         return Err(AppError::bad_request_diagnostic("advisory_force_unsupported", "force applies only to precondition_review"));
     }
     let interview = match request.producer.as_str() {
-        "suggest_tags" | "precondition" | "precondition_review" => false,
+        "suggest_tags" | "precondition" | "precondition_review" | "vocabulary" => false,
         "clarify" => true,
         _ => {
             return Err(AppError::bad_request_diagnostic(
                 "advisory_unknown_producer",
-                "The producers are suggest_tags, clarify, precondition and precondition_review",
+                "The producers are suggest_tags, clarify, precondition, precondition_review and vocabulary",
             ))
         }
     };
@@ -95,8 +95,9 @@ pub async fn run(
             "limit must be between 1 and 25",
         ));
     }
+    let vocabulary_run = request.producer == "vocabulary";
     let preconditions = request.producer == "precondition";
-    let producer = if interview { "Clarify" } else if preconditions { "Precondition" } else { "SuggestTags" };
+    let producer = if interview { "Clarify" } else if preconditions { "Precondition" } else if vocabulary_run { "Vocabulary" } else { "SuggestTags" };
     let mut response = AdvisoryRunResponse {
         schema_version: ADVISORY_RUN_SCHEMA_VERSION.into(),
         status: "unconfigured".into(),
@@ -107,6 +108,14 @@ pub async fn run(
         diagnostics: vec![],
         round: None,
     };
+    if vocabulary_run {
+        let awaiting = vocabulary::awaiting_review(&state).await?;
+        if awaiting >= precondition_advisor::MAX_AWAITING_REVIEW {
+            response.status = "ok".into();
+            response.diagnostics.push(DiagnosticBody { code:"vocabulary_queue_full".into(),message:format!("{awaiting} target-name candidates are waiting in Review; review, defer or reject them before asking for more. No model was asked.") });
+            return Ok(Json(response));
+        }
+    }
     if preconditions {
         let awaiting = precondition_advisor::awaiting_review(&state).await?;
         if awaiting >= precondition_advisor::MAX_AWAITING_REVIEW {
@@ -164,6 +173,12 @@ pub async fn run(
         response.selected = context.tasks.iter().map(|t|SelectedTask { id:t.id.clone(),title:String::new() }).collect();
         if context.tasks.is_empty() { response.status = "ok".into(); return Ok(Json(response)); }
         precondition_review::submission(&state, &context, &model.unwrap()).await?
+    } else if vocabulary_run {
+        let (context, diagnostics) = precondition_advisor::select(&state, limit).await?;
+        skipped = diagnostics.into_iter().filter(|d|d.code != "precondition_no_facts").map(|mut d| { d.code = "vocabulary_task_skipped".into(); d }).collect();
+        response.selected = context.tasks.iter().map(|t|SelectedTask {id:t.id.clone(),title:t.title.clone()}).collect();
+        if context.tasks.is_empty() { response.status="ok".into(); response.diagnostics=skipped; response.diagnostics.push(DiagnosticBody {code:"vocabulary_no_task".into(),message:"No active non-occurrence Task has a title or description to reason over; no model was asked.".into()}); return Ok(Json(response)); }
+        vocabulary::submission(&state,&context,&model.unwrap()).await?
     } else if preconditions {
         let (context, diagnostics) = precondition_advisor::select(&state, limit).await?;
         skipped = diagnostics;
