@@ -291,9 +291,14 @@ adds the UI and design context in section D; it changes no route behavior.
   for each value.
 - **It authors no precondition.** A Task's `preconditions` are written through
   the Task routes.
-- **This screen has no advisor.** Review can propose a Task precondition from
-  P1B-61, using only existing targets. It proposes no facts. `proposed` is a kind
-  a mutation may state, and nothing here states it.
+- **Review may suggest a target name; only the operator supplies its value.**
+  The vocabulary producer proposes names in facts or numeric_values, without
+  any value. Admission dispatches set_fact or set_numeric through this service's
+  shared mode, namespace and core mutation validation, exactly the checks the
+  screen uses. The operator's supplied value is recorded as asserted.
+  `proposed` provenance remains unused by advisors: it describes a suggested
+  value, and no advisor suggests values. A separate precondition run can then
+  propose a requirement over the newly recorded names.
 
 ## Tests
 
@@ -303,3 +308,29 @@ fact is cleared, a Task that waits on a number being `at_least` a value, a
 number set to exactly the value asked for, and the provenance a write records
 and a clear removes. `tests/bootstrap.rs` holds the undoubled keys. `src/services/universe_state.rs` holds the tests that need the
 planner's own reader or a mode other than this instance's.
+
+
+## P1B-67: atomic admission of a suggested name
+
+The mutation preparation in this service is shared by the screen and
+record_universe_target admission. Both call validate_mutations_for_mode,
+the same five-reserved-segment guard, and apply_universe_mutations before writing.
+Admission additionally refuses a name already recorded, so it never overwrites
+an operator assertion. No missing value is defaulted, inferred or derived.
+
+The existing atomic candidate admission writer commits the prepared UniverseState
+and the linked candidate decision together. A rejected, deferred or stale
+candidate cannot leave a partial world write. Task and existing UniverseState
+versions are observed, and the Task-action lock covers preparation and commit.
+The evidence Task remains unchanged. For an empty store, this transaction creates
+the complete populated state at version 1 with user-capture label. Existing
+states retain their label, captured_at, source_summary and unrelated values.
+The manual route remains unchanged: empty seed at version 1, edit at version 2.
+
+This choice keeps store changes pin-only and avoids calling the manual route
+first and admitting separately, which could leave a value or empty seed behind
+if the candidate decision fails. It uses the existing writer, with shared
+UniverseState service validation, and introduces no store logic or migration.
+The fact_provenance entry is asserted because every value is the operator's
+assertion, even when UbU suggested its name. Controlled subject vocabulary
+remains unenforced; Plan predicates and Task effects are unchanged.

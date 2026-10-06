@@ -534,3 +534,86 @@ endpoint and timeout. Generic proposal suppression retains its behavior.
 Review operations use subject keys, event-based escalation and finite holds.
 `force: true` on a `precondition_review` run explicitly reconsiders holds;
 other producers refuse the field. Ordinary review runs honour holds.
+
+
+## P1B-67: vocabulary names, operator values
+
+producer: vocabulary uses the existing POST /advisory/run and limit (default 5,
+1–25). Selection reuses precondition's active, non-occurrence, title-or-description
+gate and Context. The model sees only Task IDs, titles, optional descriptions
+and existing target names. No UniverseState observation, value, provenance,
+Plan, Log or another Task's precondition is sent. Empty vocabulary is supported.
+The password-hygiene agent receives none of this input.
+
+The response format permits at most three proposals, including different names
+for the same Task. The independent backlog counts only universe_target rows in
+proposed or resurfaced lifecycle states. At ten or more, vocabulary_queue_full
+returns ok with no selection or model call, before consulting configuration or
+constructing a transport. Ten precondition candidates do not block Vocabulary;
+deferred candidates of either kind do not occupy its backlog.
+
+Each proposal contains id and target only. UniverseTarget candidates carry
+record_universe_target and a name-only inline payload. A proposed value is
+refused before it can become candidate content. target_refs names exactly one
+Task: the evidence the operator judges, not the object admission writes. This
+is the first advisory kind whose admission writes an object it does not reference.
+Evidence refs identify title and optional description input fields, without
+copying either into candidate metadata. The default suppression key over
+{candidate_kind, normalized_proposal, target_refs} makes rejection durable for
+that name and Task; another name or another Task remains a different subject.
+
+The controller rechecks injected transports too. Target names are at most 128
+ASCII bytes, with facts or numeric_values prefix and nonempty dot-separated
+letter/digit/underscore/hyphen key segments. Existing names and first key
+segments facts, numeric_values, set_memberships, event_markers and affect are
+refused by code. The request schema's positive pattern does not replace this
+validator. The five-reserved-segment helper is shared with the manual editor.
+
+vocabulary_proposal_refused uses this exact diagnostic template:
+
+```text
+Task `{id}`: {reason}. No candidate was enqueued for this Task; the rest of the run stands.
+```
+
+If no selected Task can be named, the subject is A proposal. Reasons are:
+
+- a proposal must contain only a target name; values belong to the operator
+- the proposal must reference exactly one selected Task
+- the target name exceeds 128 bytes
+- the target requires a collection and non-empty ASCII letter, digit, underscore or hyphen key segments
+- only facts and numeric_values target names are in scope
+- the first key segment names a reserved collection or intrinsic-affect namespace
+- the target name is already recorded; an existing value must not be overwritten
+- the Task is absent, inactive or a routine occurrence
+
+At most three Tasks are named, then one count of further refused Tasks. Existing
+result diagnostics are pushed to, never replaced. One bad proposal costs one
+candidate; survivors and ok status remain. Four wire proposals or an undecodable
+response give advisory_malformed_result with no candidates. vocabulary_task_skipped
+explains the reused selection gate. vocabulary_no_task means no eligible Task,
+no model asked. Transport diagnostics retain their existing behavior.
+
+Admission on the existing candidate admit route accepts an optional value field.
+For UniverseTarget its omission is refused as vocabulary_value_required:
+“An operator-supplied value is required; no value is defaulted, inferred or derived”.
+Explicit zero and false remain values; explicit JSON null is distinct from omission.
+The name and active non-occurrence evidence Task are rechecked before writing;
+name refusals use vocabulary_admission_refused with the reason above. Numeric
+payload validation uses universe_mutation_invalid from the same UniverseState
+service as the screen. Values on other candidate kinds are refused with
+advisory_value_unsupported: “Only a target-name proposal takes an operator value”.
+
+record_universe_target dispatches set_fact or set_numeric with asserted provenance.
+The shared UniverseState service prepares the mutation; the existing atomic
+candidate admission writer records the world and decision together. target_refs
+is evidence, so the response keeps task as that unchanged evidence and adds
+universe_state as the written destination. No value is inferred from model output.
+FactProvenance::Proposed remains unused by advisors. Empty-store admission creates
+one populated version 1 atomically; the manual editor keeps its version-2 first
+edit. See UNIVERSE_STATE.md for that writer choice and concurrency observations.
+
+The intended sequence is two explicit clicks: run Vocabulary, agree to useful
+names and supply every value during admission, then run Precondition against the
+larger vocabulary. Neither promises candidates. Vocabulary itself authors no
+precondition. The existing precondition prompt, schema and bounds are unchanged,
+as are finite review snoozes, Plan, capture, colours and collision diagnostics.
