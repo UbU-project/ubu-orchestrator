@@ -1,5 +1,7 @@
 #[cfg(not(test))]
 mod ollama_transport;
+#[cfg(not(test))]
+mod planning_worker_runtime;
 
 use std::net::SocketAddr;
 
@@ -20,6 +22,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = state.with_advisory_transport_factory(std::sync::Arc::new(|endpoint| {
         std::sync::Arc::new(ollama_transport::OllamaTransport::new(endpoint))
     }));
+    #[cfg(not(test))]
+    let state = state.with_planning_worker_factory(std::sync::Arc::new(planning_worker_runtime::plan));
     let app = build_router(state);
     let listener = tokio::net::TcpListener::bind(addr).await?;
 

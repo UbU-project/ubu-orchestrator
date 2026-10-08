@@ -22,6 +22,7 @@ pub struct AppState {
     inner: Arc<OrchestratorState>,
     clock: Arc<dyn crate::planning_time::PlanningClock>,
     advisory_transport_factory: Option<Arc<AdvisoryTransportFactory>>,
+    planning_worker_factory: Option<Arc<crate::adapters::planning_worker::PlanningWorkerFactory>>,
     calendar_api: Option<Arc<dyn crate::services::calendar_client::CalendarApi>>,
 }
 
@@ -103,6 +104,7 @@ impl AppState {
             clock: Arc::new(crate::planning_time::SystemClock),
             calendar_api: None,
             advisory_transport_factory: None,
+            planning_worker_factory: None,
             inner: Arc::new(OrchestratorState {
                 config,
                 planning_horizon_seconds,
@@ -133,6 +135,14 @@ impl AppState {
 
     pub fn advisory_transport_factory(&self) -> Option<Arc<AdvisoryTransportFactory>> {
         self.advisory_transport_factory.clone()
+    }
+
+    pub fn with_planning_worker_factory(mut self, factory: Arc<crate::adapters::planning_worker::PlanningWorkerFactory>) -> Self {
+        self.planning_worker_factory = Some(factory);
+        self
+    }
+    pub fn planning_worker_factory(&self) -> Option<Arc<crate::adapters::planning_worker::PlanningWorkerFactory>> {
+        self.planning_worker_factory.clone()
     }
 
     pub fn with_clock(mut self, clock: impl crate::planning_time::PlanningClock + 'static) -> Self {

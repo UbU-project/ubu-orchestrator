@@ -2806,7 +2806,7 @@ dependencies = [
 [[package]]
 name = "ubu_planning_core"
 version = "0.1.0"
-source = "git+https://github.com/UbU-project/ubu-planning-kernel?rev=a2957a3f4edb1fec2b86b7f9fe632ded735820e5#a2957a3f4edb1fec2b86b7f9fe632ded735820e5"
+source = "git+https://github.com/UbU-project/ubu-planning-kernel?rev=3da928be0d6d8cc6527e616a92d11dbc41d61d35#3da928be0d6d8cc6527e616a92d11dbc41d61d35"
 dependencies = [
  "serde",
  "serde_json",
@@ -2818,7 +2818,7 @@ dependencies = [
 [[package]]
 name = "ubu_planning_cpu"
 version = "0.1.0"
-source = "git+https://github.com/UbU-project/ubu-planning-kernel?rev=a2957a3f4edb1fec2b86b7f9fe632ded735820e5#a2957a3f4edb1fec2b86b7f9fe632ded735820e5"
+source = "git+https://github.com/UbU-project/ubu-planning-kernel?rev=3da928be0d6d8cc6527e616a92d11dbc41d61d35#3da928be0d6d8cc6527e616a92d11dbc41d61d35"
 dependencies = [
  "ubu_core",
  "ubu_planning_core",
@@ -2827,18 +2827,20 @@ dependencies = [
 [[package]]
 name = "ubu_planning_worker"
 version = "0.1.0"
-source = "git+https://github.com/UbU-project/ubu-planning-kernel?rev=a2957a3f4edb1fec2b86b7f9fe632ded735820e5#a2957a3f4edb1fec2b86b7f9fe632ded735820e5"
+source = "git+https://github.com/UbU-project/ubu-planning-kernel?rev=3da928be0d6d8cc6527e616a92d11dbc41d61d35#3da928be0d6d8cc6527e616a92d11dbc41d61d35"
 dependencies = [
+ "serde",
  "serde_json",
  "ubu_core",
  "ubu_planning_core",
+ "ubu_planning_cpu",
  "ubu_planning_worker_protocol",
 ]
 
 [[package]]
 name = "ubu_planning_worker_protocol"
 version = "0.1.0"
-source = "git+https://github.com/UbU-project/ubu-planning-kernel?rev=a2957a3f4edb1fec2b86b7f9fe632ded735820e5#a2957a3f4edb1fec2b86b7f9fe632ded735820e5"
+source = "git+https://github.com/UbU-project/ubu-planning-kernel?rev=3da928be0d6d8cc6527e616a92d11dbc41d61d35#3da928be0d6d8cc6527e616a92d11dbc41d61d35"
 dependencies = [
  "serde",
  "serde_json",

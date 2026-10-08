@@ -19,7 +19,6 @@ use ubu_store::models::log_record::NewLogRecord;
 use ubu_store::models::plan_record::NewPlanRecord;
 use ubu_store::queries;
 
-use crate::adapters::planner_adapter::{CpuPlannerAdapter, PlannerAdapter};
 use crate::api::calendar::CalendarResponse;
 use crate::api::planning::{
     candidate_role_body, feasibility_summary_body, legitimization_report_body,
@@ -104,13 +103,10 @@ pub async fn generate(
         // API's `request_id` and the stored Plan keep their own, unique one.
         kernel_request.request_id = format!("store-{:016x}", kernel_request.rng_seed);
     }
-    let adapter = CpuPlannerAdapter {
-        strategy: state.inner().planner_strategy,
-    };
     add_empty_capacity_diagnostic(&planning_request, &mut diagnostics);
     let mut engine_provenance = ubu_planning_core::response::cpu_provenance();
     let mut replay = replay_metadata(&state, &planning_request);
-    worker_policy_diagnostics(&state, &mut diagnostics).await?;
+    let worker_enabled = super::setting_authoring::planning_gpu_enabled(&state).await?;
     let mut kernel_unplaced = Vec::new();
     // A Static collision does not cancel the Plan. It used to: one collision and
     // the kernel was never called. The colliding Tasks are now one busy span in
@@ -119,7 +115,8 @@ pub async fn generate(
     let mut candidates = if planning_request.tasks.is_empty() {
         Vec::new()
     } else {
-        let response = adapter.plan(kernel_request.clone());
+        let (response, fallback) = crate::adapters::planning_worker::plan(&state, kernel_request.clone(), worker_enabled);
+        if let Some(reason) = fallback { diagnostics.extend(reason.diagnostics()); }
         engine_provenance = response.engine_provenance;
         replay.planner_version = response.planner_version;
         replay.rng_seed_echo = response.rng_seed_echo;
@@ -3218,19 +3215,4 @@ fn replay_metadata(state: &AppState, request: &PlanningRequestBody) -> PlanningR
             .unwrap_or_else(|_| "1970-01-01T00:00:00Z".into()),
         generated_at: state.planning_now().to_string(),
     }
-}
-
-async fn worker_policy_diagnostics(state: &AppState, diagnostics: &mut Vec<DiagnosticBody>) -> Result<()> {
-    if !super::setting_authoring::planning_gpu_enabled(state).await? { return Ok(()); }
-    // No child, import, install or environment mutation. Actual device compute
-    // and its budget justification do not exist in this boundary-only ticket.
-    let environment = ubu_planning_worker::LocalEnvironment::detect();
-    debug_assert!(!ubu_planning_worker::gpu_eligible(true, &environment, false));
-    let mut missing = environment.missing();
-    missing.push("GPU compute-budget justification unavailable");
-    diagnostics.push(DiagnosticBody {
-        code: "planning_gpu_unavailable".into(),
-        message: format!("CPU reference used: {}", missing.join("; ")),
-    });
-    Ok(())
 }

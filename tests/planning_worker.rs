@@ -79,7 +79,7 @@ async fn absent_policy_defaults_to_cpu_and_replay_envelope_is_independent_of_sco
     assert_eq!(body["plan"]["steps"][0]["start"], 1);
 }
 #[tokio::test]
-async fn enabled_policy_reports_missing_device_stage_and_keeps_cpu_answer() {
+async fn enabled_policy_names_unsupported_strategy_and_keeps_cpu_answer() {
     let state = state().await;
     let before = generate(&state).await;
     let (status, _) = request(
@@ -98,14 +98,8 @@ async fn enabled_policy_reports_missing_device_stage_and_keeps_cpu_answer() {
         .iter()
         .find(|d| d["code"] == "planning_gpu_unavailable")
         .unwrap();
-    assert!(diagnostic["message"]
-        .as_str()
-        .unwrap()
-        .contains("GPU compute stage not implemented"));
-    assert!(diagnostic["message"]
-        .as_str()
-        .unwrap()
-        .contains("PyTorch/CUDA compatibility unverified"));
+    assert!(diagnostic["message"].as_str().unwrap().contains("unsupported_strategy"));
+    assert!(after["diagnostics"].as_array().unwrap().iter().any(|d|d["code"]=="planning_gpu_fallback_unsupported_strategy"));
     assert_eq!(before["selected_candidate"], after["selected_candidate"]);
 }
 #[tokio::test]
@@ -195,4 +189,87 @@ async fn policy_is_boolean_setting_and_withdrawal_restores_default_off() {
         .unwrap()
         .iter()
         .any(|d| d["code"] == "planning_gpu_unavailable"));
+}
+
+fn ready_stage_environment() -> ubu_planning_worker::LocalEnvironment {
+    ubu_planning_worker::LocalEnvironment {python_found:true,gpu_stage_implemented:true,torch_importable:true,torch_version:Some("2.6.0+cpu".into())}
+}
+struct InMemoryStage { forge_padding: bool }
+impl ubu_planning_worker::stage1::StageTransport for InMemoryStage {
+    fn owns_compute_lock(&self) -> bool { true } // Injected eligibility, no real compute.
+    fn exchange_stage1(&mut self, input:&ubu_planning_worker::stage1::StageInput) -> std::io::Result<ubu_planning_worker::stage1::StageReply> {
+        use ubu_planning_worker::stage1::StageStubTransport;
+        let mut reply=StageStubTransport.exchange_stage1(input)?;
+        if self.forge_padding {reply.result.task_index[0][255]=0;}
+        Ok(reply)
+    }
+}
+async fn enable_worker(state:&AppState) {
+    let (status,_)=request(state,"PUT","/setting/planning.gpu_enabled",json!({"schema_version":"ubu.orchestrator.setting.v1","value":true})).await;
+    assert_eq!(status,StatusCode::OK);
+}
+#[tokio::test]
+async fn policy_off_and_chunked_policy_on_never_consult_the_worker_factory() {
+    for strategy in ["greedy","chunked"] {
+        let state=AppState::in_memory(ServerConfig::from_env().with_planner_strategy(strategy)).await.unwrap()
+            .with_clock(FixedClock(UbuTimestamp::parse(NOW).unwrap()))
+            .with_planning_worker_factory(std::sync::Arc::new(|_|panic!("policy must not reach a worker")));
+        let before=generate(&state).await;
+        if strategy=="chunked" {
+            enable_worker(&state).await;
+            let after=generate(&state).await;
+            assert_eq!(after["selected_candidate"],before["selected_candidate"]);
+            assert!(after["diagnostics"].as_array().unwrap().iter().any(|d|d["code"]=="planning_gpu_fallback_unsupported_strategy"));
+        }
+    }
+}
+#[tokio::test]
+async fn greedy_without_an_executable_factory_names_transport_absence_and_retains_cpu() {
+    let state=AppState::in_memory(ServerConfig::from_env().with_planner_strategy("greedy")).await.unwrap();
+    let before=generate(&state).await;
+    enable_worker(&state).await;
+    let after=generate(&state).await;
+    assert_eq!(after["selected_candidate"],before["selected_candidate"]);
+    assert!(after["diagnostics"].as_array().unwrap().iter().any(|d|d["code"]=="planning_gpu_fallback_transport_unavailable"));
+}
+#[tokio::test]
+async fn greedy_stub_certification_and_refusal_flow_through_generate_without_any_process() {
+    use ubu_planning_worker::stage1::{Stage1Strategy,plan_stage1};
+    for forge_padding in [false,true] {
+        let state=AppState::in_memory(ServerConfig::from_env().with_planner_strategy("greedy")).await.unwrap()
+            .with_clock(FixedClock(UbuTimestamp::parse(NOW).unwrap()));
+        let before=generate(&state).await;
+        let calls=std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter=calls.clone();
+        let state=state.with_planning_worker_factory(std::sync::Arc::new(move|request| {
+            counter.fetch_add(1,std::sync::atomic::Ordering::SeqCst);
+            let strategy=Stage1Strategy::new(true,ready_stage_environment(),true,InMemoryStage{forge_padding});
+            let response=plan_stage1(request,&strategy);
+            (response,strategy.fallback_reason())
+        }));
+        enable_worker(&state).await;
+        let after=generate(&state).await;
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst),1);
+        assert_eq!(before["selected_candidate"],after["selected_candidate"]);
+        assert_eq!(before["engine_provenance"],after["engine_provenance"]); // Stubs never claim GPU execution.
+        let unavailable=after["diagnostics"].as_array().unwrap().iter().find(|d|d["code"]=="planning_gpu_unavailable");
+        if forge_padding {
+            assert!(unavailable.unwrap()["message"].as_str().unwrap().contains("certification_failed"));
+            assert!(after["diagnostics"].as_array().unwrap().iter().any(|d|d["code"]=="planning_gpu_fallback_certification_failed"));
+        } else {assert!(unavailable.is_none());}
+        let payload:String=sqlx::query_scalar("SELECT payload_json FROM plans WHERE id=?").bind(after["plan"]["id"].as_str().unwrap()).fetch_one(state.inner().store.pool()).await.unwrap();
+        let payload:Value=serde_json::from_str(&payload).unwrap();
+        assert_eq!(payload["engine_provenance"],after["engine_provenance"]);
+    }
+}
+#[tokio::test]
+async fn every_named_kernel_reason_remains_a_public_code_and_a_private_message() {
+    use ubu_planning_worker::stage1::Stage1FallbackReason::*;
+    use ubu_orchestrator::adapters::planning_worker::WorkerFallback;
+    for reason in [PolicyDisabled,BudgetUnjustified,PythonUnavailable,StageUnimplemented,TorchUnavailable,ComputeLockUnavailable,InputUnsupported,TransportFailed,ReplyMismatch,CertificationFailed] {
+        let diagnostics=WorkerFallback::Kernel(reason).diagnostics();
+        assert_eq!(diagnostics[0].code,"planning_gpu_unavailable");
+        assert!(diagnostics[0].message.ends_with(reason.as_str()));
+        assert_eq!(diagnostics[1].code,format!("planning_gpu_fallback_{}",reason.as_str()));
+    }
 }

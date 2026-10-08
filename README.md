@@ -54,3 +54,33 @@ and reinstallations. Registration material is never stored in SQLite.
 
 See [the envelope call-site audit](docs/ENVELOPE_CALL_SITE_AUDIT.md) for mutation
 preconditions, domain timestamps, and Phase 1b representation choices.
+
+## P1B-74: opt-in atomic Stage 1
+
+`planning.gpu_enabled = true` is the operator's local compute-budget opt-in.
+The executable supplies a kernel-owned, bounded worker factory; library/test
+state supplies no process transport. Only explicitly selected `UBU_PLANNER_STRATEGY=greedy`
+is compatible with the exact `stage1-atomic-v1` oracle. The default ChunkedSweep
+Plan is retained and reports `planning_gpu_fallback_unsupported_strategy`.
+Changing strategies automatically would change the Plan, so the switch never
+does that. Repair and Stages 2–4 stay on CPU.
+
+The runtime interpreter defaults to `python3`; `UBU_PLANNING_WORKER_PYTHON` may
+select an already-installed local interpreter. Checks install nothing. The
+worker must have the pinned CPU-only torch 2.6.0+cpu; it never discovers CUDA or
+allocates a CUDA context. A real certified answer retains kernel provenance
+`gpu_worker / persistent_python_worker` with device `cpu`, not CUDA parity.
+
+`planning_gpu_unavailable` privately names the closed kernel fallback reason.
+A second diagnostic has a closed `planning_gpu_fallback_<reason>` code, so the
+public copy-back can diagnose it without publishing messages. The kernel names
+ten fallback paths; caller-only `unsupported_strategy` and `transport_unavailable`
+cover incompatible configuration and absent executable transport respectively.
+Successful certified stubs retain CPU provenance. No route or schema changes.
+
+The CPU kernel must validate any returned candidate before canonical Plan commit.
+The owned compute session reserves the same nonblocking flock as sourced
+`env.sh` before spawning and drops/reaps before persistence. No orchestrator test
+probes an interpreter, installs a handler or spawns a child: its factory exchanges
+in-memory frames. Cargo jobs, lock and memory scope remain unchanged. The three
+kernel dependencies pin published revision 3da928be0d6d8cc6527e616a92d11dbc41d61d35.
