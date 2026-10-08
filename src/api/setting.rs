@@ -33,6 +33,27 @@ pub struct SettingSummary {
     pub value: Value,
     pub authority_source: String,
     pub version: i64,
+    /// Derived registry metadata, present only for effective provisional roots.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subject_metadata: Option<SubjectMetadata>,
+}
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, ToSchema)]
+pub struct SubjectReferenceCounts {
+    pub universe_state_keys: u64,
+    pub fact_provenance_keys: u64,
+    pub task_precondition_targets: u64,
+}
+impl SubjectReferenceCounts {
+    pub fn referenced(self) -> bool {
+        self.universe_state_keys != 0
+            || self.fact_provenance_keys != 0
+            || self.task_precondition_targets != 0
+    }
+}
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SubjectMetadata {
+    pub minted_at: String,
+    pub references: SubjectReferenceCounts,
 }
 #[derive(Debug, Serialize, ToSchema)]
 pub struct PaletteEntry {
@@ -94,7 +115,7 @@ pub async fn put(
         version,
     }))
 }
-#[utoipa::path(delete,path="/setting/{name}",params(("name"=String,Path)),responses((status=204,description="Setting removed; fallback applies"),(status=400,description="Unknown namespace"),(status=404,description="No Setting override")))]
+#[utoipa::path(delete,path="/setting/{name}",params(("name"=String,Path)),responses((status=204,description="Setting removed; fallback applies"),(status=400,description="Unknown namespace"),(status=404,description="No Setting override"),(status=409,description="Provisional subject is referenced; retirement never cascades")))]
 pub async fn delete(State(state): State<AppState>, Path(name): Path<String>) -> Result<StatusCode> {
     setting_authoring::delete(&state, &name).await?;
     Ok(StatusCode::NO_CONTENT)

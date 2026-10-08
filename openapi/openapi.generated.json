@@ -1638,6 +1638,9 @@
           },
           "404": {
             "description": "No Setting override"
+          },
+          "409": {
+            "description": "Provisional subject is referenced; retirement never cascades"
           }
         }
       }
@@ -6690,6 +6693,17 @@
           "name": {
             "type": "string"
           },
+          "subject_metadata": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SubjectMetadata",
+                "description": "Derived registry metadata, present only for effective provisional roots."
+              }
+            ]
+          },
           "value": {},
           "version": {
             "type": "integer",
@@ -6792,6 +6806,46 @@
           "sustainable_stretch",
           "destructive_pressure"
         ]
+      },
+      "SubjectMetadata": {
+        "type": "object",
+        "required": [
+          "minted_at",
+          "references"
+        ],
+        "properties": {
+          "minted_at": {
+            "type": "string"
+          },
+          "references": {
+            "$ref": "#/components/schemas/SubjectReferenceCounts"
+          }
+        }
+      },
+      "SubjectReferenceCounts": {
+        "type": "object",
+        "required": [
+          "universe_state_keys",
+          "fact_provenance_keys",
+          "task_precondition_targets"
+        ],
+        "properties": {
+          "fact_provenance_keys": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "task_precondition_targets": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "universe_state_keys": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
       },
       "TaskActionKind": {
         "type": "string",

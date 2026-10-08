@@ -13,7 +13,7 @@ async fn state() -> AppState {
     AppState::in_memory(ServerConfig::from_env()).await.unwrap()
 }
 #[tokio::test]
-async fn explicit_mint_is_a_setting_and_retirement_leaves_targets_alone() {
+async fn explicit_mint_is_a_setting_and_referenced_retirement_is_refused_without_cascading() {
     let state = state().await;
     let before = subject_vocabulary::effective(&state).await.unwrap();
     assert_eq!(
@@ -41,17 +41,22 @@ async fn explicit_mint_is_a_setting_and_retirement_leaves_targets_alone() {
     assert_eq!(listed.settings[0].authority_source, "user");
     let (status, world) = request(&state, "PATCH", "/universe-state", json!({"schema_version":"ubu.orchestrator.universe_state.v1","mutations":[{"operation":"set_fact","target":"facts.teapot.ready","payload":true}]})).await;
     assert_eq!(status, StatusCode::OK);
-    let (status, _) = request(
+    let (status, refusal) = request(
         &state,
         "DELETE",
         "/setting/universe.subject.teapot",
         json!(null),
     )
     .await;
-    assert_eq!(status, StatusCode::NO_CONTENT);
-    assert_eq!(subject_vocabulary::effective(&state).await.unwrap(), before);
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(refusal["diagnostics"][0]["code"], "subject_referenced");
+    assert!(subject_vocabulary::effective(&state).await.unwrap().contains("teapot"));
     let (_, after) = request(&state, "GET", "/universe-state", json!(null)).await;
     assert_eq!(after, world);
+    let (status, _) = request(&state, "PATCH", "/universe-state", json!({"schema_version":"ubu.orchestrator.universe_state.v1","mutations":[{"operation":"clear_fact","target":"facts.teapot.ready"}]})).await;
+    assert_eq!(status, StatusCode::OK);
+    setting_authoring::delete(&state, "universe.subject.teapot").await.unwrap();
+    assert_eq!(subject_vocabulary::effective(&state).await.unwrap(), before);
 }
 #[tokio::test]
 async fn reserved_and_governed_roots_cannot_be_minted_or_retired() {

@@ -181,17 +181,35 @@ pub async fn delete(state: &AppState, name: &str) -> Result<()> {
     let row = current(state, name)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Setting `{name}` does not exist")))?;
+    // The snapshot and DELETE share a transaction as well as the existing
+    // authoring locks. A competing writer cannot slip a reference between them.
+    let mut transaction = state.inner().store.pool().begin().await.map_err(internal)?;
+    if let Some(root) = name.strip_prefix(super::subject_vocabulary::PREFIX) {
+        let counts = super::subject_vocabulary::reference_counts_on(&mut transaction).await?
+            .get(root).copied().unwrap_or_default();
+        if counts.referenced() {
+            return Err(AppError::conflict_diagnostic(
+                "subject_referenced",
+                format!("Retirement refused: UniverseState keys {}; fact_provenance keys {}; Task precondition targets {}. Retirement does not cascade. Clear removable references first, then retire only when all three counts are zero. Append-only event markers have no clearing operation; a root referenced there must remain registered pending operator ratification or separate cleanup work.", counts.universe_state_keys, counts.fact_provenance_keys, counts.task_precondition_targets),
+            ));
+        }
+    }
     // Like Preference withdrawal, remove the canonical row and retain the mutation ledger.
     sqlx::query("DELETE FROM objects WHERE id=? AND object_type='Setting'")
         .bind(row.id)
-        .execute(state.inner().store.pool())
+        .execute(&mut *transaction)
         .await
         .map_err(internal)?;
+    transaction.commit().await.map_err(internal)?;
     Ok(())
 }
 
 pub async fn list(state: &AppState) -> Result<crate::api::setting::SettingsResponse> {
+    // Keep mint/retire, Task requirements and UniverseState writes from
+    // interleaving with the registry's one reference-count snapshot.
+    let _action = state.inner().task_action_lock.lock().await;
     let rows = settings(state.inner().store.pool()).await?;
+    let counts = super::subject_vocabulary::reference_counts(state).await?;
     let palette = CategoryPalette::from_layers(state.inner().store.pool(), &rows).await?;
     let settings = rows
         .into_iter()
@@ -199,6 +217,12 @@ pub async fn list(state: &AppState) -> Result<crate::api::setting::SettingsRespo
             let payload: Value = serde_json::from_str(&row.payload_json).map_err(internal)?;
             let setting: ubu_core::core::Setting =
                 serde_json::from_value(payload.clone()).map_err(internal)?;
+            let subject_metadata = setting.name.strip_prefix(super::subject_vocabulary::PREFIX)
+                .filter(|root| setting.value == true && super::subject_vocabulary::validate_root(root).is_ok())
+                .map(|root| crate::api::setting::SubjectMetadata {
+                    minted_at: row.created_at,
+                    references: counts.get(root).copied().unwrap_or_default(),
+                });
             Ok(crate::api::setting::SettingSummary {
                 id: row.id,
                 name: setting.name,
@@ -208,6 +232,7 @@ pub async fn list(state: &AppState) -> Result<crate::api::setting::SettingsRespo
                     .unwrap_or_default()
                     .into(),
                 version: row.version,
+                subject_metadata,
             })
         })
         .collect::<Result<Vec<_>>>()?;

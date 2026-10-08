@@ -312,6 +312,71 @@ adds the UI and design context in section D; it changes no route behavior.
   value, and no advisor suggests values. A separate precondition run can then
   propose a requirement over the newly recorded names.
 
+## Subject ratification agenda (P1B-76)
+
+The existing UniverseState **Subjects** panel is extended, not newly introduced.
+It already listed the effective vocabulary and provided explicit mint/retire
+controls with pre-request root validation. The ticket's claim that the subject
+list diagnostic was dangling is withdrawn: that list existed. The diagnostic
+and the governed vocabulary are unchanged.
+
+`GET /settings` remains the registry source; no subject route is added.
+Effective provisional `universe.subject.<root>` rows whose value is `true`
+gain derived `subject_metadata`, containing `minted_at` from the Setting's
+creation time and `references` with the three counts below. Their existing
+Setting version remains the registry version. Ordinary Settings have no subject
+metadata. These are response projections, not new canonical records or fields
+on `ubu-core::Setting`. Canonical schemas and schema versions do not change;
+the local OpenAPI response description and its UI copy are regenerated.
+
+The client derives two named tiers from the existing list: the fixed governed
+set (`operator`, `project`, `github`, `affect`, `relationship`) and the effective
+provisional registry. The provisional rows show minting time, version and counts,
+not reference keys, values or target strings. Its sentence computes
+`UBU-D0291` satisfaction from the provisional tier: empty is satisfied **for
+now**; otherwise ratification is outstanding and this screen is the agenda.
+The condition is evaluated at the switch, not banked. This reports a condition;
+it does not enforce the switch or discharge the separate planner gate.
+
+| Reference count | Computation |
+|---|---|
+| `universe_state_keys` | Count each matching subject's key in `facts`, `numeric_values`, `set_memberships` and `event_markers` across every current stored UniverseState object row, including a non-latest row. Count keys, not values, members or marker entries. |
+| `fact_provenance_keys` | Count full target keys in those rows' `fact_provenance` whose collection is recognized and whose subject matches exactly. |
+| `task_precondition_targets` | Walk `payload.preconditions` in every current Task object row, including inactive Tasks, following `all_of` and `any_of`; count each matching target occurrence, including repetitions. Do not search descriptions, effects or `expected` values for lookalike strings. |
+
+Subject matching uses the namespace segment, never a substring. Historical
+object-history rows, Logs and candidate payloads are outside these three named
+key spaces. Counts use one shared payload scan for all roots, not a separate scan
+per root. The nested Task-target count has no indexed key column: it scans and
+parses all current Task payloads. Work is linear in the stored payload bytes
+and condition nodes; the current implementation fetches matching Task and
+UniverseState payloads together, so memory includes those JSON strings and the
+largest decoded payload. No new index, cache or migration is introduced.
+Unreadable payloads/collections fail counting closed without exposing contents.
+
+`DELETE /setting/universe.subject.<root>` now refuses with HTTP 409 and the
+named `subject_referenced` diagnostic while any count is nonzero. The message
+contains the three counts and the no-cascade remedy, never reference content.
+The count check and DELETE share a SQLite transaction under the existing
+import/Task-action locks. Retirement neither clears facts/provenance nor edits
+Task requirements; the operator clears removable references first. Only three
+zero counts permit retirement. The UI disables retirement with a reason, refreshes
+counts after UniverseState edits and registry changes, and refreshes again on
+a stale retirement refusal. Counts unavailable to the client disable retirement.
+The former panel sentence permitting retirement while references remain is
+replaced in the same UI change as these refusal controls.
+
+**UBU-D0291 append-only-marker retirement gap.** Event markers have no clearing
+operation. A root referenced by an append-only marker cannot take the ordinary
+retirement leg of D0291's promoted-or-retired binary. It remains registered
+pending operator ratification or separate cleanup work; this ticket does
+neither and files no new decision. Other retained rows without an exposed
+cleanup path also remain counted rather than hidden. No cascading erasure or
+automatic promotion is a remedy. No root or governed-set extension is proposed.
+
+No new Compartment scoping is added. The first-run Device's empty allowlist is
+unchanged; no grant is needed or added by this view.
+
 ## Tests
 
 `tests/universe_state.rs` holds the route's contract, including a Task that a

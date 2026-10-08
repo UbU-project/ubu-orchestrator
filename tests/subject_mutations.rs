@@ -64,7 +64,7 @@ async fn unknown_single_segment_and_bad_predicate_refuse_whole_without_a_seed() 
     }
 }
 #[tokio::test]
-async fn retiring_a_subject_refuses_new_writes_but_legacy_targets_enumerate_evaluate_and_clear() {
+async fn a_subject_can_retire_after_references_are_cleared_and_legacy_targets_still_work() {
     let state = state().await;
     setting_authoring::put(&state, "universe.subject.teapot", json!(true))
         .await
@@ -78,18 +78,7 @@ async fn retiring_a_subject_refuses_new_writes_but_legacy_targets_enumerate_eval
         .0,
         200
     );
-    setting_authoring::delete(&state, "universe.subject.teapot")
-        .await
-        .unwrap();
-    assert_eq!(
-        edit(
-            &state,
-            json!([{"operation":"set_fact","target":"facts.teapot.ready","payload":false}])
-        )
-        .await
-        .0,
-        400
-    );
+    assert!(setting_authoring::delete(&state, "universe.subject.teapot").await.is_err());
     let (world, _) = universe_state::read(&state).await.unwrap();
     assert!(precondition_advisor::targets(&world).contains("facts.teapot.ready"));
     assert!(evaluate_universe_precondition(
@@ -109,6 +98,8 @@ async fn retiring_a_subject_refuses_new_writes_but_legacy_targets_enumerate_eval
         .0,
         200
     );
+    setting_authoring::delete(&state, "universe.subject.teapot").await.unwrap();
+    assert_eq!(edit(&state, json!([{"operation":"set_fact","target":"facts.teapot.ready","payload":false}])).await.0, 400);
 }
 #[tokio::test]
 async fn stored_single_segment_targets_keep_all_destructive_operations_and_precondition_semantics()

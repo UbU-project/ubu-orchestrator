@@ -74,6 +74,8 @@ use utoipa::OpenApi;
         crate::api::setting::SettingWriteRequest,
         crate::api::setting::SettingWriteResponse,
         crate::api::setting::SettingSummary,
+        crate::api::setting::SubjectMetadata,
+        crate::api::setting::SubjectReferenceCounts,
         crate::api::setting::PaletteEntry,
         crate::api::setting::InversePaletteEntry,
         crate::api::setting::SettingsResponse,
