@@ -192,7 +192,7 @@ async fn policy_is_boolean_setting_and_withdrawal_restores_default_off() {
 }
 
 fn ready_stage_environment() -> ubu_planning_worker::LocalEnvironment {
-    ubu_planning_worker::LocalEnvironment {python_found:true,gpu_stage_implemented:true,torch_importable:true,torch_version:Some("2.6.0+cpu".into())}
+    ubu_planning_worker::LocalEnvironment {python_found:true,gpu_stage_implemented:true,torch_importable:true,torch_version:Some("2.6.0+cpu".into()),..Default::default()}
 }
 struct InMemoryStage { forge_padding: bool }
 impl ubu_planning_worker::stage1::StageTransport for InMemoryStage {
@@ -245,7 +245,7 @@ async fn greedy_stub_certification_and_refusal_flow_through_generate_without_any
             counter.fetch_add(1,std::sync::atomic::Ordering::SeqCst);
             let strategy=Stage1Strategy::new(true,ready_stage_environment(),true,InMemoryStage{forge_padding});
             let response=plan_stage1(request,&strategy);
-            (response,strategy.fallback_reason())
+            ubu_orchestrator::adapters::planning_worker::PlanningWorkerResult {response,fallback:strategy.fallback_reason(),environment:ready_stage_environment()}
         }));
         enable_worker(&state).await;
         let after=generate(&state).await;
@@ -266,10 +266,125 @@ async fn greedy_stub_certification_and_refusal_flow_through_generate_without_any
 async fn every_named_kernel_reason_remains_a_public_code_and_a_private_message() {
     use ubu_planning_worker::stage1::Stage1FallbackReason::*;
     use ubu_orchestrator::adapters::planning_worker::WorkerFallback;
-    for reason in [PolicyDisabled,BudgetUnjustified,PythonUnavailable,StageUnimplemented,TorchUnavailable,ComputeLockUnavailable,InputUnsupported,TransportFailed,ReplyMismatch,CertificationFailed] {
+    for reason in [PolicyDisabled,BudgetUnjustified,PythonUnavailable,StageUnimplemented,TorchUnavailable,InterpreterStartFailed,ModuleRootUnavailable,ModulePackageUnavailable,ProbeBudgetInvalid,ProbeTimedOut,ProbeFailed,TorchVersionMismatch,ComputeLockUnavailable,InputUnsupported,TransportFailed,ReplyMismatch,CertificationFailed] {
         let diagnostics=WorkerFallback::Kernel(reason).diagnostics();
         assert_eq!(diagnostics[0].code,"planning_gpu_unavailable");
         assert!(diagnostics[0].message.ends_with(reason.as_str()));
         assert_eq!(diagnostics[1].code,format!("planning_gpu_fallback_{}",reason.as_str()));
     }
+}
+
+#[tokio::test]
+async fn held_probe_facts_and_source_reach_generate_without_any_process() {
+    use ubu_orchestrator::adapters::{
+        planner_adapter::{CpuPlannerAdapter, PlannerAdapter},
+        planning_worker::{interpreter_source_code, PlanningWorkerResult},
+    };
+    use ubu_planning_worker::{stage1::Stage1FallbackReason as R, InterpreterSource};
+    for source in [
+        InterpreterSource::EnvironmentVariable,
+        InterpreterSource::Python3Fallback,
+    ] {
+        for reason in [
+            R::PythonUnavailable,
+            R::InterpreterStartFailed,
+            R::ModuleRootUnavailable,
+            R::ModulePackageUnavailable,
+            R::ProbeBudgetInvalid,
+            R::ProbeTimedOut,
+            R::ProbeFailed,
+            R::TorchUnavailable,
+            R::TorchVersionMismatch,
+        ] {
+            let state =
+                AppState::in_memory(ServerConfig::from_env().with_planner_strategy("greedy"))
+                    .await
+                    .unwrap();
+            let before = generate(&state).await;
+            let state = state.with_planning_worker_factory(std::sync::Arc::new(move |request| {
+                let response = CpuPlannerAdapter {
+                    strategy: ubu_orchestrator::config::PlannerStrategyChoice::Greedy,
+                }
+                .plan(request);
+                let environment = ubu_planning_worker::LocalEnvironment {
+                    interpreter: "synthetic-private-interpreter".into(),
+                    interpreter_source: source,
+                    torch_version: Some("synthetic-private-version".into()),
+                    ..ready_stage_environment()
+                };
+                PlanningWorkerResult {
+                    response,
+                    fallback: Some(reason),
+                    environment,
+                }
+            }));
+            enable_worker(&state).await;
+            let after = generate(&state).await;
+            assert_eq!(after["selected_candidate"], before["selected_candidate"]);
+            assert_cpu(&after);
+            let diagnostics = after["diagnostics"].as_array().unwrap();
+            assert!(diagnostics
+                .iter()
+                .any(|d| d["code"] == format!("planning_gpu_fallback_{}", reason.as_str())));
+            let source_diagnostic = diagnostics
+                .iter()
+                .find(|d| d["code"] == interpreter_source_code(source))
+                .unwrap();
+            assert!(source_diagnostic["message"]
+                .as_str()
+                .unwrap()
+                .contains("synthetic-private-interpreter"));
+            assert!(source_diagnostic["message"]
+                .as_str()
+                .unwrap()
+                .contains("synthetic-private-version"));
+            for diagnostic in diagnostics {
+                let code = diagnostic["code"].as_str().unwrap();
+                assert!(!code.contains("synthetic-private"));
+            }
+        }
+    }
+}
+#[tokio::test]
+async fn successful_worker_probe_still_records_which_interpreter_was_asked() {
+    use ubu_orchestrator::adapters::planning_worker::{
+        interpreter_source_code, PlanningWorkerResult,
+    };
+    use ubu_planning_worker::{
+        stage1::{plan_stage1, Stage1Strategy},
+        InterpreterSource,
+    };
+    let state = AppState::in_memory(ServerConfig::from_env().with_planner_strategy("greedy"))
+        .await
+        .unwrap()
+        .with_planning_worker_factory(std::sync::Arc::new(|request| {
+            let environment = ubu_planning_worker::LocalEnvironment {
+                interpreter: "synthetic-private-interpreter".into(),
+                interpreter_source: InterpreterSource::EnvironmentVariable,
+                ..ready_stage_environment()
+            };
+            let strategy = Stage1Strategy::new(
+                true,
+                environment.clone(),
+                true,
+                InMemoryStage {
+                    forge_padding: false,
+                },
+            );
+            PlanningWorkerResult {
+                response: plan_stage1(request, &strategy),
+                fallback: strategy.fallback_reason(),
+                environment,
+            }
+        }));
+    enable_worker(&state).await;
+    let after = generate(&state).await;
+    let diagnostics = after["diagnostics"].as_array().unwrap();
+    assert!(diagnostics
+        .iter()
+        .any(|d| d["code"] == interpreter_source_code(InterpreterSource::EnvironmentVariable)));
+    assert!(!diagnostics
+        .iter()
+        .any(|d| d["code"] == "planning_gpu_unavailable"));
+    assert_cpu(&after);
 }

@@ -115,8 +115,8 @@ pub async fn generate(
     let mut candidates = if planning_request.tasks.is_empty() {
         Vec::new()
     } else {
-        let (response, fallback) = crate::adapters::planning_worker::plan(&state, kernel_request.clone(), worker_enabled);
-        if let Some(reason) = fallback { diagnostics.extend(reason.diagnostics()); }
+        let (response, worker_diagnostics) = crate::adapters::planning_worker::plan(&state, kernel_request.clone(), worker_enabled);
+        diagnostics.extend(worker_diagnostics);
         engine_provenance = response.engine_provenance;
         replay.planner_version = response.planner_version;
         replay.rng_seed_echo = response.rng_seed_echo;
