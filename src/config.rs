@@ -1,4 +1,5 @@
 use std::env;
+use std::ffi::OsString;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -51,6 +52,7 @@ pub struct ServerConfig {
     google_calendar_id: String,
     planning_horizon_seconds: Option<String>,
     planner_strategy: Option<String>,
+    planning_request_dump: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -107,16 +109,17 @@ impl ServerConfig {
                 env::var("UBU_GITHUB_PROJECTION_EXPORT_MODE").ok(),
             ),
             db_path: env::var("UBU_DB_PATH").unwrap_or_else(|_| "ubu-orchestrator.db".to_owned()),
-            device_registration_path: env::var_os("UBU_DEVICE_REGISTRATION").map(PathBuf::from),
-            category_palette_path: env::var_os("UBU_CATEGORY_PALETTE_PATH").map(PathBuf::from),
-            calendar_mock_events_path: env::var_os(CALENDAR_MOCK_EVENTS_VARIABLE).map(PathBuf::from),
-            google_credentials_path: env::var_os("UBU_GOOGLE_CREDENTIALS_PATH").map(PathBuf::from),
-            google_token_cache_path: env::var_os("UBU_GOOGLE_TOKEN_CACHE_PATH").map(PathBuf::from),
+            device_registration_path: nonempty(env::var_os("UBU_DEVICE_REGISTRATION")).map(PathBuf::from),
+            category_palette_path: nonempty(env::var_os("UBU_CATEGORY_PALETTE_PATH")).map(PathBuf::from),
+            calendar_mock_events_path: nonempty(env::var_os(CALENDAR_MOCK_EVENTS_VARIABLE)).map(PathBuf::from),
+            google_credentials_path: nonempty(env::var_os("UBU_GOOGLE_CREDENTIALS_PATH")).map(PathBuf::from),
+            google_token_cache_path: nonempty(env::var_os("UBU_GOOGLE_TOKEN_CACHE_PATH")).map(PathBuf::from),
             google_calendar_id: env::var("UBU_GOOGLE_CALENDAR_ID").unwrap_or_else(|_| "primary".into()),
-            planner_strategy: env::var_os("UBU_PLANNER_STRATEGY")
+            planner_strategy: nonempty(env::var_os("UBU_PLANNER_STRATEGY"))
                 .map(|value| value.to_string_lossy().into_owned()),
-            planning_horizon_seconds: env::var_os("UBU_PLANNING_HORIZON_SECONDS")
+            planning_horizon_seconds: nonempty(env::var_os("UBU_PLANNING_HORIZON_SECONDS"))
                 .map(|value| value.to_string_lossy().into_owned()),
+            planning_request_dump: nonempty(env::var_os("UBU_PLANNING_REQUEST_DUMP")).map(PathBuf::from),
         }
     }
 
@@ -153,6 +156,17 @@ impl ServerConfig {
 
     pub fn with_planner_strategy(mut self, raw: impl Into<String>) -> Self {
         self.planner_strategy = Some(raw.into());
+        self
+    }
+
+    /// Unset by default. `1` selects a private system-temporary file; otherwise
+    /// the value is an explicit absolute path. Only store-built requests dump.
+    pub fn planning_request_dump(&self) -> Option<&Path> {
+        self.planning_request_dump.as_deref()
+    }
+
+    pub fn with_planning_request_dump(mut self, path: Option<PathBuf>) -> Self {
+        self.planning_request_dump = path;
         self
     }
 
@@ -254,6 +268,27 @@ impl ServerConfig {
                 .unwrap_or_else(|| Path::new("."))
                 .join("ubu-device-registration.json")
         })
+    }
+}
+
+fn nonempty(value: Option<OsString>) -> Option<OsString> {
+    value.filter(|value| !value.is_empty())
+}
+
+#[cfg(test)]
+mod optional_environment_tests {
+    use super::*;
+
+    #[test]
+    fn empty_optional_environment_values_are_absent_without_trimming_paths() {
+        assert_eq!(nonempty(None), None);
+        assert_eq!(nonempty(Some(OsString::new())), None);
+        assert_eq!(nonempty(Some(" ".into())), Some(" ".into()));
+        let mut config = ServerConfig::from_env();
+        config.planner_strategy = nonempty(Some(OsString::new())).map(|v| v.to_string_lossy().into_owned());
+        config.planning_horizon_seconds = config.planner_strategy.clone();
+        assert_eq!(config.planner_strategy().unwrap(), PlannerStrategyChoice::Chunked);
+        assert_eq!(config.planning_horizon_seconds().unwrap(), DEFAULT_PLANNING_HORIZON_SECONDS);
     }
 }
 

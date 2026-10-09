@@ -322,9 +322,9 @@ pub struct PlanningResponseBody {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub legitimization: Option<LegitimizationReportBody>,
     pub diagnostics: Vec<DiagnosticBody>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub blocked_tasks: Vec<BlockedTaskBody>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub invalid_tasks: Vec<InvalidTaskBody>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub risk_report: Option<RiskReportResponse>,

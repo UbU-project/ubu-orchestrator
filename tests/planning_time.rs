@@ -480,7 +480,7 @@ fn horizon_environment_is_validated_without_global_test_env_races() {
         (Some("-1"), None),
         (Some("2678401"), None),
         (Some("bad"), None),
-        (Some(""), None),
+        (Some(""), Some(604800)), // P1B-80: exported empty is absent, so use the week default.
     ] {
         let mut command = std::process::Command::new(std::env::current_exe().unwrap());
         command

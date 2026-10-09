@@ -103,6 +103,11 @@ pub async fn generate(
         // API's `request_id` and the stored Plan keep their own, unique one.
         kernel_request.request_id = format!("store-{:016x}", kernel_request.rng_seed);
     }
+    // Preserve the exact effective seed, graph, budget and affect inputs for
+    // offline CLI replay. Supplied requests are not copied to this private sink.
+    if store_built {
+        super::planning_request_dump::write(&kernel_request, &state.inner().config).await?;
+    }
     add_empty_capacity_diagnostic(&planning_request, &mut diagnostics);
     let mut engine_provenance = ubu_planning_core::response::cpu_provenance();
     let mut replay = replay_metadata(&state, &planning_request);
