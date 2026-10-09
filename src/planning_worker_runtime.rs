@@ -27,6 +27,7 @@ pub fn plan(request: PlanningRequest) -> PlanningWorkerResult {
         response,
         fallback: strategy.fallback_reason(),
         environment,
+        certification_difference: strategy.certification_difference(),
     }
     // Drop reaps the session and releases compute before persistence or a build.
 }
