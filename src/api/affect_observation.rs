@@ -15,6 +15,7 @@ pub const AFFECT_OBSERVATION_SCHEMA_VERSION: &str = "ubu.orchestrator.affect_obs
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RecordAffectObservationRequest {
+    #[schema(value_type = String, required = true)]
     pub schema_version: Option<String>,
     #[schema(value_type = f64, required = true, minimum = 0, maximum = 10)]
     pub energy: Option<Value>,

@@ -6184,6 +6184,7 @@
       "RecordAffectObservationRequest": {
         "type": "object",
         "required": [
+          "schema_version",
           "energy",
           "stress",
           "mood_intensity"
@@ -6202,10 +6203,7 @@
             "minimum": 0
           },
           "schema_version": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "stress": {
             "type": "number",
