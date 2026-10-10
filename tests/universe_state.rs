@@ -565,7 +565,7 @@ async fn the_document_names_the_route_and_its_five_schemas() {
         json!(["asserted", "measured", "derived", "proposed"])
     );
     assert!(document["components"]["schemas"]["UniverseMutationBody"]["properties"]["note"].is_null());
-    assert_eq!(committed["paths"].as_object().unwrap().len(), 56);
+    assert_eq!(committed["paths"].as_object().unwrap().len(), 57);
 }
 
 // ---- P1B-59: a measured number is a first-class fact.
