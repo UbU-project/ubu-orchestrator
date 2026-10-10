@@ -68,3 +68,20 @@ change to `ubu-schemas` and `ubu-core`. The UI reads the three figures as
   is judged on it.
 - **The legitimization report**, including its warning and its `warn_only`
   mode.
+
+## How the stand-in retires
+
+[The affect observation route](AFFECT_OBSERVATION.md) records an immutable
+user-declared Snapshot. The next explicit Plan generation reads the latest
+active Snapshot carrying affect; a newer Snapshot without affect cannot
+hide it. A current complete live observation keeps the existing report
+figures live and removes the stand-in sentence. Recording does not recalculate
+an earlier Plan.
+
+Uncalibrated priors use warn_only with or without a reading; any calibration
+Setting present makes the profile enforce. Missing or stale observation
+fallback stays warn_only. An observation is current until replaced when no
+freshness limit is configured; a store that holds one, or a supplied request,
+still goes stale. No freshness Setting writer or confidence decay is added.
+The frozen Snapshot confidence-field gap is documented in UBU-D0304 and the
+new route contract. The rehearsal's ordering remains a separate synthetic input.

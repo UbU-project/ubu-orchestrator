@@ -348,6 +348,57 @@
         }
       }
     },
+    "/affect/observation": {
+      "get": {
+        "tags": [
+          "crate::api::affect_observation"
+        ],
+        "operationId": "read",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AffectObservationReadResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "crate::api::affect_observation"
+        ],
+        "operationId": "record",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordAffectObservationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AffectObservationWriteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing dimension, invalid value or schema version"
+          }
+        }
+      }
+    },
     "/bootstrap/answer": {
       "post": {
         "tags": [
@@ -2442,6 +2493,34 @@
           }
         }
       },
+      "AffectObservationReadResponse": {
+        "type": "object",
+        "required": [
+          "schema_version"
+        ],
+        "properties": {
+          "observation": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RecordedAffectObservation"
+              }
+            ]
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        }
+      },
+      "AffectObservationSourceKind": {
+        "type": "string",
+        "enum": [
+          "live_observation",
+          "bootstrap_default_profile"
+        ]
+      },
       "AffectObservationValueBody": {
         "type": "object",
         "required": [
@@ -2461,6 +2540,57 @@
           "value": {
             "type": "number",
             "format": "double"
+          }
+        }
+      },
+      "AffectObservationValues": {
+        "type": "object",
+        "required": [
+          "energy",
+          "stress",
+          "mood_intensity"
+        ],
+        "properties": {
+          "energy": {
+            "type": "number",
+            "format": "double"
+          },
+          "mood_intensity": {
+            "type": "number",
+            "format": "double"
+          },
+          "stress": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "AffectObservationWriteResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "snapshot_id",
+          "observed_at",
+          "source_kind",
+          "dimension_count"
+        ],
+        "properties": {
+          "dimension_count": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "observed_at": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "snapshot_id": {
+            "type": "string"
+          },
+          "source_kind": {
+            "$ref": "#/components/schemas/AffectObservationSourceKind"
           }
         }
       },
@@ -6050,6 +6180,64 @@
           "low_compact_calendar_coverage",
           "worker_request"
         ]
+      },
+      "RecordAffectObservationRequest": {
+        "type": "object",
+        "required": [
+          "energy",
+          "stress",
+          "mood_intensity"
+        ],
+        "properties": {
+          "energy": {
+            "type": "number",
+            "format": "double",
+            "maximum": 10,
+            "minimum": 0
+          },
+          "mood_intensity": {
+            "type": "number",
+            "format": "double",
+            "maximum": 10,
+            "minimum": 0
+          },
+          "schema_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stress": {
+            "type": "number",
+            "format": "double",
+            "maximum": 10,
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "RecordedAffectObservation": {
+        "type": "object",
+        "required": [
+          "snapshot_id",
+          "observed_at",
+          "source_kind",
+          "dimensions"
+        ],
+        "properties": {
+          "dimensions": {
+            "$ref": "#/components/schemas/AffectObservationValues"
+          },
+          "observed_at": {
+            "type": "string"
+          },
+          "snapshot_id": {
+            "type": "string"
+          },
+          "source_kind": {
+            "$ref": "#/components/schemas/AffectObservationSourceKind"
+          }
+        }
       },
       "RecordedTaskActionKind": {
         "type": "string",

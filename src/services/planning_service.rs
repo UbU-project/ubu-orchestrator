@@ -1747,7 +1747,7 @@ async fn build_affect_profile(pool: &sqlx::SqlitePool) -> Result<AffectProfileBo
         dimensions,
     };
     if energy_defaulted && stress_defaulted && intensity_defaulted {
-        profile.mode = AffectLegitimizationModeBody::Enforce;
+        profile.mode = AffectLegitimizationModeBody::WarnOnly;
     }
     Ok(profile)
 }
@@ -1951,39 +1951,15 @@ async fn resolve_affect_observation(
 }
 
 fn affect_profile_uses_bootstrap_defaults(profile: &AffectProfileBody) -> bool {
-    matches!(
-        profile.dimensions.get("energy"),
-        Some(tolerance) if tolerance.location == 4.0
-    ) && matches!(
-        profile.dimensions.get("stress"),
-        Some(tolerance) if tolerance.location == 7.0
-    ) && matches!(
-        profile.dimensions.get("mood_intensity"),
-        Some(tolerance) if tolerance.location == 8.0
-    )
+    // build_affect_profile derives this mode from Setting presence, not values.
+    // An explicit calibration at the default numbers still enforces.
+    matches!(profile.mode, AffectLegitimizationModeBody::WarnOnly)
 }
 
 async fn latest_snapshot_affect(pool: &sqlx::SqlitePool) -> Result<Option<AffectObservationBody>> {
-    let row = sqlx::query(
-        "SELECT payload_json, version FROM objects
-        WHERE object_type = ? AND status = ?
-        ORDER BY updated_at DESC
-        LIMIT 1",
-    )
-    .bind(ObjectType::Snapshot.as_str())
-    .bind("active")
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| AppError::Internal(e.to_string()))?;
-
-    let Some(row) = row else {
+    let Some((_, payload)) = super::affect_observation::latest_snapshot(pool).await? else {
         return Ok(None);
     };
-    let payload_json: String = row
-        .try_get("payload_json")
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-    let payload: Value = serde_json::from_str(&payload_json)
-        .map_err(|e| AppError::Internal(format!("failed to deserialize snapshot: {e}")))?;
     Ok(snapshot_affect_observation(&payload)?)
 }
 

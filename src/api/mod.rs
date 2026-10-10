@@ -30,3 +30,4 @@ pub mod setting;
 pub mod advisory_run;
 
 pub mod universe_state;
+pub mod affect_observation;

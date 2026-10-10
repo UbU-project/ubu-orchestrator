@@ -22,6 +22,7 @@ pub fn build_router(state: AppState) -> Router {
             "/universe-state",
             get(api::universe_state::read).patch(api::universe_state::edit),
         )
+        .route("/affect/observation", get(api::affect_observation::read).post(api::affect_observation::record))
         .route("/setting/:name", axum::routing::put(api::setting::put).delete(api::setting::delete))
         .route("/containers", get(api::container::list))
         .route("/container/:container_id/undo", post(api::container::undo))
